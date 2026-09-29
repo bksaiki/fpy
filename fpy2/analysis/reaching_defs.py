@@ -20,6 +20,7 @@ __all__ = [
     'PhiSite',
     'ReachingDefs',
     'ReachingDefsAnalysis',
+    'def_classes',
     'same_object_defs',
 ]
 
@@ -110,6 +111,7 @@ class PhiDef:
 
 
 Definition: TypeAlias = AssignDef | PhiDef
+"""definition: either an assignment or a phi node"""
 
 
 def same_object_defs(d: 'Definition') -> tuple[int, ...]:
@@ -135,7 +137,17 @@ def same_object_defs(d: 'Definition') -> tuple[int, ...]:
             return (d.lhs, d.rhs)
         case _:
             return ()
-"""definition: either an assignment or a phi node"""
+
+
+def def_classes(defs: list[Definition]) -> dict[Definition, Definition]:
+    """Each of *defs* to its class's representative: the definitions
+    :func:`same_object_defs` joins, one runtime object."""
+    uf: Unionfind[Definition] = Unionfind(defs)
+    for d in defs:
+        for i in same_object_defs(d):
+            uf.union(d, defs[i])
+    return {d: uf.find(d) for d in defs}
+
 
 DefCtx: TypeAlias = dict[NamedId, Definition]
 """mapping from variable name to definition"""

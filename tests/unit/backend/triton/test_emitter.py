@@ -161,9 +161,10 @@ class TestBlock:
 
 class TestSequentialLoops:
     """A loop `why_not_tileable` declined stays sequential per lane, which is
-    `tl.static_range` when its count is proven."""
+    `tl.static_range` when its count is proven and it indexes a list in
+    registers."""
 
-    def test_a_proven_count_indexing_no_register_stays_rolled(self):
+    def test_a_proven_count_indexing_no_register_stays_rolled(self) -> None:
         """Unrolling buys a constant index into a register-held list, and
         this body has none."""
         @fp.fpy(ctx=fp.FP32)
@@ -1252,15 +1253,13 @@ def _gather_by_value(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: li
     return out
 
 
-def test_an_index_not_proven_an_integer_is_refused():
+def test_an_index_not_proven_an_integer_is_refused() -> None:
     """An index converts to an integer only where its format says it is one;
     an FP32 value's does not, so the kernel is refused rather than emitted
     with a float pointer offset."""
-    f32 = RealType(fp.FP32)
     with pytest.raises(TritonEmitError, match='is an index, and its values are not proven integers'):
         TritonCompiler(drop_asserts=True).compile(_gather_by_value, ctx=fp.FP32, arg_types=[
-            ListType(ListType(f32, 8), 4), ListType(ListType(f32, 1), 4), ListType(f32, 4),
-            RealType(fp.INTEGER)])
+            ListType(ListType(_R32, 8), 4), ListType(ListType(_R32, 1), 4), ListType(_R32, 4), _INT])
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -1275,7 +1274,6 @@ def _range_at_a_value(xs: list[fp.Real], ks: list[fp.Real], out: list[fp.Real],
 
 def test_a_range_at_an_index_not_proven_an_integer_is_refused() -> None:
     """A `range`'s subscript is an index like any other."""
-    f32 = RealType(fp.FP32)
     with pytest.raises(TritonEmitError, match='is an index, and its values are not proven integers'):
         TritonCompiler(drop_asserts=True).compile(_range_at_a_value, ctx=fp.FP32, arg_types=[
-            ListType(f32, 8), ListType(f32, 8), ListType(f32, 8), RealType(fp.INTEGER)])
+            ListType(_R32, 8), ListType(_R32, 8), ListType(_R32, 8), _INT])

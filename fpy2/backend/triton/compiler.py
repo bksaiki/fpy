@@ -13,7 +13,8 @@ The pipeline, in order, and why:
 4. The normal form, then ``unfold_round`` and the normal form again: the
    lowering sees inlined callees and emits branches of its own.
 5. ``Simplify``: clears what the lowerings leave.
-6. Tiling, after the normal form so it sees inlined loops; then ``Simplify``.
+6. ``split_names``, as Triton holds a name a loop assigns at one type; then
+   tiling, after the normal form so it sees inlined loops; then ``Simplify``.
 
 The ``Simplify`` steps run only under ``optimize``.  A kernel writes through
 pointers and returns nothing, and its tile width is a compile-time parameter,

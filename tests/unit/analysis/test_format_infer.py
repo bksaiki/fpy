@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 from fpy2.analysis import FormatInfer
 from fpy2.analysis.format_infer import (
     AbstractFormat,
+    FormatBound,
     ListFormat,
     SetFormat,
     TupleFormat,
@@ -939,10 +940,9 @@ class TestFormatInfer:
         assert range_bounds and range_bounds[0] == ListFormat(expected_elt)
 
     @pytest.mark.parametrize('bounds', [(5, 5), (5, 0, 1), (0, 10, -1)])
-    def test_an_empty_range_has_no_element(self, bounds):
+    def test_an_empty_range_has_no_element(self, bounds: tuple[int, ...]) -> None:
         """A range that yields nothing has the empty set for its element."""
-        rng = FormatInfer.analyze(_range_program(*bounds).ast)
-        (bound,) = [b for e, b in rng.by_expr.items() if type(e).__name__.startswith('Range')]
+        bound = _range_bound(*bounds)
         assert bound == ListFormat(SetFormat.bottom())
 
     @pytest.mark.parametrize('bounds, lo, hi', [
@@ -950,18 +950,16 @@ class TestFormatInfer:
         ((999, -1, -1), 0, 999),
         ((-1000, 0), -1000, -1),
     ])
-    def test_range_large_spans_its_interval(self, bounds, lo, hi):
-        """A large range's integers are those of the interval it spans, not
-        a bound symmetric about zero."""
-        rng = FormatInfer.analyze(_range_program(*bounds).ast)
-        (bound,) = [b for e, b in rng.by_expr.items() if type(e).__name__.startswith('Range')]
+    def test_range_large_spans_its_interval(self, bounds: tuple[int, ...], lo: int, hi: int) -> None:
+        """A large range's element is the integers of the interval it spans."""
+        bound = _range_bound(*bounds)
         expected = AbstractFormat(float('inf'), 0, fp.RealFloat.from_int(max(hi, 0)),
                                   neg_bound=fp.RealFloat.from_int(min(lo, 0))).format()
         assert bound == ListFormat(expected)
 
-    def test_a_static_loop_stops_at_its_fixed_point(self):
-        """A million iterations of an `FP32` sum: after the first, the phi no
-        longer changes, so no other iteration is visited."""
+    def test_a_static_loop_stops_at_its_fixed_point(self) -> None:
+        """An `FP32` sum over a million elements: the phi stops changing
+        within a few iterations, and the rest are not visited."""
         @fp.fpy
         def f(xs: list[fp.Real]):
             with fp.FP32:
@@ -977,7 +975,7 @@ class TestFormatInfer:
         assert time.perf_counter() - start < 10
         assert all(b is not None for d, b in info.by_def.items() if d.name.base == 'acc')
 
-    def test_a_store_through_an_alias_keeps_a_loop_going(self):
+    def test_a_store_through_an_alias_keeps_a_loop_going(self) -> None:
         """`ys[0] = t * 10` writes `xs` through `ys`, so `xs` grows while no phi
         changes: the loop has not converged until the store record stops
         growing, with a static count or not."""
@@ -4449,19 +4447,20 @@ class TestNegationOfZero:
         assert neg.exp == 0
 
 
-def _range_program(*bounds: int) -> fp.Function:
-    """A function looping over `range(*bounds)`."""
+def _range_bound(*bounds: int) -> FormatBound:
+    """The inferred format of `range(*bounds)`, two or three arguments."""
     if len(bounds) == 2:
         a, b = bounds
 
         @fp.fpy
-        def f2() -> list[fp.Real]:
+        def f() -> list[fp.Real]:
             return [0.0 for _ in range(a, b)]
-        return f2
-    a, b, c = bounds
+    else:
+        a, b, c = bounds
 
-    @fp.fpy
-    def f3() -> list[fp.Real]:
-        return [0.0 for _ in range(a, b, c)]
-    return f3
-
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(a, b, c)]
+    info = FormatInfer.analyze(f.ast)
+    (bound,) = [b for e, b in info.by_expr.items() if type(e).__name__.startswith('Range')]
+    return bound

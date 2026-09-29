@@ -1,16 +1,15 @@
 """
-Triton backend: one name per value.
+Triton backend: one name per class of definitions.
 
-Triton holds a name at one type and shape wherever a loop or branch joins it,
-and treats every name a loop body assigns as carried.  A name FPy binds to
-unrelated values -- two comprehensions' `p`, say -- then fails to compile
-under a loop, though no phi ever joins them.  Here each class of definitions
-(those a phi or a mutation joins) gets its own name: the first class keeps
-the original, so arguments are unchanged.
+Triton carries every name a loop body assigns at one type and shape, so a
+name FPy reuses for unrelated values (two comprehensions' `p`) fails to
+compile under a loop.  Each class of definitions (those a phi or mutation
+joins) gets its own name; the first keeps the original, so arguments are
+unchanged.
 """
 
 from ...analysis import DefineUse, DefineUseAnalysis
-from ...analysis.reaching_defs import Definition, DefSite, same_object_defs
+from ...analysis.reaching_defs import Definition, DefSite, def_classes
 from ...ast import (
     Assign,
     ContextStmt,
@@ -25,7 +24,7 @@ from ...ast import (
     TupleBinding,
     Var,
 )
-from ...utils import Gensym, Unionfind
+from ...utils import Gensym
 
 __all__ = ['split_names']
 
@@ -41,20 +40,15 @@ class _SplitNames(DefaultTransformVisitor):
 
     def __init__(self, func: FuncDef) -> None:
         self.def_use = DefineUse.analyze(func)
-        defs = self.def_use.defs
-        uf: Unionfind[Definition] = Unionfind(defs)
-        for d in defs:
-            for i in same_object_defs(d):
-                uf.union(d, defs[i])
+        classes = def_classes(self.def_use.defs)
         gensym = Gensym(reserved=self.def_use.name_to_defs.keys())
         kept: set[NamedId] = set()
         by_class: dict[Definition, NamedId] = {}
-        for d in defs:
-            c = uf.find(d)
+        for d, c in classes.items():
             if c not in by_class:
                 by_class[c] = d.name if d.name not in kept else gensym.refresh(d.name)
                 kept.add(d.name)
-        self.name_of = {d: by_class[uf.find(d)] for d in defs}
+        self.name_of = {d: by_class[c] for d, c in classes.items()}
         self._site = None
 
     def _renamed(self, name: NamedId) -> NamedId:
@@ -69,14 +63,13 @@ class _SplitNames(DefaultTransformVisitor):
             return self._renamed(binding)
         return super()._visit_binding(binding, ctx)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> tuple[IndexedAssign, None]:
         s, ctx = super()._visit_indexed_assign(stmt, ctx)
         return IndexedAssign(self._renamed(stmt.var), s.indices, s.expr, s.loc), ctx
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
-        s, ctx = super()._visit_context(stmt, ctx)
-        self._site = stmt
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> tuple[ContextStmt, None]:
         target = self._renamed(stmt.target) if isinstance(stmt.target, NamedId) else stmt.target
+        s, ctx = super()._visit_context(stmt, ctx)
         return ContextStmt(target, s.ctx, s.body, s.loc), ctx
 
     def _visit_statement(self, stmt: Stmt, ctx: None) -> tuple[Stmt, None]:

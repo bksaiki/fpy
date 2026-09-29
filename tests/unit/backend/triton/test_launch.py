@@ -1021,7 +1021,7 @@ def test_an_aligned_sum_of_fp16_agrees() -> None:
     _agree(src, f, [(torch.randn(8, 4) * 100).half().cuda(), torch.zeros(8, dtype=torch.float64).cuda()])
 
 
-# Computed indices (`docs/todos/triton-integer-indices.md`)
+# Computed indices
 
 _ROWS = 3
 
@@ -1052,18 +1052,16 @@ def _product_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list
 
 
 @pytest.mark.parametrize('k', [256, 1024, 2048, 4096])
-def test_a_product_index_agrees(k: int):
+def test_a_product_index_agrees(k: int) -> None:
     """Past 16 values of `t` (k = 2048) its format is an interval, not a set:
-    `t * 16` must still be an integer.  The loops index no list in registers,
-    so neither is unrolled."""
+    `t * 16` must still be an integer."""
     src = _compile(_product_index, _rows_of(k, k // 16))
     _agree(src, _product_index, _randn(k, k // 16))
 
 
 @fp.fpy(ctx=fp.REAL)
 def _square_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
-    """The index `t * t`: never negative, but held as a float, a factor
-    being possibly negative."""
+    """The index `t * t`, computed under `FP32` and so held as a float."""
     for r in range(len(out)):
         s = fp.round(0)
         for u in range(0, 128, 2):
@@ -1074,7 +1072,7 @@ def _square_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
     return out
 
 
-def test_a_float_held_index_agrees():
+def test_a_float_held_index_agrees() -> None:
     """An index held as a float is converted to an integer where it is used."""
     src = _compile(_square_index, _rows_of(4097))
     _agree(src, _square_index, _randn(4097))
@@ -1098,7 +1096,7 @@ def _static_product_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: f
     return out
 
 
-def test_a_static_product_index_agrees():
+def test_a_static_product_index_agrees() -> None:
     """A `static_range` target, a Python number when traced, is cast by
     `tl.cast`."""
     src = _compile(_static_product_index, _rows_of(128))
@@ -1124,7 +1122,7 @@ def _integer_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list
     return out
 
 
-def test_an_integer_context_index_agrees():
+def test_an_integer_context_index_agrees() -> None:
     src = _compile(_integer_index, _rows_of(1024, 64))
     _agree(src, _integer_index, _randn(1024, 64))
 
@@ -1141,7 +1139,7 @@ def _tail_in_a_loop(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real
     return out
 
 
-def test_a_tail_written_in_a_loop_agrees():
+def test_a_tail_written_in_a_loop_agrees() -> None:
     """The tail is carried as a row, as Triton holds a loop's names at one
     shape."""
     src = _compile(_tail_in_a_loop, _rows_of(64))
@@ -1203,7 +1201,7 @@ def _float_context_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp
     return out
 
 
-def test_an_index_computed_under_a_float_context_agrees():
+def test_an_index_computed_under_a_float_context_agrees() -> None:
     """`g * 16 + j` runs at `FP32` but is stored as `U8`: the result is cast
     into its storage, so the index is an integer."""
     src = _compile(_float_context_index, _rows_of(64))
@@ -1223,7 +1221,7 @@ def _reused_lane_name(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Re
     return out
 
 
-def test_a_reused_lane_name_agrees():
+def test_a_reused_lane_name_agrees() -> None:
     """The second `g` is a `static_range` target, not the lanes."""
     src = _compile(_reused_lane_name, _rows_of(64))
     _agree(src, _reused_lane_name, _randn(64))
@@ -1245,7 +1243,7 @@ def _lane_indexed_literal(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: f
 
 
 @pytest.mark.parametrize('block', [4, 8])
-def test_a_lane_indexed_literal_agrees(block):
+def test_a_lane_indexed_literal_agrees(block: int) -> None:
     """The elements, rows, are broadcast across the lanes.  At a block as
     wide as the lanes, a row read as a lane is wrong values, not a refusal."""
     src = _compile(_lane_indexed_literal, _rows_of(64))

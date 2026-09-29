@@ -15,7 +15,7 @@ import math
 import re
 import struct
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
@@ -45,7 +45,7 @@ from ...analysis.format_infer import (
     to_abstract,
 )
 from ...analysis.format_infer.format import AbstractFormat
-from ...analysis.reaching_defs import same_object_defs
+from ...analysis.reaching_defs import def_classes
 from ...analysis.storage_infer import StorageSelectionError, join, of_bound
 from ...ast import (
     Add,
@@ -124,7 +124,6 @@ from ...number.context.mp_fixed import MPFixedContext
 from ...transform.path import walk_exprs, walk_stmts
 from ...transform.simplify_if import _size
 from ...types import BoolType, ListType, RealType
-from ...utils import Unionfind
 from ..backend import CompileError
 from .storage import (
     TritonStorageDomain,
@@ -324,8 +323,8 @@ class _IndentedWriter:
                 self.along[name] = shape
 
     def _rebind(self, name: str) -> None:
-        """Drop what is known of *name*'s old value: the loads and values
-        that read it, and its own."""
+        """Drop what is known of *name*'s old value (its own, and the loads
+        and values reading it); record it assigned in the open block."""
         for _, loads in self._loads:
             for addr in [a for a, (held, conj) in loads.items()
                          if held == name or name in _IDENT.findall(a)
@@ -668,12 +667,7 @@ class _Emitter(Visitor):
         self._axis_guards = {}
         self._guard_mask = None
         self._carried = {}
-        defs = self.def_use.defs
-        uf: Unionfind[Definition] = Unionfind(defs)
-        for d in defs:
-            for i in same_object_defs(d):
-                uf.union(d, defs[i])
-        self._class_of = {d: uf.find(d) for d in defs}
+        self._class_of = def_classes(self.def_use.defs)
         self._members = defaultdict(list)
         for d, c in self._class_of.items():
             self._members[c].append(d)
@@ -763,8 +757,8 @@ class _Emitter(Visitor):
         return scalar_fits_in(have, want) or bound_fits_in_scalar(bound, want)
 
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
-        """*code* cast to *want*, by `tl.cast`: unlike `.to`, it also takes a
-        Python number, as a `static_range` target traces to.  A literal is
+        """*code* cast to *want* by `tl.cast`, which, unlike `.to`, takes a
+        Python number (a traced `static_range` target).  A literal is
         respelled instead."""
         if code in _SPECIALS:
             return code     # a Python float, typed where it is used
@@ -774,9 +768,8 @@ class _Emitter(Visitor):
         return f'tl.cast({code}, {want.format()})'
 
     def _index(self, e: Expr) -> str:
-        """*e* as an index: in its integer storage as it is; held as a float,
-        converted exactly to the integer storage :func:`index_scalar` finds
-        for its format; else a refusal."""
+        """*e* as an integer: as is in integer storage; held as a float, cast
+        to :func:`index_scalar`'s storage for its format, else refused."""
         code = self.emit(e)
         if not self._storage(e).is_float():
             return code
@@ -820,7 +813,7 @@ class _Emitter(Visitor):
         storage; else one whose slots are all the active context's, each
         operand cast into it losslessly; else, under ``REAL``,
         :meth:`_try_widen`.  The result is cast into *e*'s storage, which
-        format inference may make narrower than the signature's."""
+        format inference may narrow."""
         sigs = table.get(type(e))
         if not sigs:
             raise TritonEmitError(
@@ -847,7 +840,7 @@ class _Emitter(Visitor):
                 return self._maybe_cast(out, sig.in_tys[0], target, result)
 
         if active is REAL:
-            widened = self._try_widen(e, sigs, codes, storages, bounds)
+            widened = self._try_widen(sigs, codes, storages, bounds, target, result)
             if widened is not None:
                 return widened
 
@@ -858,23 +851,21 @@ class _Emitter(Visitor):
 
     def _try_widen(
         self,
-        e: Expr,
         sigs: list[TritonOp],
         codes: list[str],
         storages: tuple[TritonScalar, ...],
         bounds: list[FormatBound],
+        target: TritonScalar,
+        result: FormatBound,
     ) -> str | None:
         """Under ``REAL``, compute at a width that holds the exact result.
 
-        The storage chosen for *e* holds its unrounded result, so the
-        operation at that width is exact: `x.to(tl.float32) *
-        y.to(tl.float32)` for an fp16 product.  Any width holding the operands
-        and the result will do, the result's own first, then the narrowest;
-        the exact result is then cast into *e*'s storage.
+        The *target* storage holds the unrounded *result*, so the operation at
+        that width is exact: an fp16 product computed in `tl.float32`.  Any
+        width holding the operands and the result will do, the result's own
+        first, then the narrowest; the exact result is then cast into
+        *target*.
         """
-        target = self._storage(e)
-        result = self.format_info.by_expr.get(e)
-
         slots = sorted(
             {sig.in_tys[0] for sig in sigs
              if len(sig.in_tys) == len(codes) and len(set(sig.in_tys)) == 1},
@@ -969,7 +960,7 @@ class _Emitter(Visitor):
         """*code*, bound to a temporary unless it is a number or a name
         assigned once, since a recorded binding is re-emitted at each use.  In
         a tile the temporary is a row, as its source need not be one on every
-        iteration of a `static_range`."""
+        iteration of a loop."""
         if _as_number(code) is not None or code in self._once:
             return code
         if self._axes and not self._out.wide & set(_IDENT.findall(code)):
@@ -1145,7 +1136,7 @@ class _Emitter(Visitor):
 
     def _insert(self, tile: NamedId, idx: str, v: str) -> None:
         """*tile* with element *idx* set to *v*, under any branch."""
-        width, tail, elt = self.tiles[tile]
+        width, tail, _ = self.tiles[tile]
         mask = self.mask if self._branches else None
         k = _literal_int(idx)
         if k is None or k < width:
@@ -1158,7 +1149,8 @@ class _Emitter(Visitor):
             if k is not None and k != width + j:
                 continue
             name = f'{tile}_t{j}'
-            val = self._as_row(v, elt) if name in self._carried else v
+            held = self._carried.get(name)
+            val = v if held is None else self._as_row(v, held)
             cond = None if k is not None else f'({idx} == {width + j})'
             if mask is not None:
                 cond = mask if cond is None else f'({cond} & {mask})'
@@ -1371,8 +1363,7 @@ class _Emitter(Visitor):
                 elems = [self._as_col(c) for c in elems]
             i = _literal_int(idx)
             if i is None:
-                # an index the trace fixes, as a `static_range` target is:
-                # the element it selects
+                # a computed index: a select over the elements
                 code = elems[-1]
                 for j in reversed(range(len(elems) - 1)):
                     code = f'tl.where({idx} == {j}, {elems[j]}, {code})'
@@ -2369,8 +2360,7 @@ class _Emitter(Visitor):
             # reassigns is copied ahead and restored in the arm, a merged name
             # gets a placeholder ahead, and a merged list keeps the arm's
             # writes, its tail elements broadcast ahead
-            tails = {f'{v}_t{j}': self.tiles[v][2] for v in lists if v in self.tiles
-                     for j in range(self.tiles[v][1])}
+            tails = self._tails(lists)
             written = ctx.reassigned() & before & ({str(v) for v in lists} | set(tails))
             kept = sorted(ctx.reassigned() & before - {str(v) for v in saved} - written)
             copies = {k: self._fresh() for k in kept}
@@ -2444,25 +2434,23 @@ class _Emitter(Visitor):
         ctx.dedent()
 
     def _indexes_registers(self, stmt: ForStmt) -> bool:
-        """Whether *stmt*'s body reads or writes a list held in registers at
-        an index depending on its target.  Only then is it unrolled: the index
-        is a constant, and the access the element rather than a select over
-        all of them.  Unrolling anything else only costs Triton compile time."""
+        """Whether *stmt*'s body indexes a list held in registers by a value
+        depending on its target: only then does unrolling pay, making the
+        index a constant."""
         if not isinstance(stmt.target, NamedId):
             return False
         dep = {stmt.target}
 
-        def uses(e: Expr | None) -> bool:
-            return e is not None and bool(names_in(e) & dep)
+        def uses(e: Expr) -> bool:
+            return bool(names_in(e) & dep)
 
         def held(e: Expr) -> bool:
-            return (self._tile_of(e) is not None or isinstance(e, ListExpr)
-                    or (isinstance(e, Var) and e.name in self.seqs))
+            return isinstance(e, ListExpr) or (
+                isinstance(e, Var) and (e.name in self.tiles or e.name in self.seqs))
 
         def in_expr(e: Expr) -> bool:
-            if isinstance(e, ListRef) and held(e.value) and uses(e.index):
-                return True
-            if isinstance(e, ListSlice) and held(e.value) and (uses(e.start) or uses(e.stop)):
+            if isinstance(e, ListRef | ListSlice) and held(e.value) and any(
+                    uses(x) for f, _, x in subexprs(e) if f != 'value'):
                 return True
             return any(in_expr(x) for _, _, x in subexprs(e))
 
@@ -2491,9 +2479,7 @@ class _Emitter(Visitor):
         broadcast to the tile axes' shape, at entry and at every assignment.
         """
         carried = carried_scalars(stmt, self.def_use)
-        entry: dict[str, TritonScalar] = {
-            f'{v}_t{j}': self.tiles[v][2] for v in self.def_use.mutated_in(stmt.body)
-            if v in self.tiles for j in range(self.tiles[v][1])}
+        entry = self._tails(self.def_use.mutated_in(stmt.body))
         for p in self.def_use.phis.get(stmt, ()):
             if p.name not in carried:
                 continue
@@ -2529,8 +2515,12 @@ class _Emitter(Visitor):
         its target, what the body assigns, and the tails of lists it
         writes."""
         mutated = self.def_use.mutated_in(stmt.body)
-        return {str(stmt.target), *map(str, mutated), *(
-            f'{v}_t{j}' for v in mutated if v in self.tiles for j in range(self.tiles[v][1]))}
+        return {str(stmt.target), *map(str, mutated), *self._tails(mutated)}
+
+    def _tails(self, names: Iterable[NamedId]) -> dict[str, TritonScalar]:
+        """The tail elements of the local lists among *names*, by storage."""
+        return {f'{v}_t{j}': self.tiles[v][2] for v in names if v in self.tiles
+                for j in range(self.tiles[v][1])}
 
     def _shape(self, along: frozenset[str]) -> str:
         """The shape of a value varying along the tile axes *along*: `()` for

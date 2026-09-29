@@ -651,10 +651,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
         return ListSize(ty.elt, slice_size)
 
     def _affine(self, e: Expr) -> _Affine:
-        """Decompose *e* into ``(base, scale, offset)`` with ``e == base *
-        scale + offset``, where *scale* and *offset* are compile-time integers
-        and *base* is the residual expression (``None`` when *e* is a pure
-        constant).
+        """Decompose *e* into ``(base, scale, offset)`` with
+        ``e == base * scale + offset``, where *scale* and *offset* are
+        compile-time integers and *base* is the residual expression (``None``
+        when *e* is a pure constant).
 
         Only descends through ``+`` / ``-`` / ``*`` that do not round: under
         ``REAL``, or on integers under a context holding every integer
@@ -672,19 +672,21 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         # through a name: `t = i + 32; xs[i:t]` sizes like `xs[i:i+32]`
         e = self.def_use.defining_expr(e)
+        if not (isinstance(e, Add | Sub | Mul) and (self._is_exact(e) or self._is_int_op(e))):
+            return (e, 1, 0)
         match e:
-            case Add() if self._is_exact(e) or self._is_int_op(e):
+            case Add():
                 for rest, const in ((e.first, e.second), (e.second, e.first)):
                     c = self._const_int(const)
                     if c is not None:
                         base, scale, off = self._affine(rest)
                         return (base, scale, off + c)
-            case Sub() if self._is_exact(e) or self._is_int_op(e):
+            case Sub():
                 c = self._const_int(e.second)
                 if c is not None:
                     base, scale, off = self._affine(e.first)
                     return (base, scale, off - c)
-            case Mul() if self._is_exact(e) or self._is_int_op(e):
+            case Mul():
                 for rest, const in ((e.first, e.second), (e.second, e.first)):
                     k = self._const_int(const)
                     if k is None:
@@ -843,13 +845,12 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def _is_int_op(self, e: Add | Sub | Mul) -> bool:
         """True iff *e*'s operands are integers and its context holds every
-        integer (``REAL``, ``INTEGER``, a finer fixed-point), so it does not
-        round.  A float context may: ``FP32`` rounds ``2**24 + 1``."""
+        integer (``REAL``, or an unbounded fixed-point no coarser than
+        ``INTEGER``), so it does not round.  A float context may: ``FP32``
+        rounds ``2**24 + 1``."""
         scope = self._ctx_use.use_to_scope.get(e)
-        if scope is None:
-            return False
-        ctx = scope.ctx
-        if not (ctx == REAL or isinstance(ctx, MPFixedContext) and ctx.nmin < 0):
+        ctx = None if scope is None else scope.ctx
+        if not (self._is_exact(e) or isinstance(ctx, MPFixedContext) and ctx.nmin < 0):
             return False
         return self._is_int_valued(e.first) and self._is_int_valued(e.second)
 

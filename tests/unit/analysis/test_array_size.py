@@ -576,9 +576,8 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size is None
 
-    def test_list_slice_range_target_under_integer(self):
-        """``x[i : i + 32]`` -> 32 under ``INTEGER``: a ``range`` target is an
-        integer, and ``INTEGER`` holds every integer, so ``+`` does not round."""
+    def test_list_slice_range_target_under_integer(self) -> None:
+        """``x[i : i + 32]`` -> 32 under ``INTEGER``, ``i`` a ``range`` target."""
 
         @fp.fpy
         def f(x: list[fp.Real]) -> list[fp.Real]:
@@ -590,7 +589,7 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size == 32
 
-    def test_list_slice_integer_scaled_base(self):
+    def test_list_slice_integer_scaled_base(self) -> None:
         """``i = t * 16`` under ``INTEGER`` is ``t`` scaled by 16, so
         ``x[i : i + 64]`` -> 64."""
 
@@ -605,7 +604,7 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size == 64
 
-    def test_list_slice_range_target_under_float_is_unknown(self):
+    def test_list_slice_range_target_under_float_is_unknown(self) -> None:
         """A float context may round integers (``FP32`` rounds ``2**24 + 1``),
         so a ``range`` target's ``i + 32`` does not cancel."""
 
@@ -619,7 +618,7 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size is None
 
-    def test_list_slice_real_offset_under_integer_is_unknown(self):
+    def test_list_slice_real_offset_under_integer_is_unknown(self) -> None:
         """A ``Real`` argument need not be an integer, so ``INTEGER`` rounds
         ``i + 16`` -> unknown."""
 
@@ -678,7 +677,7 @@ class TestArraySizeInfer:
 
         assert self._range_bound(f, 'Range2').size == 0
 
-    def test_range2_range_target_under_integer(self):
+    def test_range2_range_target_under_integer(self) -> None:
         """``range(i, i + 32)`` -> 32 with ``i`` a ``range`` target, under
         ``INTEGER``."""
 

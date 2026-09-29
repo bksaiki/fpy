@@ -100,14 +100,14 @@ def bound_fits_in_scalar(bound: FormatBound, ty: TritonScalar) -> bool:
 
 
 def index_scalar(bound: FormatBound) -> TritonScalar | None:
-    """The integer storage, ``tl.int32`` or else ``tl.int64``, holding every
-    value *bound* admits as an index, a ``-0`` being ``0``; ``None`` where a
-    value may not be an integer."""
+    """The narrowest of ``tl.int32`` and ``tl.int64`` holding every value
+    *bound* admits, or ``None`` (a value may not be an integer, or none fits)."""
     if not isinstance(bound, AbstractableFormat | SetFormat):
         return None
     af = _to_abstract(bound)
     if af is None:
         return None
+    # drop -0: it indexes as 0
     af = AbstractFormat(af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
                         has_pos_inf=af.has_pos_inf, has_neg_inf=af.has_neg_inf,
                         has_nan=af.has_nan)
