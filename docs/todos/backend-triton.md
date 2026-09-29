@@ -61,38 +61,14 @@ Rules the backend keeps:
   where its body indexes a list in registers by its target; the NVFP4
   chain's Triton compile went from 802 s to 1.5 s.
 
-- **Index arithmetic stored as a float** blocks chaining block-scaled
-  designs in the kernel.  A block-scaled design is one instruction, so
-  `serve` chains it over `k` with a launch per instruction: 16-48 launches
-  per linear layer, ~4,900 per decoded token for NVFP4 (0.5 tokens/s).  The
-  natural FPy chain, as in `nv.make_t_fdpa_chain` but with each
-  instruction's slice of the scales:
-
-  ```python
-  for t in range(0, len(xs), per):     # per = scales per instruction
-      i = t * g                        # g = elements per scale
-      d = op(A[i:i + k0], B[i:i + k0], d, xs[t:t + per], ys[t:t + per])
-  ```
-
-  - **It works where it compiles.**  NVFP4 at k = 1024: bit-identical to
-    the launch chain, and 0.12 ms at `m = 1` against 1.57 ms for 16
-    launches.  At `m = 2048` it is 29.0 ms against 22.0 ms.
-  - **Past that, `i = t * g` gets FP16 storage** whenever FP16 holds it
-    exactly (every integer up to 2048), and is then used as a pointer
-    offset.
-    - NVFP4 at k >= 2048: `tl.load(A_ptr + ... + i18)` with `i18` a
-      float16, refused by Triton.
-    - The MX chain (one scale per instruction, `range(len(xs))`) at
-      k = 1024: the loop becomes `tl.static_range`, and `t17.to(tl.float16)`
-      fails on a Python int.
-  - **Under `fp.INTEGER` the slice is unsized**, the open item on
-    `_is_exact` below.
-  - **Looping over the element index instead**, with scales per element and
-    the instruction's four gathered as `[xs[i], xs[i + g], ...]`, emits
-    tiles of mismatched shapes ([BLOCK, 4] against [BLOCK, 16]).
-  - **The fix is the backend's:** a value used as an index or offset needs
-    integer storage.  `serve` would then run a block-scaled design chained
-    at decode sizes and per instruction at prefill.
+- **Chaining block-scaled designs in the kernel** (fixed,
+  `triton-integer-indices.md`).  `serve` chains a block-scaled design over
+  `k` with a launch per instruction: 16-96 per linear layer.  The FPy chain,
+  as in `nv.make_t_fdpa_chain` but with each instruction's slice of the
+  scales, now compiles for all eight designs at `k` up to 3072 (FPy ~4 s,
+  Triton ~1 s), bit-identical to the launches.  At `m = 1` it is 22-64x
+  faster; at `m = 2048` 10-15% slower for NVFP4 and MXFP4 and 2-8% faster
+  for MX.  Next: `serve` runs it at decode sizes (a separate branch).
 
 - **FPy's compile time:** size inference runs in both tiling and the
   emitter.

@@ -977,6 +977,40 @@ class TestFormatInfer:
         assert time.perf_counter() - start < 10
         assert all(b is not None for d, b in info.by_def.items() if d.name.base == 'acc')
 
+    def test_a_store_through_an_alias_keeps_a_loop_going(self):
+        """`ys[0] = t * 10` writes `xs` through `ys`, so `xs` grows while no phi
+        changes: the loop has not converged until the store record stops
+        growing, with a static count or not."""
+        @fp.fpy
+        def static(c: bool, n: fp.Real):
+            with fp.INTEGER:
+                xs = [fp.round(1)]
+                zs = [fp.round(0)]
+                ys = xs if c else zs
+                for _ in range(3):
+                    t = xs[0]
+                    ys[0] = t * 10
+                return xs[0]
+
+        @fp.fpy
+        def runtime(c: bool, n: fp.Real):
+            with fp.INTEGER:
+                xs = [fp.round(1)]
+                zs = [fp.round(0)]
+                ys = xs if c else zs
+                for _ in range(n):
+                    t = xs[0]
+                    ys[0] = t * 10
+                return xs[0]
+
+        for f in (static, runtime):
+            actual = f(True, 3)
+            (bound,) = [b.elt for d, b in self._run(f).by_def.items() if d.name.base == 'xs']
+            if isinstance(bound, SetFormat):
+                assert actual.as_rational() in bound.values, f.name
+            else:
+                assert bound.representable_in(actual), f.name
+
     def test_range_set_threshold_is_tunable(self):
         """``range_set_threshold`` controls the set-vs-bounded split."""
         @fp.fpy

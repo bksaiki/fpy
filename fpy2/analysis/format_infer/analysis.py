@@ -2929,6 +2929,12 @@ class _FormatInferInstance(Visitor):
             d_use, len(stmt.indices), insert_fmt, already={d_use, d_def},
         )
 
+    def _insert_count(self) -> int:
+        """How many stores :meth:`_record_region_insert` has recorded: they
+        widen defs other than a loop's phis, so a loop has not converged
+        while the record grows."""
+        return sum(map(len, self._region_inserts.values()))
+
     def _record_region_insert(
         self, base: Definition, depth: int, insert_fmt: FormatBound,
         *, already: set[Definition],
@@ -2997,13 +3003,14 @@ class _FormatInferInstance(Visitor):
         iter_count = 0
         while True:
             prev = {phi: self.by_def[phi] for phi in phis}
+            inserts = self._insert_count()
             self._widen = saved_widen or iter_count >= self._loop_iter_limit
             run_body()
             for phi in phis:
                 lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
                 rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
                 self._set_def_bound(phi, self._join(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+            if self._insert_count() == inserts and all(self.by_def[phi] == prev[phi] for phi in phis):
                 break
             iter_count += 1
         self._widen = saved_widen
@@ -3042,9 +3049,9 @@ class _FormatInferInstance(Visitor):
         strictly more precise than the fixpoint+widening fall-back when
         ``n`` is small.
 
-        An iteration leaving every phi unchanged is a fixed point: the body
-        sees only the phis (the target's format is set before the loop), so
-        each later iteration repeats it, and the walk stops there.
+        An iteration leaving every phi and the store record
+        (:meth:`_record_region_insert`) unchanged is a fixed point: the next
+        one would repeat it, so the walk stops there.
         """
         phis = list(phis)
         for phi in phis:
@@ -3058,12 +3065,13 @@ class _FormatInferInstance(Visitor):
             return
         for _ in range(n):
             prev = {phi: self.by_def[phi] for phi in phis}
+            inserts = self._insert_count()
             run_body()
             for phi in phis:
                 lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
                 rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
                 self._set_def_bound(phi, self._join(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+            if self._insert_count() == inserts and all(self.by_def[phi] == prev[phi] for phi in phis):
                 break
 
     def _known_iter_count(self, iterable: Expr) -> int | None:

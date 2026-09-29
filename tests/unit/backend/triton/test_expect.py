@@ -45,11 +45,11 @@ def batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     j = i + tl.arange(0, BLOCK)
     r = j
     acc = 0.0
-    acc = tl.broadcast_to(acc, (BLOCK,))
+    acc = tl.broadcast_to(tl.cast(acc, tl.float32), (BLOCK,))
     for k in range(8):
         __t0 = tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
         __t1 = tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
-        acc = tl.broadcast_to((acc + (__t0.to(tl.float32) * __t1.to(tl.float32))), (BLOCK,))
+        acc = tl.broadcast_to((acc + (tl.cast(__t0, tl.float32) * tl.cast(__t1, tl.float32))), (BLOCK,))
     tl.store(out_ptr + r, acc, mask=(j < 4))'''
 
 
@@ -136,7 +136,7 @@ def test_a_sum_over_a_literal_list_folds_left():
             ListType(RealType(fp.FP32), 8),
             ListType(RealType(fp.FP32), 8),
             RealType(fp.INTEGER)])
-    assert re.search(r'\(\(row_0\S* \+ row_1\S*\) \+ row_2\S*\)', src.source)
+    assert re.search(r'\(\([^+]*row_0[^+]* \+ [^+]*row_1[^+]*\) \+ [^+]*row_2', src.source)
 
 
 def test_an_empty_sum_is_the_literal_zero():
@@ -306,7 +306,7 @@ def test_a_boolean_merge_has_bool_storage():
             RealType(fp.INTEGER)])
     assert 'tl.where' in src.source
     # the merged boolean needs no cast: `bool` is its own storage
-    assert '.to(tl.int1' not in src.source
+    assert ', tl.int1)' not in src.source
 
 
 def test_nan_and_inf_are_literals():

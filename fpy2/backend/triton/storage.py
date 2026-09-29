@@ -87,7 +87,10 @@ def bound_fits_in_scalar(bound: FormatBound, ty: TritonScalar) -> bool:
     """Is every value *bound* admits representable in *ty*?
 
     A question about values, where :func:`scalar_fits_in` asks about types.
+    The empty set, a body that never runs, fits in any.
     """
+    if isinstance(bound, SetFormat) and not bound.values:
+        return True
     if ty is TritonScalar.BOOL:
         return False
     if not isinstance(bound, AbstractableFormat | SetFormat):

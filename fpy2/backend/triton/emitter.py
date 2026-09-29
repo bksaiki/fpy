@@ -606,9 +606,6 @@ class _Emitter(Visitor):
     cast."""
     _once: set[str]
     """The names assigned exactly once."""
-    _constexprs: set[str]
-    """The `tl.static_range` targets in scope: Python numbers when traced,
-    which have no `.to`."""
     _next_tmp: int
     _branches: int
     """How many flattened branches enclose the statement being emitted."""
@@ -685,7 +682,6 @@ class _Emitter(Visitor):
         for n, ds in self.def_use.name_to_defs.items():
             counts[str(n)] += len(ds)
         self._once = {n for n, c in counts.items() if c == 1}
-        self._constexprs = set()
         self._next_tmp = 0
         self._branches = 0
         self._merging = set()
@@ -767,17 +763,15 @@ class _Emitter(Visitor):
         return scalar_fits_in(have, want) or bound_fits_in_scalar(bound, want)
 
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
-        """*code* cast to *want*.  A literal is respelled instead, and code of
-        `static_range` targets alone cast by `tl.cast`: a Python number is a
-        `constexpr`, which has no `.to`."""
+        """*code* cast to *want*, by `tl.cast`: unlike `.to`, it also takes a
+        Python number, as a `static_range` target traces to.  A literal is
+        respelled instead."""
         if code in _SPECIALS:
             return code     # a Python float, typed where it is used
         literal = _as_literal(code)
         if literal is not None:
             return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
-        if set(_IDENT.findall(code)) <= self._constexprs:
-            return f'tl.cast({code}, {want.format()})'
-        return f'{code}.to({want.format()})'
+        return f'tl.cast({code}, {want.format()})'
 
     def _index(self, e: Expr) -> str:
         """*e* as an index: in its integer storage as it is; held as a float,
@@ -1315,7 +1309,7 @@ class _Emitter(Visitor):
         if bounds is None:
             return None
         start, step = bounds
-        idx = self.emit(e.index)
+        idx = self._index(e.index)
         term = idx if step == '1' else f'{idx} * {step}'
         return term if start == '0' else f'({start} + {term})'
 
@@ -2432,12 +2426,10 @@ class _Emitter(Visitor):
         n = static_trip_count(stmt.iterable, self.sizes)
         if not isinstance(n, int) or not self._indexes_registers(stmt):
             return self._emit_runtime_loop(stmt, ctx)
-        outer = self._constexprs
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
             ctx.forget(self._carried_names(stmt))
-            self._constexprs = outer | {str(stmt.target)}
         else:
             # `static_range` counts from zero: the target is where the
             # count lands in `range(start, stop, step)`
@@ -2449,7 +2441,6 @@ class _Emitter(Visitor):
             ctx.forget(self._carried_names(stmt))
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
-        self._constexprs = outer
         ctx.dedent()
 
     def _indexes_registers(self, stmt: ForStmt) -> bool:
@@ -2495,28 +2486,33 @@ class _Emitter(Visitor):
         unrolling it would buy nothing (:meth:`_indexes_registers`).
 
         Triton holds a carried value at one type and shape on every
-        iteration.  The type is its class's storage already; in a tile, each
-        carried name, and each tail of a list the body writes, is broadcast
-        to the tile axes' shape at entry and at every assignment.
+        iteration.  Each carried name, and each tail of a list the body
+        writes, enters cast to its class's storage; in a tile it is also
+        broadcast to the tile axes' shape, at entry and at every assignment.
         """
         carried = carried_scalars(stmt, self.def_use)
-        tails = {f'{v}_t{j}': self.tiles[v][2] for v in self.def_use.mutated_in(stmt.body)
-                 if v in self.tiles for j in range(self.tiles[v][1])}
+        entry: dict[str, TritonScalar] = {
+            f'{v}_t{j}': self.tiles[v][2] for v in self.def_use.mutated_in(stmt.body)
+            if v in self.tiles for j in range(self.tiles[v][1])}
+        for p in self.def_use.phis.get(stmt, ()):
+            if p.name not in carried:
+                continue
+            held = self._class_storage(p)
+            if held is None:
+                raise TritonEmitError(
+                    f'no storage holds every value `{p.name}` carries'
+                )
+            entry[str(p.name)] = held
         prev = self._carried
-        if self._axes and (carried or tails):
-            self._carried = dict(tails)
-            for name, held in tails.items():
-                ctx.add_line(f'{name} = {self._as_row(name, held)}', 'row')
-            for p in self.def_use.phis.get(stmt, ()):
-                if p.name not in carried:
-                    continue
-                held = self._class_storage(p)
-                if held is None:
-                    raise TritonEmitError(
-                        f'no storage holds every value `{p.name}` carries'
-                    )
-                self._carried[str(p.name)] = held
-                ctx.add_line(f'{p.name} = {self._as_row(str(p.name), held)}', 'row')
+        if self._axes and entry:
+            self._carried = entry
+        for name, held in entry.items():
+            # an untyped literal would enter as Triton's `int32` or `fp32`
+            code = self._explicit_cast(name, held)
+            if self._axes:
+                ctx.add_line(f'{name} = {self._as_row(code, held)}', 'row')
+            else:
+                ctx.add_line(f'{name} = {code}')
         it = stmt.iterable
         assert isinstance(it, (Range1, Range3))
         args = ([self._index(it.arg)] if isinstance(it, Range1)

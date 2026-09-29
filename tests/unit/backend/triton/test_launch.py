@@ -949,7 +949,7 @@ def test_a_loop_ahead_of_the_column_tile_carries_a_column() -> None:
     m, n, k = NamedId('m'), NamedId('n'), NamedId('k')
     src = _compile(row_first, [ListType(ListType(F32, k), m), ListType(F32, n),
                                ListType(ListType(F32, n), m), INT])
-    assert 'acc = tl.broadcast_to(acc, (BLOCK_M, 1))' in src.source
+    assert 'acc = tl.broadcast_to(tl.cast(acc, tl.float32), (BLOCK_M, 1))' in src.source
     torch.manual_seed(0)
     _agree(src, row_first, [torch.randn(5, 3).cuda(), torch.randn(9).cuda(),
                             torch.zeros(5, 9).cuda()], block_m=4)
@@ -1147,6 +1147,47 @@ def test_a_tail_written_in_a_loop_agrees():
     src = _compile(_tail_in_a_loop, _rows_of(64))
     assert 'tl.static_range' not in src.source
     _agree(src, _tail_in_a_loop, _randn(64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _count_in_a_loop(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """A counter carried by a loop outside any tile, from a literal."""
+    with fp.INTEGER:
+        k = 0
+        for _ in range(8):
+            k = k + 1
+    with fp.FP32:
+        out[0] = xs[0] + k
+    return out
+
+
+def test_a_counter_from_a_literal_agrees() -> None:
+    """`k = 0` would enter the loop as Triton's `int32`, the body's `k` a
+    `uint8`: it enters in its class's storage."""
+    src = _compile(_count_in_a_loop, [ListType(F32, 8), ListType(F32, 1), INT])
+    xt, ot = torch.randn(8).cuda(), torch.zeros(1).cuda()
+    _agree(src, _count_in_a_loop, [xt, ot], grid=1)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _empty_loop(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A loop of no iterations: its target has no values at all."""
+    for r in range(len(out)):
+        acc = xss[r][0]
+        for i in range(len(xss[r]) - 1):
+            with fp.INTEGER:
+                j = i + 1
+            with fp.FP32:
+                acc = acc + xss[r][j]
+        out[r] = acc
+    return out
+
+
+def test_an_empty_loop_agrees() -> None:
+    """The body of a loop that never runs is still emitted, and the empty set
+    fits any storage."""
+    src = _compile(_empty_loop, _rows_of(1))
+    _agree(src, _empty_loop, _randn(1))
 
 
 @fp.fpy(ctx=fp.REAL)

@@ -10,11 +10,13 @@ the original, so arguments are unchanged.
 """
 
 from ...analysis import DefineUse, DefineUseAnalysis
-from ...analysis.reaching_defs import Definition, same_object_defs
+from ...analysis.reaching_defs import Definition, DefSite, same_object_defs
 from ...ast import (
+    Assign,
     ContextStmt,
     DefaultTransformVisitor,
     Expr,
+    ForStmt,
     FuncDef,
     Id,
     IndexedAssign,
@@ -34,7 +36,7 @@ class _SplitNames(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     name_of: dict[Definition, NamedId]
     """Each definition's name, by its class."""
-    _site: Stmt | None
+    _site: DefSite | None
     """The statement whose targets are being visited."""
 
     def __init__(self, func: FuncDef) -> None:
@@ -79,7 +81,8 @@ class _SplitNames(DefaultTransformVisitor):
 
     def _visit_statement(self, stmt: Stmt, ctx: None) -> tuple[Stmt, None]:
         # a statement's targets are visited before any statement it nests
-        self._site = stmt
+        if isinstance(stmt, Assign | IndexedAssign | ForStmt | ContextStmt):
+            self._site = stmt
         return super()._visit_statement(stmt, ctx)
 
 
