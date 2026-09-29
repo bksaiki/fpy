@@ -62,7 +62,6 @@ from ...ast import (
     Call,
     Cast,
     Compare,
-    CompareOp,
     ConstInf,
     ConstNan,
     ContextStmt,
@@ -152,16 +151,6 @@ __all__ = ['KernelSource', 'TritonEmitError', 'emit_block', 'emit_expr', 'emit_k
 
 class TritonEmitError(CompileError):
     """A program this backend declines to emit."""
-
-
-_COMPARE: dict[CompareOp, str] = {
-    CompareOp.LT: '<',
-    CompareOp.LE: '<=',
-    CompareOp.GT: '>',
-    CompareOp.GE: '>=',
-    CompareOp.EQ: '==',
-    CompareOp.NE: '!=',
-}
 
 
 def _reads_name(code: str, names: set[str]) -> bool:
@@ -604,8 +593,9 @@ class _Emitter(Visitor):
     _guard_mask: str | None
     """The tiles' own guards in force, conjoined: the rows past each end, and
     no branch."""
-    _carried: dict[NamedId, TritonScalar]
-    """The names a runtime loop in a tile carries as rows, by storage."""
+    _carried: dict[str, TritonScalar]
+    """The names a runtime loop in a tile carries as rows, by storage: its
+    scalars, and the tails of the lists it writes."""
     _class_of: dict[Definition, Definition]
     """Each definition's class: the definitions a phi joins, as
     `StorageInfer` coalesces them."""
@@ -1161,7 +1151,7 @@ class _Emitter(Visitor):
 
     def _insert(self, tile: NamedId, idx: str, v: str) -> None:
         """*tile* with element *idx* set to *v*, under any branch."""
-        width, tail, _ = self.tiles[tile]
+        width, tail, elt = self.tiles[tile]
         mask = self.mask if self._branches else None
         k = _literal_int(idx)
         if k is None or k < width:
@@ -1174,12 +1164,13 @@ class _Emitter(Visitor):
             if k is not None and k != width + j:
                 continue
             name = f'{tile}_t{j}'
+            val = self._as_row(v, elt) if name in self._carried else v
             cond = None if k is not None else f'({idx} == {width + j})'
             if mask is not None:
                 cond = mask if cond is None else f'({cond} & {mask})'
             self._out.add_line(
-                f'{name} = {v}' if cond is None
-                else f'{name} = tl.where({cond}, {v}, {name})')
+                f'{name} = {val}' if cond is None
+                else f'{name} = tl.where({cond}, {val}, {name})')
 
     def _elt_storage(self, stmt: Assign) -> TritonScalar:
         """The storage every element of the list *stmt* allocates is held
@@ -1645,7 +1636,7 @@ class _Emitter(Visitor):
     def _chain(e: Compare, codes: list[str]) -> str:
         """The links of *e* over *codes*, joined with `&`."""
         links = [
-            f'({codes[i]} {_COMPARE[op]} {codes[i + 1]})'
+            f'({codes[i]} {op.symbol()} {codes[i + 1]})'
             for i, op in enumerate(e.ops)
         ]
         return links[0] if len(links) == 1 else '(' + ' & '.join(links) + ')'
@@ -2161,8 +2152,8 @@ class _Emitter(Visitor):
                 )
                 return
         code = self._into_class(stmt.target, stmt, stmt.expr)
-        if stmt.target in self._carried:
-            ctx.add_line(f'{stmt.target} = {self._as_row(code, self._carried[stmt.target])}', 'row')
+        if (held := self._carried.get(str(stmt.target))) is not None:
+            ctx.add_line(f'{stmt.target} = {self._as_row(code, held)}', 'row')
             return
         if code.isdigit():
             self.consts[str(stmt.target)] = int(code)
@@ -2439,7 +2430,7 @@ class _Emitter(Visitor):
                 '`range` and subscript instead'
             )
         n = static_trip_count(stmt.iterable, self.sizes)
-        if not isinstance(n, int):
+        if not isinstance(n, int) or not self._indexes_registers(stmt):
             return self._emit_runtime_loop(stmt, ctx)
         outer = self._constexprs
         if isinstance(stmt.iterable, Range1):
@@ -2461,18 +2452,61 @@ class _Emitter(Visitor):
         self._constexprs = outer
         ctx.dedent()
 
+    def _indexes_registers(self, stmt: ForStmt) -> bool:
+        """Whether *stmt*'s body reads or writes a list held in registers at
+        an index depending on its target.  Only then is it unrolled: the index
+        is a constant, and the access the element rather than a select over
+        all of them.  Unrolling anything else only costs Triton compile time."""
+        if not isinstance(stmt.target, NamedId):
+            return False
+        dep = {stmt.target}
+
+        def uses(e: Expr | None) -> bool:
+            return e is not None and bool(names_in(e) & dep)
+
+        def held(e: Expr) -> bool:
+            return (self._tile_of(e) is not None or isinstance(e, ListExpr)
+                    or (isinstance(e, Var) and e.name in self.seqs))
+
+        def in_expr(e: Expr) -> bool:
+            if isinstance(e, ListRef) and held(e.value) and uses(e.index):
+                return True
+            if isinstance(e, ListSlice) and held(e.value) and (uses(e.start) or uses(e.stop)):
+                return True
+            return any(in_expr(x) for _, _, x in subexprs(e))
+
+        def in_block(block: StmtBlock) -> bool:
+            for st in block.stmts:
+                if isinstance(st, Assign) and isinstance(st.target, NamedId) and uses(st.expr):
+                    dep.add(st.target)
+                if (isinstance(st, IndexedAssign) and st.var in self.tiles
+                        and any(uses(i) for i in st.indices)):
+                    return True
+                if any(in_expr(x) for _, _, x in subexprs(st)):
+                    return True
+                if any(in_block(b) for _, b in subblocks(st)):
+                    return True
+            return False
+
+        return in_block(stmt.body)
+
     def _emit_runtime_loop(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:
-        """A loop of unproven trip count, as a runtime `range`.
+        """A loop as a runtime `range`: its trip count is unproven, or
+        unrolling it would buy nothing (:meth:`_indexes_registers`).
 
         Triton holds a carried value at one type and shape on every
         iteration.  The type is its class's storage already; in a tile, each
-        carried name is broadcast to the tile axes' shape at entry and at
-        every assignment.
+        carried name, and each tail of a list the body writes, is broadcast
+        to the tile axes' shape at entry and at every assignment.
         """
         carried = carried_scalars(stmt, self.def_use)
+        tails = {f'{v}_t{j}': self.tiles[v][2] for v in self.def_use.mutated_in(stmt.body)
+                 if v in self.tiles for j in range(self.tiles[v][1])}
         prev = self._carried
-        if self._axes and carried:
-            self._carried = {}
+        if self._axes and (carried or tails):
+            self._carried = dict(tails)
+            for name, held in tails.items():
+                ctx.add_line(f'{name} = {self._as_row(name, held)}', 'row')
             for p in self.def_use.phis.get(stmt, ()):
                 if p.name not in carried:
                     continue
@@ -2481,7 +2515,7 @@ class _Emitter(Visitor):
                     raise TritonEmitError(
                         f'no storage holds every value `{p.name}` carries'
                     )
-                self._carried[p.name] = held
+                self._carried[str(p.name)] = held
                 ctx.add_line(f'{p.name} = {self._as_row(str(p.name), held)}', 'row')
         it = stmt.iterable
         assert isinstance(it, (Range1, Range3))

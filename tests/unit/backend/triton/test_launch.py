@@ -296,7 +296,7 @@ def test_a_reduction_stays_sequential_and_agrees(f):
     """No reduction across a tile is lowered, so the loop is not tiled."""
     n = 37
     src = _compile(f, [ListType(F32, n), ListType(F32, 1), INT])
-    assert 'tl.static_range(37)' in src.source
+    assert 'range(37)' in src.source
     torch.manual_seed(0)
     _agree(src, f, [(torch.randn(n) * 4).cuda(), torch.zeros(1).cuda()],
            block=16, grid=1)
@@ -1043,18 +1043,19 @@ def _product_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list
         s = fp.round(0)
         for t in range(0, len(yss[r]), 4):
             i = t * 16
-            w = xss[r][i:i + 4]
-            for j in range(4):
+            w = xss[r][i:i + 64]
+            for j in range(64):
                 with fp.FP32:
                     s = s + w[j]
         out[r] = s
     return out
 
 
-@pytest.mark.parametrize('k', [256, 1024, 2048])
+@pytest.mark.parametrize('k', [256, 1024, 2048, 4096])
 def test_a_product_index_agrees(k: int):
     """Past 16 values of `t` (k = 2048) its format is an interval, not a set:
-    `t * 16` must still be an integer."""
+    `t * 16` must still be an integer.  The loops index no list in registers,
+    so neither is unrolled."""
     src = _compile(_product_index, _rows_of(k, k // 16))
     _agree(src, _product_index, _randn(k, k // 16))
 
@@ -1081,15 +1082,18 @@ def test_a_float_held_index_agrees():
 
 @fp.fpy(ctx=fp.REAL)
 def _static_product_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
-    """Slices at `t * 32`, `t` a loop of static count."""
+    """Slices at `t * 32` computed at `FP32`, `t` a loop of static count,
+    unrolled as it indexes a literal list."""
     for r in range(len(out)):
+        sc = [xss[r][0], xss[r][1], xss[r][2], xss[r][3]]
         s = fp.round(0)
-        for t in range(32):
-            i = t * 32
-            w = xss[r][i:i + 4]
-            for j in range(4):
+        for t in range(4):
+            with fp.FP32:
+                i = t * 32
+            w = xss[r][i:i + 32]
+            for j in range(32):
                 with fp.FP32:
-                    s = s + w[j]
+                    s = s + w[j] * sc[t]
         out[r] = s
     return out
 
@@ -1097,8 +1101,9 @@ def _static_product_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: f
 def test_a_static_product_index_agrees():
     """A `static_range` target, a Python number when traced, is cast by
     `tl.cast`."""
-    src = _compile(_static_product_index, _rows_of(1024))
-    _agree(src, _static_product_index, _randn(1024))
+    src = _compile(_static_product_index, _rows_of(128))
+    assert 'tl.cast(t, ' in src.source
+    _agree(src, _static_product_index, _randn(128))
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -1122,6 +1127,26 @@ def _integer_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list
 def test_an_integer_context_index_agrees():
     src = _compile(_integer_index, _rows_of(1024, 64))
     _agree(src, _integer_index, _randn(1024, 64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _tail_in_a_loop(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A loop, not unrolled, writing the tail of a list of 5."""
+    for r in range(len(out)):
+        zs = [fp.round(0) for _ in range(5)]
+        for t in range(len(xss[r])):
+            with fp.FP32:
+                zs[4] = zs[4] + xss[r][t]
+        out[r] = zs[4]
+    return out
+
+
+def test_a_tail_written_in_a_loop_agrees():
+    """The tail is carried as a row, as Triton holds a loop's names at one
+    shape."""
+    src = _compile(_tail_in_a_loop, _rows_of(64))
+    assert 'tl.static_range' not in src.source
+    _agree(src, _tail_in_a_loop, _randn(64))
 
 
 @fp.fpy(ctx=fp.REAL)

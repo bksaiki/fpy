@@ -45,15 +45,16 @@ def batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     j = i + tl.arange(0, BLOCK)
     r = j
     acc = 0.0
-    for k in tl.static_range(8):
+    acc = tl.broadcast_to(acc, (BLOCK,))
+    for k in range(8):
         __t0 = tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
         __t1 = tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
-        acc = (acc + (__t0.to(tl.float32) * __t1.to(tl.float32)))
+        acc = tl.broadcast_to((acc + (__t0.to(tl.float32) * __t1.to(tl.float32))), (BLOCK,))
     tl.store(out_ptr + r, acc, mask=(j < 4))'''
 
 
 def test_the_batched_dot_product():
-    """Every design decision in this backend is visible in these ten lines:
+    """Every design decision in this backend is visible in these lines:
     the grid and tile from `tile_loops`, the guard as a `mask=` rather than a
     branch, the `K` fold left sequential because its accumulation rounds, and
     both fp16 operands widened *before* the product rather than after.
@@ -181,7 +182,7 @@ def test_a_zip_is_eliminated_before_emission():
             ListType(RealType(fp.FP32), K),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
-    loop = re.search(r'for (\w+) in tl\.static_range\(8\):', src.source)
+    loop = re.search(r'for (\w+) in range\(8\):', src.source)
     assert loop and f'tl.load(xs_ptr + {loop[1]})' in src.source
 
 

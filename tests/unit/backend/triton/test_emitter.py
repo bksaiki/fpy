@@ -163,7 +163,9 @@ class TestSequentialLoops:
     """A loop `why_not_tileable` declined stays sequential per lane, which is
     `tl.static_range` when its count is proven."""
 
-    def test_a_proven_count_emits_static_range(self):
+    def test_a_proven_count_indexing_no_register_stays_rolled(self):
+        """Unrolling buys a constant index into a register-held list, and
+        this body has none."""
         @fp.fpy(ctx=fp.FP32)
         def fold(x: fp.Real):
             acc = fp.round(0)
@@ -173,7 +175,7 @@ class TestSequentialLoops:
 
         assert _emit(fold, [_R32]) == (
             'acc = 0.0\n'
-            'for _k in tl.static_range(8):\n'
+            'for _k in range(8):\n'
             '    acc = (acc + x)\n'
             'return acc'
         )
@@ -530,7 +532,7 @@ class TestLiteralLists:
             return s
 
         out = _emit(f, [ListType(_R32, 8)])
-        assert 'for j in tl.static_range(4):' in out
+        assert 'for j in range(4):' in out
         assert 'tl.load(A_ptr + j + 1)' in out
 
     def test_len_of_a_literal_list(self):
@@ -742,17 +744,19 @@ def test_a_float_held_exponent_is_cast_for_ldexp():
 class TestLoopCarried:
     def test_a_range_keeps_its_start_and_step(self):
         """`tl.static_range` counts from zero, so the target is where the
-        count lands: `range(0, 8, 4)` is 0 and 4, not 0 and 1."""
+        count lands: `range(1, 4, 2)` is 1 and 3, not 0 and 1.  Unrolled, as
+        it indexes a literal list."""
         @fp.fpy(ctx=fp.FP32)
         def f(xs: list[fp.Real]):
+            ys = [xs[0], xs[1], xs[2], xs[3]]
             acc = fp.round(0)
-            for i in range(2, 8, 4):
-                acc = acc + xs[i]
+            for i in range(1, 4, 2):
+                acc = acc + ys[i]
             return acc
 
         out = _emit(f, [ListType(_R32, 8)])
         assert 'in tl.static_range(2):' in out
-        assert 'i = 2 + __t0 * 4' in out
+        assert re.search(r'i = 1 \+ __t\d+ \* 2', out)
 
     def test_a_carried_value_is_held_in_its_class(self):
         """Triton declares nothing, so a value narrower than the phi joining
@@ -1099,7 +1103,7 @@ def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> No
     `fp64`."""
     src = _compile(aligned_sum(rm), _ALIGNED_ARGS, unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
     assert ('bitcast=True) * ((' in src.source) is halves
-    assert ('x.to(tl.float64)' in src.source) is not halves
+    assert (re.search(r'\bx\d*\.to\(tl\.float64\)', src.source) is not None) is not halves
 
 
 def test_a_scale_bound_under_a_rounding_context_is_not_fused() -> None:

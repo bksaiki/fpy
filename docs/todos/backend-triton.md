@@ -56,11 +56,10 @@ Rules the backend keeps:
 
 ## What is left
 
-- **A static trip count is always unrolled.**  `_visit_for` emits
-  `tl.static_range` whenever the count is known, however large.  Two nested
-  static loops of 64 (4,096 statements) take Triton minutes to compile.
-  Unroll only small counts, or loops whose body needs a constexpr index, and
-  emit `range` otherwise.
+- **A static trip count was always unrolled** (fixed,
+  `triton-integer-indices.md` Phase 7).  A static loop is now unrolled only
+  where its body indexes a list in registers by its target; the NVFP4
+  chain's Triton compile went from 802 s to 1.5 s.
 
 - **Index arithmetic stored as a float** blocks chaining block-scaled
   designs in the kernel.  A block-scaled design is one instruction, so

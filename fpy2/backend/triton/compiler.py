@@ -37,6 +37,7 @@ from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import KernelSource, emit_kernel
 from .normalize import normalize, normalize_module
+from .split_names import split_names
 from .unfold_round import UnfoldMode, unfold
 from .vectorize import tile_loops
 
@@ -150,7 +151,7 @@ class TritonCompiler(Backend):
                 except TransformDeclined:
                     pass  # nothing to hoist is not a failure
 
-        tiles = tile_loops(ready.ast, self.block)
+        tiles = tile_loops(split_names(ready.ast), self.block)
         if self.optimize:
             tiles = tiles.rewritten(Simplify.apply(tiles.func))
 
