@@ -4,6 +4,7 @@ The options the scripts share, and what they do with them alike.
 
 import argparse
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, get_args
 
@@ -13,8 +14,9 @@ from . import checkpoints, kernels, quant, swap
 
 
 def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
-    """The options every script shares: the model, how designs split `k`,
-    and (with *seed*) the seed of its random subsets (`workloads.pick`)."""
+    """The options every script shares: the model (and listing them), how
+    designs split `k`, and (with *seed*) the seed of its random subsets
+    (`workloads.pick`)."""
     ap.add_argument('--model', default=swap.MODEL,
                     help='the model, a master or a checkpoint (default: %(default)s)')
     ap.add_argument('--list-models', action='store_true',
@@ -31,10 +33,10 @@ def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
 
 
 def add_scheme_args(ap: argparse.ArgumentParser) -> None:
-    """The options choosing a scheme and a model's weights under it."""
+    """The options choosing a scheme and a model's weights under it, and
+    listing the schemes and a scheme's matmuls."""
     ap.add_argument('--scheme', type=quant.scheme, default=swap.BF16,
-                    help=f'one of {", ".join(quant.SCHEMES)}, or fp8-row:fnuz, fp8-block:fnuz '
-                    f'(default: {swap.BF16.name})')
+                    help=f'one of {", ".join(quant.NAMES)} (default: {swap.BF16.name})')
     ap.add_argument('--list-schemes', action='store_true', help='list the schemes, and exit')
     ap.add_argument('--list-matmuls', action='store_true',
                     help="list the scheme's matmuls, and exit")
@@ -56,12 +58,11 @@ def parse(ap: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
     """*argv* parsed, or what a `--list-*` option asks for printed, and exit."""
     args = ap.parse_args(argv)
     lines: list[str] = []
-    if getattr(args, 'list_models', False):
+    if args.list_models:
         lines = [f'{m:34} {what}' for m, what in swap.MODELS.items()]
-    elif getattr(args, 'list_schemes', False):
-        names = [*quant.SCHEMES, 'fp8-row:fnuz', 'fp8-block:fnuz']
-        lines = [f'{n:16} {quant.describe(quant.scheme(n))}' for n in names]
-    elif getattr(args, 'list_matmuls', False):
+    elif args.list_schemes:
+        lines = [f'{n:16} {quant.describe(quant.scheme(n))}' for n in quant.NAMES]
+    elif args.list_matmuls:
         fp32, exact, *designs = swap.modes(args.scheme)
         lines = [f'{fp32:24} R0, the model as trained',
                  f"{exact:24} R1, the quantized operands' exact product",
@@ -81,17 +82,20 @@ def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
     return args.runs or list(known)
 
 
-def load(args: argparse.Namespace, name: str | None = None,
-         ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any]]:
+def load(args: argparse.Namespace, name: str | None = None, designs: Sequence[str] = (),
+         jobs: int | None = None) -> tuple[torch.nn.Module, swap.Run, dict[str, Any]]:
     """*name* (default `--model`) under *args*' scheme and splits:
-    `checkpoints.for_scheme`'s.  Under a scaled scheme its designs' fused
-    kernels compile now, in parallel, for each of the layers' `k`."""
+    `checkpoints.for_scheme`'s.  Under a scaled scheme, the fused kernels of
+    the *designs* to run compile now, in *jobs* processes, over each `k` of
+    the layers a design computes."""
     model, run, about = checkpoints.for_scheme(
         name or args.model, args.scheme, requantize=args.requantize, master=args.master,
         split_k=args.split_k, combine=args.combine)
-    if args.scheme.applied in ('k-blocks', 'instruction'):
-        ks = sorted({m.in_features for m in model.modules() if isinstance(m, torch.nn.Linear)})
-        kernels.precompile(kernels.designs(args.scheme), ks=ks)
+    designs = [d for d in designs if d in kernels.TILES]
+    if designs and args.scheme.applied in ('k-blocks', 'instruction'):
+        ks = sorted({m.in_features for m in model.modules()
+                     if isinstance(m, torch.nn.Linear) and id(m.weight) not in run.ignore})
+        kernels.precompile(designs, jobs, ks)
     return model, run, about
 
 

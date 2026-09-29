@@ -33,7 +33,6 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
 
 
 MODEL = 'Qwen/Qwen3-0.6B'
-"""The default model."""
 
 MODELS = {
     MODEL: 'BF16 master',
@@ -65,13 +64,11 @@ def exact(qa: quant.Quantized, qw: quant.Quantized) -> torch.Tensor:
 
 
 def slices(scheme: quant.Scheme, split_k: int) -> int:
-    """How many slices of `k` to prepare a weight in: *split_k*, or one for a
-    scaled scheme, whose blocks `kernels.matmul` takes whole."""
-    if scheme.applied not in ('k-blocks', 'instruction'):
-        return split_k
-    if split_k != 1:
+    """How many slices of `k` to prepare a weight in: *split_k*, which a scaled
+    scheme refuses (`kernels.matmul` takes its blocks whole)."""
+    if split_k != 1 and scheme.applied in ('k-blocks', 'instruction'):
         raise ValueError(f'{scheme.name} splits `k` into its own blocks, not {split_k}')
-    return 1
+    return split_k
 
 
 def _per_group(q: quant.Quantized, design: str) -> torch.Tensor:
@@ -79,8 +76,7 @@ def _per_group(q: quant.Quantized, design: str) -> torch.Tensor:
     g]`, one per group `g` of its instructions in order along `k`, each scale
     repeated over the groups its block covers."""
     g = kernels.group(design)
-    sc = q.scales.repeat_interleave(q.operand.scaling.cols // g, 1)
-    return sc.contiguous().to(kernels.storage(design)[2])
+    return q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).to(kernels.storage(design)[2])
 
 
 def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,

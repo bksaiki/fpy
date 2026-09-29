@@ -24,7 +24,7 @@ def test_e2m1_unpacks_as_compressed_tensors_does() -> None:
     """Every byte, both nibbles, signed zeros included."""
     from compressed_tensors.compressors.nvfp4.helpers import unpack_fp4_from_uint8
 
-    packed = torch.arange(256, dtype=torch.uint8).view(16, 16).cuda()
+    packed = torch.arange(256, dtype=torch.uint8).view(16, 16)
     got = checkpoints.unpack_e2m1(packed)
     want = unpack_fp4_from_uint8(packed, 16, 32, torch.float32)
     assert torch.equal(got, want) and torch.equal(got.signbit(), want.signbit())

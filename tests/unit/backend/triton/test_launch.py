@@ -1172,6 +1172,25 @@ def test_a_slice_of_a_slice_agrees() -> None:
 
 
 @fp.fpy(ctx=fp.REAL)
+def _outer_slices(xss: list[list[list[fp.Real]]], out: list[fp.Real], BLOCK: fp.Real):
+    """A slice along an outer dimension, and a slice of one of its rows."""
+    for r in range(len(out)):
+        w = xss[r][1:3]
+        v = w[1][4:8]
+        with fp.FP32:
+            out[r] = w[1][5] + v[2]
+    return out
+
+
+def test_a_slice_along_an_outer_dimension_agrees() -> None:
+    """Its start moves by that dimension's stride: `w[1][5]` is `xss[r][2][5]`."""
+    src = _compile(_outer_slices, [ListType(ListType(ListType(F32, 16), 4), _ROWS),
+                                   ListType(F32, _ROWS), INT])
+    torch.manual_seed(0)
+    _agree(src, _outer_slices, [torch.randn(_ROWS, 4, 16).cuda(), torch.zeros(_ROWS).cuda()])
+
+
+@fp.fpy(ctx=fp.REAL)
 def _count_in_a_loop(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
     """A counter carried by a loop outside any tile, from a literal."""
     with fp.INTEGER:

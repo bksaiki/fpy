@@ -12,13 +12,7 @@ SCRIPTS = ['local', 'perplexity', 'zeroshot', 'decode', 'chat']
 
 
 class _Parsed(Exception):
-    """Raised in place of parsing, carrying the parser a script built."""
-
-    parser: argparse.ArgumentParser
-
-    def __init__(self, parser: argparse.ArgumentParser) -> None:
-        super().__init__()
-        self.parser = parser
+    """Raised in place of parsing; `args[0]` is the parser a script built."""
 
 
 def _parser(script: str, monkeypatch: pytest.MonkeyPatch) -> argparse.ArgumentParser:
@@ -29,7 +23,7 @@ def _parser(script: str, monkeypatch: pytest.MonkeyPatch) -> argparse.ArgumentPa
     monkeypatch.setattr(argparse.ArgumentParser, 'parse_args', stop)
     with pytest.raises(_Parsed) as parsed:
         importlib.import_module(script).main([])
-    return parsed.value.parser
+    return parsed.value.args[0]
 
 
 @pytest.mark.parametrize('script', SCRIPTS)
@@ -46,20 +40,13 @@ def test_every_option_says_what_it_does_and_its_default(
 
 
 @pytest.mark.parametrize('script', SCRIPTS)
-def test_help_prints_and_exits(script: str, capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as done:
-        importlib.import_module(script).main(['--help'])
-    assert done.value.code == 0
-    assert 'options:' in capsys.readouterr().out
-
-
-@pytest.mark.parametrize('script', SCRIPTS)
 @pytest.mark.parametrize('flag, shown', [
+    (['--help'], 'options:'),
     (['--list-models'], 'kaitchup/Qwen3-0.6B-NVFP4'),
     (['--list-schemes'], 'fp8-block:fnuz'),
     (['--scheme', 'nvfp4', '--list-matmuls'], 'nv.blackwell.nvfp4'),
 ])
-def test_a_list_prints_and_exits(
+def test_help_or_a_list_prints_and_exits(
     script: str, flag: list[str], shown: str, capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as done:

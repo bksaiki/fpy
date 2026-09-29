@@ -25,10 +25,18 @@ SCALED = [d for d in kernels.TILES if kernels.block_scaled(d)]
 BF16 = kernels.designs(quant.SCHEMES['bf16'])
 
 
-def _path(monkeypatch: pytest.MonkeyPatch, design: str, fused: bool) -> None:
-    """`kernels.matmul` runs *design*'s scaled products in one kernel, or as
-    launches, at any `m`."""
-    monkeypatch.setitem(kernels.FUSED_ROWS, design, 1 << 30 if fused else 0)
+def _fuse(monkeypatch: pytest.MonkeyPatch, design: str, on: bool) -> None:
+    """Force `kernels.matmul` to fuse *design*'s scaled products, or not, at
+    any `m`."""
+    monkeypatch.setitem(kernels.FUSED_ROWS, design, 1 << 30 if on else 0)
+
+
+def _draw(t: object, rng: random.Random, *shape: int) -> torch.Tensor:
+    """Hard-case values of *t*'s format, in *shape*."""
+    from compile import _fmt, _sample
+
+    fmt = _fmt(t)
+    return torch.tensor([_sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]).view(shape)
 
 
 def _rows(t: torch.Tensor) -> torch.Tensor:
@@ -107,22 +115,16 @@ def test_a_chain_of_instructions_agrees_with_the_interpreter(
     """`k` as three instructions, each accumulating onto the last's result,
     in one kernel or launches: bit for bit (any NaN as one) against the
     interpreter chained so, on hard-case elements and scales."""
-    _path(monkeypatch, design, fused)
+    _fuse(monkeypatch, design, fused)
     from compile import DESIGNS as ALL
-    from compile import _fmt, _sample
 
     f, args = dict(ALL)[design]()
-    k0, per = kernels.compiled(design)[1], kernels.compiled(design)[1] // kernels.group(design)
+    k0 = kernels.compiled(design)[1]
+    per = k0 // kernels.group(design)
     rng = random.Random(0)
     m, n, s = 2, 3, 3
-
-    def draw(t: object, *shape: int) -> torch.Tensor:
-        fmt = _fmt(t)
-        return torch.tensor([_sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]
-                            ).view(shape)
-
-    x, w = draw(args[0], m, s * k0), draw(args[1], n, s * k0)
-    xs, ys = draw(args[3], s, m, per), draw(args[4], s, n, per)
+    x, w = _draw(args[0], rng, m, s * k0), _draw(args[1], rng, n, s * k0)
+    xs, ys = _draw(args[3], rng, s, m, per), _draw(args[4], rng, s, n, per)
     held = kernels.storage(design)
     got = kernels.matmul(x.cuda().to(held[0]), kernels.prepare(w.cuda(), held[1]), design,
                          scales=(_rows(xs).cuda().to(held[2]), _rows(ys).cuda().to(held[2]))).cpu()
@@ -143,16 +145,13 @@ def test_scaled_partials_sum_in_order(fused: bool, monkeypatch: pytest.MonkeyPat
     right in FP32, `y + p * (s_x * s_w)`, in one kernel or launches: bit for
     bit (any NaN as one) against the interpreter's partials combined so."""
     from compile import DESIGNS as ALL
-    from compile import _fmt, _sample
 
     design = 'nv.hopper.e4m3.f32'
-    _path(monkeypatch, design, fused)
+    _fuse(monkeypatch, design, fused)
     f, arg_types = dict(ALL)[design]()
     rng = random.Random(0)
     m, n, k = 2, 3, 256
-    fmt = _fmt(arg_types[0])
-    x = torch.tensor([[_sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(m)])
-    w = torch.tensor([[_sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(n)])
+    x, w = _draw(arg_types[0], rng, m, k), _draw(arg_types[0], rng, n, k)
     sx = torch.rand(m, 2) * 4
     sw = torch.rand(n, 2) * 4
     held = kernels.storage(design)
@@ -168,44 +167,31 @@ def test_scaled_partials_sum_in_order(fused: bool, monkeypatch: pytest.MonkeyPat
             assert _bits(got[i, j].item()) == _bits(float(acc)), (i, j)
 
 
-def _same(got: torch.Tensor, want: torch.Tensor) -> bool:
-    """Bit for bit, any NaN as one."""
-    nan = got.isnan()
-    return torch.equal(nan, want.isnan()) and torch.equal(
-        got.masked_fill(nan, 0).view(torch.int32), want.masked_fill(nan, 0).view(torch.int32))
-
-
 @pytest.mark.parametrize('m', [1, 37])
 @pytest.mark.parametrize('design', [*SCALED, 'nv.hopper.e4m3.f32', 'amd.cdna3.fp8'])
 def test_one_kernel_is_the_launches(design: str, m: int, monkeypatch: pytest.MonkeyPatch) -> None:
     """Three instructions or two promoted blocks, on hard-case elements (and
     scales, block-scaled), bit for bit (any NaN as one)."""
     from compile import DESIGNS as ALL
-    from compile import _fmt, _sample
 
     _, args = dict(ALL)[design]()
     rng = random.Random(0)
-
-    def draw(t: object, *shape: int) -> torch.Tensor:
-        fmt = _fmt(t)
-        return torch.tensor([_sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]
-                            ).view(shape)
-
     held, n = kernels.storage(design), 5
     if kernels.block_scaled(design):
         k0 = kernels.compiled(design)[1]
         per, s = k0 // kernels.group(design), 3
-        x, w = draw(args[0], m, s * k0), draw(args[1], n, s * k0)
+        x, w = _draw(args[0], rng, m, s * k0), _draw(args[1], rng, n, s * k0)
         scales = tuple(_rows(t).cuda().to(held[2])
-                       for t in (draw(args[3], s, m, per), draw(args[4], s, n, per)))
+                       for t in (_draw(args[3], rng, s, m, per), _draw(args[4], rng, s, n, per)))
     else:
-        x, w = draw(args[0], m, 256), draw(args[1], n, 256)
+        x, w = _draw(args[0], rng, m, 256), _draw(args[1], rng, n, 256)
         scales = ((torch.rand(m, 2) * 4).cuda(), (torch.rand(n, 2) * 4).cuda())
     a, b = x.cuda().to(held[0]), kernels.prepare(w.cuda(), held[1])
-    _path(monkeypatch, design, True)
+    _fuse(monkeypatch, design, True)
     fused = kernels.matmul(a, b, design, scales=scales)
-    _path(monkeypatch, design, False)
-    assert _same(fused, kernels.matmul(a, b, design, scales=scales))
+    _fuse(monkeypatch, design, False)
+    launched = kernels.matmul(a, b, design, scales=scales)
+    assert [*map(_bits, fused.flatten().tolist())] == [*map(_bits, launched.flatten().tolist())]
 
 
 @pytest.mark.parametrize('split_k', [1, 4])

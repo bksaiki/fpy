@@ -40,7 +40,7 @@ def main(argv: list[str]) -> int:
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    model, run, about = cli.load(args)
+    model, run, about = cli.load(args, designs=[args.run])
     run.mode = args.run
     eos = generate.stop_tokens(model, tok)
     messages: list[dict[str, str]] = []

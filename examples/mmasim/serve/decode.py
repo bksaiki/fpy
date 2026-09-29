@@ -49,7 +49,7 @@ def main(argv: list[str]) -> int:
                 'max_new': args.max_new}
     tok = AutoTokenizer.from_pretrained(args.model)
     prompts = workloads.math500(tok, args.prompts or None, args.seed)
-    model, run, about = cli.load(args)
+    model, run, about = cli.load(args, designs=modes)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

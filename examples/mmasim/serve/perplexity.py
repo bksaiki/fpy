@@ -33,7 +33,7 @@ def main(argv: list[str]) -> int:
     runs = cli.runs(ap, args)
     segs = workloads.segments(workloads.wikitext_ids(args.model))
     segs = [segs[i] for i in workloads.pick(len(segs), args.segments or None, args.seed)]
-    model, run, about = cli.load(args)
+    model, run, about = cli.load(args, designs=runs)
 
     totals = scoring.evaluate(model, run, segs, runs, progress=True)
     results = {

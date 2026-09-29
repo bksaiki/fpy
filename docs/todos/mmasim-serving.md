@@ -672,10 +672,43 @@ Condensed; what the code does not say.
   - `metrics` computes the reference's terms once per block.
   - Decode speeds barely move (FP8 2.9 -> 3.0 tokens/s, NVFP4 1.3 -> 1.5,
     CDNA2 5.9 -> 6.5).  Deferred:
-    - the block-scaled and `fp8-block` launch chains, which wait for the
-      backend's index bug (`backend-triton.md`);
     - caching FP64 weights for exact matmuls (memory);
     - CUDA graphs for decode.
+- **The scaled schemes in one kernel** (2026-09-29, `mmasim` branch).
+  - A block-scaled design chained over `k`, or an E4M3 design under
+    `fp8-block` promoted every 128, compiles as one kernel per static `k`
+    (`compile_triton.fuse`, `--fuse K`; `kernels.fused`), bit-identical to
+    the launch per instruction or block.  `cli.load` precompiles a run's
+    fused kernels over the model's `k`s.
+  - `kernels.matmul` fuses at most `FUSED_ROWS` rows: 32 for NVFP4 and
+    MXFP4, which are 9-18% slower fused at prefill (at their best tile),
+    and every `m` for the MX and `fp8-block` designs, 4-7% faster fused
+    even at 2048 rows.
+  - Decode, Qwen3-0.6B through `chat.py`, identical text before and after:
+
+    | scheme (design) | before | after |
+    |---|---|---|
+    | `nvfp4` (checkpoint, `nv.blackwell.nvfp4`) | 2.0 tokens/s | 6.7 |
+    | `mxfp4` (`nv.blackwell.mxfp4`) | 2.1 | 7.5 |
+    | `mxfp8` (`nv.blackwell.mx.e4m3`) | 1.2 | 10.3 |
+    | `fp8-block` (`nv.hopper.e4m3.f32`) | 2.7 | 12.9 |
+
+    Perplexity is bit-identical and 13-27% faster per segment.
+  - **What is left of decode is on the CPU:** ~47 ms a token of kernel
+    launches, and small torch ops (activation quantization, the weight
+    scales' `repeat_interleave`, recomputed every call).  Next: cache a
+    weight's scales with its prepared elements, and fewer ops per
+    quantization.
+  - Backend fixes it needed (`fpy2/backend/triton/emitter.py`): a slice of
+    a slice, a slice's offset as a column under a lane loop, and a slice
+    along an outer dimension offset by its stride (a miscompile on `main`:
+    `xs[1:3][1][5]` read `xs[1][6]`).
+  - `serve` starts without `compressed_tensors` (`checkpoints.unpack_e2m1`),
+    7.6 -> 2.2 s for `--help`; a chat start stays ~10 s, `transformers`
+    importing itself (`sklearn`, `torchao`) and the model.
+  - The CLI documents every option and default, lists models, schemes and
+    a scheme's matmuls, and calls a run a "matmul" (`--matmuls`,
+    `--matmul`) and a checkpoint's master `--baseline`.
 - **`fp8-block` padding.** `PerBlock` takes only whole blocks, so short
   rows are padded with zeros, which leave `amax` unchanged.  A `k` that is
   not a multiple of 128 is refused; none occurs in these models.

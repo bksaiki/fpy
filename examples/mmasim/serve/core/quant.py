@@ -64,6 +64,9 @@ SCHEMES = {s.name: s for s in [
 ]}
 """The named schemes (`docs/todos/mmasim-serving.md`)."""
 
+NAMES = (*SCHEMES, 'fp8-row:fnuz', 'fp8-block:fnuz')
+"""Every scheme :func:`scheme` takes by name."""
+
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
 DTYPES = {

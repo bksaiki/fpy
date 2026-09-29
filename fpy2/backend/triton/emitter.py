@@ -950,11 +950,15 @@ class _Emitter(Visitor):
                 base, prefix, extra = self._flatten(e.value)
         except TritonEmitError:
             return None
-        start = '0' if e.start is None else self._pin(self._index(e.start))
+        start = '0' if e.start is None else self._index(e.start)
+        depth, rank = len(prefix), len(self._dims(base))
+        if depth + 1 < rank:
+            # a start along an outer dimension moves by that dimension's stride
+            start = _times(f'({start})' if ' ' in start else start, self._strides(base, rank)[depth])
         if extra is not None:
             # a slice of a slice starts at the sum of their starts
-            start = self._pin(f'{extra} + {start}')
-        return base, self._pinned(prefix), start
+            start = _plus(extra, start)
+        return base, self._pinned(prefix), self._pin(start)
 
     def _pin(self, code: str) -> str:
         """*code*, bound to a temporary unless it is a number or a name
@@ -979,9 +983,8 @@ class _Emitter(Visitor):
             return self.size_params.get(size)
         return None
 
-    def _strides(self, base: NamedId, rank: int) -> list[str]:
-        """Row-major strides for *base*, as code: from its proven shape, or a
-        size the kernel takes as a parameter."""
+    def _dims(self, base: NamedId) -> list[str | None]:
+        """*base*'s dimensions, outermost first, as code; `None` where unproven."""
         bound = next(
             (b for defn, b in self.sizes.by_def.items() if defn.name == base),
             None,
@@ -990,6 +993,12 @@ class _Emitter(Visitor):
         while isinstance(bound, ListSize):
             dims.append(self._size_code(bound.size))
             bound = bound.elt
+        return dims
+
+    def _strides(self, base: NamedId, rank: int) -> list[str]:
+        """Row-major strides for *base*, as code: from its proven shape, or a
+        size the kernel takes as a parameter."""
+        dims = self._dims(base)
         if len(dims) < rank:
             raise TritonEmitError(
                 f'`{base}` is subscripted {rank} deep but only {len(dims)} '
@@ -2773,6 +2782,13 @@ class KernelSource:
 
     dtypes: tuple[tuple[int, str], ...] = ()
     """Each list argument's position and its elements' Triton dtype."""
+
+
+def _plus(a: str, b: str) -> str:
+    """``a + b`` as code, folded where both are constants."""
+    if a.isdigit() and b.isdigit():
+        return str(int(a) + int(b))
+    return b if a == '0' else a if b == '0' else f'{a} + {b}'
 
 
 def _times(a: str, b: str) -> str:

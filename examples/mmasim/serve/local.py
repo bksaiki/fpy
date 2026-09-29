@@ -227,7 +227,7 @@ def main(argv: list[str]) -> int:
         'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
         'models': {}}
     for name in args.models or [args.model]:
-        model, run, about = cli.load(args, name)
+        model, run, about = cli.load(args, name, designs, args.jobs)
         known = about['master'] is not None
         masters = (checkpoints.master_weights(about['master'])
                    if known and about['source'] != 'rtn' else None)

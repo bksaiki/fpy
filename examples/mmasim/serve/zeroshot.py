@@ -188,7 +188,7 @@ def main(argv: list[str]) -> int:
             runs[mode] = cached
             continue
         if lm is None:
-            model, run, _ = cli.load(args)
+            model, run, _ = cli.load(args, designs=modes)
             lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
         runs[mode] = {'settings': want,
