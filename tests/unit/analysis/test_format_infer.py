@@ -6,6 +6,8 @@ runs property tests driven by the type-directed FPy program generator.
 """
 
 import fpy2 as fp
+import time
+
 import pytest
 
 from fpy2 import dim, size
@@ -32,7 +34,7 @@ from fpy2.analysis.format_infer.analysis import (
     is_bottom,
 )
 from fpy2.analysis.reaching_defs import AssignDef
-from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
+from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign, ListTypeAnn, RealTypeAnn
 from fpy2.number import FixedContext
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
@@ -956,6 +958,24 @@ class TestFormatInfer:
         expected = AbstractFormat(float('inf'), 0, fp.RealFloat.from_int(max(hi, 0)),
                                   neg_bound=fp.RealFloat.from_int(min(lo, 0))).format()
         assert bound == ListFormat(expected)
+
+    def test_a_static_loop_stops_at_its_fixed_point(self):
+        """A million iterations of an `FP32` sum: after the first, the phi no
+        longer changes, so no other iteration is visited."""
+        @fp.fpy
+        def f(xs: list[fp.Real]):
+            with fp.FP32:
+                acc = fp.round(0)
+                for i in range(len(xs)):
+                    acc = acc + xs[i]
+            return acc
+
+        # a static trip count that partial evaluation does not enumerate
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 1000000, None)
+        start = time.perf_counter()
+        info = self._run(f)
+        assert time.perf_counter() - start < 10
+        assert all(b is not None for d, b in info.by_def.items() if d.name.base == 'acc')
 
     def test_range_set_threshold_is_tunable(self):
         """``range_set_threshold`` controls the set-vs-bounded split."""

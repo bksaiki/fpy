@@ -3041,6 +3041,10 @@ class _FormatInferInstance(Visitor):
         bound after exactly ``n`` joins; the result is sound and
         strictly more precise than the fixpoint+widening fall-back when
         ``n`` is small.
+
+        An iteration leaving every phi unchanged is a fixed point: the body
+        sees only the phis (the target's format is set before the loop), so
+        each later iteration repeats it, and the walk stops there.
         """
         phis = list(phis)
         for phi in phis:
@@ -3053,11 +3057,14 @@ class _FormatInferInstance(Visitor):
             run_body()
             return
         for _ in range(n):
+            prev = {phi: self.by_def[phi] for phi in phis}
             run_body()
             for phi in phis:
                 lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
                 rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
                 self._set_def_bound(phi, self._join(lhs, rhs))
+            if all(self.by_def[phi] == prev[phi] for phi in phis):
+                break
 
     def _known_iter_count(self, iterable: Expr) -> int | None:
         """
