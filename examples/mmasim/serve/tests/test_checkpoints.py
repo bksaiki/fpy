@@ -20,6 +20,16 @@ def _checkpoint(t: torch.Tensor) -> checkpoints.Checkpoint:
     return checkpoints.Checkpoint('test', _FP8, {'layer': quant.quantize(t, _FP8.w)}, [])
 
 
+def test_e2m1_unpacks_as_compressed_tensors_does() -> None:
+    """Every byte, both nibbles, signed zeros included."""
+    from compressed_tensors.compressors.nvfp4.helpers import unpack_fp4_from_uint8
+
+    packed = torch.arange(256, dtype=torch.uint8).view(16, 16).cuda()
+    got = checkpoints.unpack_e2m1(packed)
+    want = unpack_fp4_from_uint8(packed, 16, 32, torch.float32)
+    assert torch.equal(got, want) and torch.equal(got.signbit(), want.signbit())
+
+
 def test_a_checkpoint_is_taken_as_it_is_converted_exactly_or_requantized_on_request() -> None:
     g = torch.Generator().manual_seed(0)
     lossy = _checkpoint(torch.randn(8, 64, generator=g))

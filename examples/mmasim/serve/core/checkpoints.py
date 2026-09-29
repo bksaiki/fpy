@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from compressed_tensors.compressors.nvfp4.helpers import unpack_fp4_from_uint8
 
 from . import kernels, quant, swap
 
@@ -43,12 +42,21 @@ def _scheme(qc: dict[str, Any]) -> quant.Scheme:
     raise ValueError(f'no scheme for weights {w}, activations {x}')
 
 
+_E2M1 = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
+"""E2M1's magnitudes, by the low three bits of its code; bit 3 is the sign."""
+
+
+def unpack_e2m1(packed: torch.Tensor) -> torch.Tensor:
+    """*packed* `[n, k / 2]` uint8, two E2M1 codes a byte, low nibble first, as
+    FP32 `[n, k]`."""
+    table = torch.tensor([*_E2M1, *(-v for v in _E2M1)], dtype=torch.float32, device=packed.device)
+    return table[torch.stack((packed & 0xF, packed >> 4), -1).int()].flatten(1)
+
+
 def _weight(scheme: quant.Scheme, t: dict[str, torch.Tensor], name: str) -> quant.Quantized:
     """Layer *name*'s stored weight in *scheme*, on the GPU."""
     if scheme.name == 'nvfp4':
-        n, half = t[f'{name}.weight_packed'].shape
-        elements = unpack_fp4_from_uint8(t[f'{name}.weight_packed'].cuda(), n, 2 * half,
-                                         torch.float32)
+        elements = unpack_e2m1(t[f'{name}.weight_packed'].cuda())
         return quant.Quantized(scheme.w, elements, t[f'{name}.weight_scale'].cuda().float(),
                                1 / t[f'{name}.weight_global_scale'].cuda().float().reshape(()))
     return quant.Quantized(scheme.w, t[f'{name}.weight'].cuda().float(),

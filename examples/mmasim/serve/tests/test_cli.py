@@ -1,7 +1,10 @@
-"""The scripts' options, as `--help` shows them."""
+"""The scripts' options, as `--help` shows them, and what starting one loads."""
 
 import argparse
 import importlib
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -63,3 +66,15 @@ def test_a_list_prints_and_exits(
         importlib.import_module(script).main(flag)
     assert done.value.code == 0
     assert shown in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('script', SCRIPTS)
+def test_a_script_starts_without_the_quantization_libraries(script: str) -> None:
+    """`compressed_tensors` and `torchao` cost seconds at import; a script loads
+    neither until a model does."""
+    serve = Path(__file__).resolve().parents[1]
+    code = (f'import sys; sys.path.insert(0, {str(serve)!r}); import {script}; '
+            "print(*sorted({m.split('.')[0] for m in sys.modules} & {'compressed_tensors', 'torchao'}))")
+    loaded = subprocess.run([sys.executable, '-c', code],
+                            capture_output=True, text=True, check=True).stdout.split()
+    assert loaded == []
