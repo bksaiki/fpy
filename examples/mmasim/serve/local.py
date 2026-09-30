@@ -3,7 +3,7 @@ Local per-layer error of each design on cached activations, without running
 the model.
 
 Every linear layer's BF16 input is captured once under `--scheme`'s exact
-run on a workload (`workloads`); each applicable design then runs only its
+matmul on a workload (`workloads`); each applicable design then runs only its
 kernel on the cached, quantized operands, measured against the exact
 product of the quantized and of the unquantized operands (`metrics.local`).
 `--by` splits by a tag.  `--models` takes masters (RTN, `lm_head`
@@ -163,7 +163,7 @@ def evaluate(
                 for d in designs[c:c + per]:
                     start = time.perf_counter()
                     held = kernels.storage(d)[1]
-                    split = swap.slices(d, scheme, a.shape[1], run.split_k)
+                    split = swap.slices(scheme, run.split_k)
                     ys[d] = swap.gemm(d, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
                                       run.combine)
                     timed(d, start)
@@ -192,23 +192,30 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--models', nargs='*', default=None,
                     help='masters (RTN) and quantized checkpoints to evaluate (default: --model)')
     cli.add_scheme_args(ap)
-    ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES),
-                    help='designs the scheme applies to (default: all of them)')
-    ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, default=list(metrics.METRICS))
-    ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext')
+    ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES), metavar='DESIGN',
+                    help=f'designs the scheme applies to, of {", ".join(kernels.TILES)} '
+                    '(default: all of them)')
+    ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, metavar='METRIC',
+                    default=list(metrics.METRICS),
+                    help=f'metrics to compute, of {", ".join(metrics.METRICS)} (default: all)')
+    ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext',
+                    help='WikiText-2 prose, or MT-Bench conversations (default: %(default)s)')
     ap.add_argument('--tokens', type=int, default=workloads.CONTEXT,
-                    help='rows captured: WikiText-2\'s first, or sampled over MT-Bench')
+                    help='rows captured: WikiText-2\'s first, or sampled over MT-Bench '
+                    '(default: %(default)s)')
     ap.add_argument('--by', choices=['role', 'category'], default=None,
                     help='split the result by this tag (MT-Bench)')
     ap.add_argument('--transcripts', type=Path, default=None,
                     help='MT-Bench conversations cache (default: results/mtbench-<model>.json)')
-    ap.add_argument('--layers', default=None, help='only the linear layers this regex matches')
+    ap.add_argument('--layers', default=None,
+                    help='only the linear layers this regex matches (default: all)')
     ap.add_argument('--acts', type=Path, default=None,
-                    help='cache captured activations here, reused for the same settings')
+                    help='cache captured activations here, reused for the same settings '
+                    '(default: not cached)')
     ap.add_argument('-j', '--jobs', type=int, default=None,
                     help='processes compiling the designs (default: one per core)')
     ap.add_argument('-o', '--out', default=None, help='write every layer\'s metrics as JSON here')
-    args = ap.parse_args(argv)
+    args = cli.parse(ap, argv)
     designs = args.designs or kernels.designs(args.scheme)
     if refused := [d for d in designs if not kernels.applicable(d, args.scheme)]:
         ap.error(f'{args.scheme.name} does not apply to {", ".join(refused)}')
@@ -220,7 +227,7 @@ def main(argv: list[str]) -> int:
         'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
         'models': {}}
     for name in args.models or [args.model]:
-        model, run, about = cli.load(args, name)
+        model, run, about = cli.load(args, name, designs, args.jobs)
         known = about['master'] is not None
         masters = (checkpoints.master_weights(about['master'])
                    if known and about['source'] != 'rtn' else None)

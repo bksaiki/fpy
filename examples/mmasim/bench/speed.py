@@ -84,7 +84,7 @@ def main(argv: list[str]) -> int:
                          '(default 1 4 16 32 64)')
     ap.add_argument('--autotune', action='store_true',
                     help='also time the launch that picks its own block and warps')
-    ap.add_argument('--reps', type=int, default=20, help='launches per timing')
+    ap.add_argument('--reps', type=int, default=20, help='launches per timing (default 20)')
     ap.add_argument('--best', action='store_true',
                     help="print only each design's fastest tile")
     args = ap.parse_args(argv)

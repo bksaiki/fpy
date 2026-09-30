@@ -49,7 +49,7 @@ What is reported to show it, at every stage:
 
 ### Stage 2 -- Do local metrics predict end-to-end effects?
 
-- **Runs:** all 13 designs that take a scheme (5 BF16, 4 FP8, 4
+- **Matmuls:** all 13 designs that take a scheme (5 BF16, 4 FP8, 4
   block-scaled), on Qwen3-0.6B and Qwen3.5-0.8B.  Each gets local metrics
   and perplexity at Stage 1's sizes (50 segments).
   - Zero-shot (paired Δ acc with its interval, and flips) confirms
@@ -160,12 +160,12 @@ every recipe here, `448^2 > 65,504` overflows FP16 (Nice to have).
 
 It follows low-precision and quantization evaluation.
 
-### Runs
+### Matmuls
 
-The runs share one model and one input stream.  They differ only in how
+The matmuls share one model and one input stream.  They differ only in how
 `nn.Linear` computes `x @ W.T`; everything else runs in FP32 with TF32 off.
 
-| run | operands | product | answers |
+| matmul | operands | product | answers |
 |---|---|---|---|
 | **R0 `fp32`**: the pre-quantization reference | FP32 activations, master weights | FP32 | the model as trained (Yuan et al.'s "LayerCast") |
 | **R1 `<scheme>-exact`**: the post-quantization reference | quantized by the scheme | FP64, rounded once to FP32 | the cost of the scheme alone |
@@ -246,7 +246,7 @@ Checkpoints (`checkpoints.py`, `compressed-tensors`):
 | checkpoint | weights | activations |
 |---|---|---|
 | `RedHatAI/Qwen3-0.6B-FP8-dynamic` | `fp8-row`, BF16 scales | dynamic per token |
-| `RedHatAI/Qwen3-0.6B-FP8-BLOCK` | `fp8-block`, BF16 scales; no `base_model` on its card, so `--master` | dynamic per 1 x 128 |
+| `RedHatAI/Qwen3-0.6B-FP8-BLOCK` | `fp8-block`, BF16 scales; no `base_model` on its card, so `--baseline` | dynamic per 1 x 128 |
 | `kaitchup/Qwen3-0.6B-NVFP4` | `nvfp4`; FP4 low nibble first, scale `s / g` | static per tensor (`input_global_scale`), dynamic per 16 |
 
 Where a model's weights come from is recorded with every result
@@ -262,7 +262,7 @@ Where a model's weights come from is recorded with every result
 ### Local metrics on cached activations (the primary evaluation)
 
 **Capture** (`local.capture`):
-- One prefill per workload sequence through the scheme's exact run.
+- One prefill per workload sequence through the scheme's exact matmul.
 - Each linear layer's input is recorded as BF16 on the host, at the sampled
   positions.  There is one tensor per distinct input: `q/k/v_proj` share
   one, as do `gate/up_proj`.
@@ -324,30 +324,30 @@ columns report `log2` of the value, so `-24` is one unit roundoff.
 `-m` selects metrics, and only those are computed.
 
 End-to-end metrics (`core/scoring.py`, `zeroshot.py`, `core/stats.py`):
-- **Every run sees the same seeded subset of units:**
+- **Every matmul sees the same seeded subset of units:**
   - WikiText-2 segments of 2048 tokens (`--segments 50`);
   - MATH-500 prompts with R0's greedy reply (`--prompts 30`);
   - benchmark items (`--items 500` per task).
-- **Each run is paired against a reference, per unit:**
-  - R0 (pre-quantization), for every run;
+- **Each matmul is paired against a reference, per unit:**
+  - R0 (pre-quantization), for every matmul;
   - R1 (`<scheme>-exact`, post-quantization), for every design.
 - **Statistics:** means over units with standard errors
   `sd(d) / sqrt(n)` (the normal approximation); Holm's correction over the
-  runs sharing a reference; a bootstrap over units for the median
+  matmuls sharing a reference; a bootstrap over units for the median
   divergence index.
-- `p_t` is the reference's next-token distribution, `q_t` the run's;
+- `p_t` is the reference's next-token distribution, `q_t` the matmul's;
   teacher-forced on the unit's tokens.
 
 | metric | per unit | source |
 |---|---|---|
-| Δ NLL | mean NLL of the unit's tokens, run minus reference (the log of the perplexity ratio) | GPTQ; HF guide |
+| Δ NLL | mean NLL of the unit's tokens, matmul minus reference (the log of the perplexity ratio) | GPTQ; HF guide |
 | KL divergence | `mean_t KL(p_t ‖ q_t)` | llama.cpp |
 | top-1 disagreement | `mean_t [argmax p_t ≠ argmax q_t]` | llama.cpp |
 | divergence index | the first disagreement on R0's greedy reply; the fraction of prompts that diverge | Yuan et al. (on prefill) |
 | Δ acc, flips | per item: correctness, and whether it changed | lm-eval; Dutta et al. |
 | Δ log-likelihood, margin, choice KL | per item: the correct choice's log-likelihood, its margin over the best wrong one, KL over the choices | |
 
-The per-run, token-level figures (PPL, llama.cpp's KL, top-1 and RMS Δp,
+The per-matmul, token-level figures (PPL, llama.cpp's KL, top-1 and RMS Δp,
 and harness accuracy) are kept for comparison with published ones; their
 token-level standard errors understate the uncertainty.
 
@@ -357,15 +357,18 @@ token-level standard errors understate the uncertainty.
 cd examples/mmasim
 python serve/local.py                                   # bf16, Qwen3-0.6B, every design
 python serve/local.py --scheme fp8-row --models Qwen/Qwen3-0.6B RedHatAI/Qwen3-0.6B-FP8-dynamic
-python serve/local.py --scheme fp8-block --models RedHatAI/Qwen3-0.6B-FP8-BLOCK --master Qwen/Qwen3-0.6B
+python serve/local.py --scheme fp8-block --models RedHatAI/Qwen3-0.6B-FP8-BLOCK --baseline Qwen/Qwen3-0.6B
 python serve/local.py --scheme mxfp4 --models kaitchup/Qwen3-0.6B-NVFP4 --requantize
 python serve/local.py --scheme nvfp4 -d nv.blackwell.nvfp4 -w mtbench --by role -m normwise backward
-python serve/{perplexity,zeroshot,decode}.py --model Qwen/Qwen3.5-0.8B   # bf16 runs
-python serve/chat.py                                    # terminal chat, run switchable mid-conversation
-python serve/chat.py --model kaitchup/Qwen3-0.6B-NVFP4 --scheme nvfp4 -r nv.blackwell.nvfp4
+python serve/{perplexity,zeroshot,decode}.py --model Qwen/Qwen3.5-0.8B   # bf16 matmuls
+python serve/chat.py                                    # terminal chat, matmul switchable mid-conversation
+python serve/chat.py --model kaitchup/Qwen3-0.6B-NVFP4 --scheme nvfp4 --matmul nv.blackwell.nvfp4
+python serve/chat.py --list-models                      # also --list-schemes, --scheme nvfp4 --list-matmuls
 ```
 
 Options:
+- `--help` gives every option and its default; `--list-models`,
+  `--list-schemes` and `--list-matmuls` (the scheme's) list what they take.
 - `--scheme` defaults to `bf16`; `-d` defaults to every design applicable to
   the scheme.
 - `--tokens` sets how many positions to sample.  `--layers` filters layers
@@ -379,7 +382,7 @@ examples/mmasim/serve/
   local.py        capture, then local metrics per design (the primary evaluation)
   perplexity.py   WikiText-2 segments, scored against R0 and R1
   zeroshot.py     lm-evaluation-harness suite, paired Δ acc and flips
-  decode.py       R0's greedy decode, then every run teacher-forced on it
+  decode.py       R0's greedy decode, then every matmul teacher-forced on it
   chat.py         terminal chat
   core/           the library; no script imports another script
     kernels.py      compile each design (precompile in parallel); prepare, matmul, linear; register
@@ -387,7 +390,7 @@ examples/mmasim/serve/
     swap.py         a model's nn.Linear forwards through a Run (mode, scheme)
     checkpoints.py  compressed-tensors checkpoints; weights_for, for_scheme
     metrics.py      the local metrics (Stats, local); paired, p_value, holm, bootstrap
-    scoring.py      runs scored against references, teacher-forced (Totals, evaluate, against)
+    scoring.py      matmuls scored against references, teacher-forced (Totals, evaluate, against)
     workloads.py    WikiText-2, MT-Bench sessions, MATH-500 prompts; pick
     generate.py     greedy generation under the chat template
     cli.py          the scripts' shared options
@@ -536,7 +539,7 @@ design.
 
 WikiText-2, first 8 segments:
 
-| run | PPL | KL vs R0 | top-1 |
+| matmul | PPL | KL vs R0 | top-1 |
 |---|---|---|---|
 | fp32 | 17.8334 | 0 | 100% |
 | bf16-exact | 17.8384 | 4.27e-5 | 99.59% |
@@ -562,7 +565,7 @@ WikiText-2, first 8 segments:
   retired `layers.py`) is input rounding's, ~2^-8.4, which is 2^10 to 2^13
   times the local error.  The exception is blocks 11-14, where the designs
   add to it.
-- **Qwen3.5-0.8B:** PPL 12.46 on segment 0; KL 2.7-2.9e-5 for every run.
+- **Qwen3.5-0.8B:** PPL 12.46 on segment 0; KL 2.7-2.9e-5 for every matmul.
 
 ## Record
 
@@ -590,7 +593,7 @@ Condensed; what the code does not say.
     swamps them.  Ada's truncating FP8 accumulator shows even against R0
     (+2.6% KL), being only ~2^3.6 below the quantization's error.
   - Decode ranks poorly.  R0's own greedy text is high-confidence, and
-    under `fp8-row` every run diverges within ~45 tokens.
+    under `fp8-row` every matmul diverges within ~45 tokens.
   - Zero-shot's signed Δ log-likelihood separates BF16 (Ampere's
     truncation biases it), but not FP8.
   - Seconds per segment: R0 0.3, R1 0.7, Ampere 10.5, CDNA3 17.3, Ada 4.4,
@@ -598,7 +601,7 @@ Condensed; what the code does not say.
 - **Teacher-forced and free-running divergence differ prompt by prompt.**
   - The 5 seed-0 MATH-500 prompts:
 
-    | run (vs R0) | free-running | forced |
+    | matmul (vs R0) | free-running | forced |
     |---|---|---|
     | bf16-exact | 607, 225 | 607, 225 |
     | amd.cdna2.bf16 | 713 | 368, 607, 225 |
@@ -628,7 +631,7 @@ Condensed; what the code does not say.
     call, against 19 us for `F.linear`.
   - Fixes: weights prepared once per layer; an input quantized once for the
     layers sharing it; `C` and the output one buffer; `block_m` capped at
-    the power of two `>= m`; the exact run in row and column blocks.
+    the power of two `>= m`; the exact matmul in row and column blocks.
   - A self-recursive `tree` closure was a reference cycle, holding
     +0.58 GB per `lm_head` call; it is now module-level `_tree`.
   - Decode after the fixes: 13-21 tokens/s per design.
@@ -669,10 +672,43 @@ Condensed; what the code does not say.
   - `metrics` computes the reference's terms once per block.
   - Decode speeds barely move (FP8 2.9 -> 3.0 tokens/s, NVFP4 1.3 -> 1.5,
     CDNA2 5.9 -> 6.5).  Deferred:
-    - the block-scaled and `fp8-block` launch chains, which wait for the
-      backend's index bug (`backend-triton.md`);
-    - caching FP64 weights for exact runs (memory);
+    - caching FP64 weights for exact matmuls (memory);
     - CUDA graphs for decode.
+- **The scaled schemes in one kernel** (2026-09-29, `mmasim` branch).
+  - A block-scaled design chained over `k`, or an E4M3 design under
+    `fp8-block` promoted every 128, compiles as one kernel per static `k`
+    (`compile_triton.fuse`, `--fuse K`; `kernels.fused`), bit-identical to
+    the launch per instruction or block.  `cli.load` precompiles a run's
+    fused kernels over the model's `k`s.
+  - `kernels.matmul` fuses at most `FUSED_ROWS` rows: 32 for NVFP4 and
+    MXFP4, which are 9-18% slower fused at prefill (at their best tile),
+    and every `m` for the MX and `fp8-block` designs, 4-7% faster fused
+    even at 2048 rows.
+  - Decode, Qwen3-0.6B through `chat.py`, identical text before and after:
+
+    | scheme (design) | before | after |
+    |---|---|---|
+    | `nvfp4` (checkpoint, `nv.blackwell.nvfp4`) | 2.0 tokens/s | 6.7 |
+    | `mxfp4` (`nv.blackwell.mxfp4`) | 2.1 | 7.5 |
+    | `mxfp8` (`nv.blackwell.mx.e4m3`) | 1.2 | 10.3 |
+    | `fp8-block` (`nv.hopper.e4m3.f32`) | 2.7 | 12.9 |
+
+    Perplexity is bit-identical and 13-27% faster per segment.
+  - **What is left of decode is on the CPU:** ~47 ms a token of kernel
+    launches, and small torch ops (activation quantization, the weight
+    scales' `repeat_interleave`, recomputed every call).  Next: cache a
+    weight's scales with its prepared elements, and fewer ops per
+    quantization.
+  - Backend fixes it needed (`fpy2/backend/triton/emitter.py`): a slice of
+    a slice, a slice's offset as a column under a lane loop, and a slice
+    along an outer dimension offset by its stride (a miscompile on `main`:
+    `xs[1:3][1][5]` read `xs[1][6]`).
+  - `serve` starts without `compressed_tensors` (`checkpoints.unpack_e2m1`),
+    7.6 -> 2.2 s for `--help`; a chat start stays ~10 s, `transformers`
+    importing itself (`sklearn`, `torchao`) and the model.
+  - The CLI documents every option and default, lists models, schemes and
+    a scheme's matmuls, and calls a run a "matmul" (`--matmuls`,
+    `--matmul`) and a checkpoint's master `--baseline`.
 - **`fp8-block` padding.** `PerBlock` takes only whole blocks, so short
   rows are padded with zeros, which leave `amax` unchanged.  A `k` that is
   not a multiple of 128 is refused; none occurs in these models.
@@ -793,7 +829,7 @@ matching a library bit for bit becomes a goal.
 ### A checkpoint's master
 
 A checkpoint does not say what it was quantized from.  **Provisional:** its
-card's `base_model`, else `--master`; without one, the unquantized table is
+card's `base_model`, else `--baseline`; without one, the unquantized table is
 left out.
 
 ### Activations quantized from BF16 or FP32?
@@ -804,7 +840,7 @@ available.  **Provisional:** BF16, as deployed.
 ## After the last phase
 
 ```
-.venv/bin/python -m pytest tests/unit -q -n auto
+.venv/bin/python -m pytest tests/unit -q -n 8
 cd examples/mmasim && ../../.venv/bin/python -m pytest tests serve/tests -q
 .venv/bin/python -m mypy fpy2
 .venv/bin/ruff check examples/mmasim/serve

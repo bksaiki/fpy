@@ -33,7 +33,15 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
 
 
 MODEL = 'Qwen/Qwen3-0.6B'
-"""The default model; `Qwen/Qwen3.5-0.8B` also runs (text only)."""
+
+MODELS = {
+    MODEL: 'BF16 master',
+    'Qwen/Qwen3.5-0.8B': 'BF16 master, text only',
+    'RedHatAI/Qwen3-0.6B-FP8-dynamic': 'fp8-row checkpoint',
+    'RedHatAI/Qwen3-0.6B-FP8-BLOCK': 'fp8-block checkpoint (baseline: Qwen/Qwen3-0.6B)',
+    'kaitchup/Qwen3-0.6B-NVFP4': 'nvfp4 checkpoint',
+}
+"""The models these scripts have run, and what each holds."""
 
 _ROWS = 256
 """Rows per block of an exact run's FP64 product."""
@@ -55,28 +63,20 @@ def exact(qa: quant.Quantized, qw: quant.Quantized) -> torch.Tensor:
     return y
 
 
-def slices(design: str, scheme: quant.Scheme, k: int, split_k: int) -> int:
-    """How many slices of `k` to prepare a weight in: *split_k*, or one per
-    scale block of `k` (`fp8-block`'s 128) or per instruction of a
-    block-scaled *design*."""
-    if scheme.applied not in ('k-blocks', 'instruction'):
-        return split_k
-    if split_k != 1:
+def slices(scheme: quant.Scheme, split_k: int) -> int:
+    """How many slices of `k` to prepare a weight in: *split_k*, which a scaled
+    scheme refuses (`kernels.matmul` takes its blocks whole)."""
+    if split_k != 1 and scheme.applied in ('k-blocks', 'instruction'):
         raise ValueError(f'{scheme.name} splits `k` into its own blocks, not {split_k}')
-    if scheme.applied == 'k-blocks':
-        return k // scheme.x.scaling.cols
-    return k // kernels.compiled(design)[1]
+    return split_k
 
 
-def _per_call(q: quant.Quantized, design: str) -> torch.Tensor:
-    """*q*'s block scales as a block-scaled *design*'s instructions take them,
-    `[s, rows]` (one per instruction) or `[s, rows, k0 // g]` (one per
-    group), each scale repeated over the groups its block covers."""
-    k0, g = kernels.compiled(design)[1], kernels.group(design)
-    r, k = q.elements.shape
-    sc = q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).view(r, k // k0, k0 // g)
-    sc = sc.transpose(0, 1)
-    return (sc[..., 0] if g == k0 else sc).contiguous().to(kernels.storage(design)[2])
+def _per_group(q: quant.Quantized, design: str) -> torch.Tensor:
+    """*q*'s block scales as a block-scaled *design* takes them: `[rows, k /
+    g]`, one per group `g` of its instructions in order along `k`, each scale
+    repeated over the groups its block covers."""
+    g = kernels.group(design)
+    return q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).to(kernels.storage(design)[2])
 
 
 def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
@@ -87,7 +87,7 @@ def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quant
     the instructions, then per tensor, `acc * (g_x * g_w)`."""
     a = qa.elements.to(kernels.storage(design)[0])
     if scheme.applied == 'instruction':
-        y = kernels.matmul(a, w, design, scales=(_per_call(qa, design), _per_call(qw, design)))
+        y = kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design)))
         return y if qa.tensor is None else y.mul_(qa.tensor * qw.tensor)
     if scheme.applied == 'k-blocks':
         sw = qw.scales.repeat_interleave(qw.operand.scaling.rows, 0)[:w.shape[1]]
@@ -144,7 +144,7 @@ class Run:
         return self._weights[key][1]
 
     def _prepare(self, w: torch.Tensor, qw: quant.Quantized, dtype: torch.dtype) -> torch.Tensor:
-        split = slices(self.mode, self.scheme, w.shape[1], self.split_k)
+        split = slices(self.scheme, self.split_k)
         got = self._prepared.get(id(w))
         if got is None or got[0] is not qw or got[1:3] != (dtype, split):
             got = self._prepared[id(w)] = (qw, dtype, split, kernels.prepare(qw.elements, dtype, split))

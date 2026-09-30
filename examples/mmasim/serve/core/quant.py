@@ -64,6 +64,9 @@ SCHEMES = {s.name: s for s in [
 ]}
 """The named schemes (`docs/todos/mmasim-serving.md`)."""
 
+NAMES = (*SCHEMES, 'fp8-row:fnuz', 'fp8-block:fnuz')
+"""Every scheme :func:`scheme` takes by name."""
+
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
 DTYPES = {
@@ -73,6 +76,21 @@ DTYPES = {
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
 }
 """Each element format's torch dtype."""
+
+
+def describe(s: Scheme) -> str:
+    """*s* in a line: its elements, each operand's scale block, and where the
+    scales apply."""
+    def block(op: Operand) -> str:
+        sc = op.scaling
+        if sc is None:
+            return 'none'
+        return f'{sc.rows}x{sc.cols or "k"}' + (' and per tensor' if sc.tensor else '')
+
+    elements = str(DTYPES[s.x.elements]).removeprefix('torch.')
+    if s.x.scaling is None:
+        return f'{elements}, unscaled'
+    return f'{elements}; scales x {block(s.x)}, w {block(s.w)}; applied {s.applied}'
 
 
 def context(fmt: object) -> Context:

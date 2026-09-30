@@ -1,14 +1,14 @@
 """
-WikiText-2 perplexity, and each run's distance from the FP32 baseline.
+WikiText-2 perplexity, and each matmul's distance from the FP32 baseline.
 
 The test split, joined and tokenized as the Hugging Face perplexity guide
 does, cut into 2048-token segments (the GPTQ convention; the remainder
-dropped), and scored by `scoring`: per token, NLL, KL(R0 || run), top-1 and
+dropped), and scored by `scoring`: per token, NLL, KL(R0 || matmul), top-1 and
 RMS Δp as llama.cpp's `perplexity --kl-divergence` reports them; paired over
-segments against R0 and the scheme's exact run (`scoring.against`).
+segments against R0 and the scheme's exact matmul (`scoring.against`).
 
-    python serve/perplexity.py                          # every run
-    python serve/perplexity.py -r amd.cdna2.bf16 --segments 4
+    python serve/perplexity.py                          # every matmul
+    python serve/perplexity.py --matmuls amd.cdna2.bf16 --segments 4
     python serve/perplexity.py --split-k 4 --combine tree -o tree.json
     python serve/perplexity.py --scheme fp8-row --segments 0    # all 146
 """
@@ -26,14 +26,14 @@ def main(argv: list[str]) -> int:
     cli.add_scheme_args(ap)
     cli.add_runs(ap)
     ap.add_argument('--segments', type=int, default=50,
-                    help='this many segments at random (0: all)')
+                    help='this many segments at random, 0 for all (default: %(default)s)')
     ap.add_argument('-o', '--out', default=None, help='write the results as JSON here')
-    args = ap.parse_args(argv)
+    args = cli.parse(ap, argv)
 
     runs = cli.runs(ap, args)
     segs = workloads.segments(workloads.wikitext_ids(args.model))
     segs = [segs[i] for i in workloads.pick(len(segs), args.segments or None, args.seed)]
-    model, run, about = cli.load(args)
+    model, run, about = cli.load(args, designs=runs)
 
     totals = scoring.evaluate(model, run, segs, runs, progress=True)
     results = {

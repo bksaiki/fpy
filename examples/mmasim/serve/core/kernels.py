@@ -2,7 +2,8 @@
 The designs' Triton matmuls, as a linear layer's `x @ W.T`.
 
 Each design compiles once with `m`, `n` and `k` symbolic; `k` must be a
-multiple of the design's length.  Its inputs hold values of its input
+multiple of the design's length.  A scaled product also compiles once per
+static `k`, in one kernel (:func:`fused`).  Its inputs hold values of its input
 formats in the kernel's storage dtype; the result is its FP32 accumulator.
 :func:`linear` does it all per call; `swap` calls :func:`prepare` once per
 weight and :func:`matmul` per call.
@@ -46,12 +47,19 @@ TILES: dict[str, tuple[int, int]] = {
 """Each design and its fixed tile `(block, block_m)`, the fastest per
 `bench/speed.py --best`."""
 
+FUSED_ROWS: dict[str, int] = {'nv.blackwell.mxfp4': 32, 'nv.blackwell.nvfp4': 32}
+"""Past this many rows a scaled design's launches beat its one kernel
+(:func:`fused`); an unlisted design always runs in one kernel."""
+
 Combine = Literal['linear', 'tree']
 
 _BUILDS: dict[str, Callable] = dict(DESIGNS)
 
-_KERNELS: dict[str, KernelSource] = {}
-"""Each design compiled so far."""
+_KERNELS: dict[tuple[str, int | None], KernelSource] = {}
+"""Each design compiled so far: over any `k` (`None`), or fused over one."""
+
+_ROWS = 65535
+"""Rows per launch at most: CUDA's grid limit on its second axis."""
 
 _ELEMS = 1 << 26
 """Output elements per block of rows: bounds the partials' memory under
@@ -115,25 +123,39 @@ def designs(scheme: quant.Scheme) -> list[str]:
 def compiled(design: str) -> tuple[KernelSource, int]:
     """*design*'s kernel and the length its `k` must be a multiple of (a
     block-scaled design's, one instruction)."""
-    if design not in _KERNELS:
-        _KERNELS[design] = ct.compile_matmul(_BUILDS[design], None)[0]
-    return _KERNELS[design], _arg_length(_args(design)[0])
+    return _kernel(design), _arg_length(_args(design)[0])
 
 
-def _compile_named(name: str) -> KernelSource:
-    return ct.compile_matmul(dict(DESIGNS)[name], None)[0]
+def fused(design: str, k: int) -> KernelSource:
+    """*design* over a static *k* in one kernel (`compile_triton.fuse`),
+    launched on `(a [m, k], w [n, k], C, xs, ys, out)`, a scale list per row."""
+    return _kernel(design, k)
 
 
-def precompile(designs: Sequence[str], jobs: int | None = None) -> None:
-    """Compile *designs* not yet compiled, MMA-Sim's in *jobs* processes (one
-    per core by default); a :func:`register`ed one compiles here."""
-    todo = [d for d in designs if d not in _KERNELS]
-    named = [d for d in todo if _BUILDS[d] is dict(DESIGNS).get(d)]
-    for d, kernel in zip(named, in_processes(_compile_named, named,
-                                             min(len(named), jobs or os.cpu_count() or 1))):
-        _KERNELS[d] = kernel
-    for d in todo:
-        compiled(d)
+def _kernel(design: str, k: int | None = None) -> KernelSource:
+    """*design*'s kernel over any `k` (`None`), or fused over *k*; cached."""
+    if (design, k) not in _KERNELS:
+        build = _BUILDS[design]
+        _KERNELS[design, k] = (ct.compile_matmul(build, None)[0] if k is None
+                               else ct.compile_fused(build, k))
+    return _KERNELS[design, k]
+
+
+def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int] = ()) -> None:
+    """Compile *designs* not yet compiled, and each fused over each of *ks*
+    (:func:`fused`), MMA-Sim's in *jobs* processes (one per core by default);
+    a :func:`register`ed one compiles here."""
+    todo = [(d, k) for d in designs for k in (None, *ks) if (d, k) not in _KERNELS]
+    named = [t for t in todo if _BUILDS[t[0]] is dict(DESIGNS).get(t[0])]
+    jobs = min(len(named), jobs or os.cpu_count() or 1)
+    _KERNELS.update(zip(named, in_processes(_compile_named, named, jobs)))
+    for t in todo:
+        _kernel(*t)
+
+
+def _compile_named(item: tuple[str, int | None]) -> KernelSource:
+    """:func:`_kernel` in a worker process, for an MMA-Sim design."""
+    return _kernel(*item)
 
 
 @cache
@@ -158,13 +180,13 @@ def prepare(w: torch.Tensor, dtype: torch.dtype, split_k: int = 1) -> torch.Tens
 
 
 def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
-            *scales: torch.Tensor) -> None:
-    """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*) onto
-    *y* `[m, n]`, which is both `C` and the output.  `block_m` is capped at
-    the power of two `>= m`."""
+            *scales: torch.Tensor, kernel: KernelSource | None = None) -> None:
+    """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*), or by
+    its *kernel*, onto *y* `[m, n]`, which is both `C` and the output.
+    `block_m` is capped at the power of two `>= m`."""
     block, block_m = TILES[design]
     m = a.shape[0]
-    launch(compiled(design)[0], [a, b, y, *scales, y],
+    launch(kernel or compiled(design)[0], [a, b, y, *scales, y],
            block=block, block_m=min(block_m, 1 << (m - 1).bit_length()))
 
 
@@ -194,39 +216,64 @@ def matmul(
     With `w` in `s > 1` slices, each slice goes through the kernel from a zero
     accumulator and the FP32 partials are summed left to right (`linear`) or
     pairwise (`tree`); one slice accumulates `k` in order through the design
-    alone.  With *scales* `(s_x [m, s], s_w [n, s])`, each slice's partial is
-    scaled as it is summed, left to right, `y + p * (s_x * s_w)` in FP32, as
-    block-scaled FP8 promotes it.  A block-scaled design takes `w` in one
-    slice per instruction and *scales* `(xs [s, m, ...], ys [s, n, ...])`,
-    each instruction's, and chains them: each takes the last one's result
-    as its accumulator."""
+    alone.  With *scales*, `w` is whole (:func:`_scaled`)."""
+    if scales is not None:
+        return _scaled(a, w, design, *scales)
     s, n, step = w.shape
     m, k = a.shape
     k0 = compiled(design)[1]
-    chained = block_scaled(design)
-    if k != s * step or step % k0 or (chained and step != k0):
+    if k != s * step or step % k0:
         raise ValueError(
-            f'`k` = {k} does not split into {s} slices of '
-            f"{'' if chained else 'a multiple of '}{design}'s length {k0}")
+            f"`k` = {k} does not split into {s} slices of a multiple of {design}'s length {k0}")
     y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
     parts = a.view(m, s, step).transpose(0, 1).contiguous() if s > 1 else a.unsqueeze(0)
-    rows = max(1, _ELEMS // n)
+    rows = min(max(1, _ELEMS // n), _ROWS)
     for i in range(0, m, rows):
         blk, ab = y[i:i + rows], parts[:, i:i + rows]
-        if chained and scales is not None:
-            xs, ys = scales
-            for j in range(s):
-                _launch(ab[j], w[j], blk, design, xs[j, i:i + rows], ys[j])
-        elif scales is not None:
-            sx, sw = scales
-            for j in range(s):
-                blk += _part(ab, w, design, j) * (sx[i:i + rows, j, None] * sw[:, j])
-        elif combine == 'tree' and s > 1:
+        if combine == 'tree' and s > 1:
             blk.copy_(_tree(partial(_part, ab, w, design), 0, s))
         else:
             _launch(ab[0], w[0], blk, design)
             for j in range(1, s):
                 blk += _part(ab, w, design, j)
+    return y
+
+
+def _scaled(a: torch.Tensor, w: torch.Tensor, design: str,
+            xs: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+    """:func:`matmul` with scales, `w` whole (`[1, n, k]`) and *xs* `[m, s]`,
+    *ys* `[n, s]`, each row's scales in order along `k`.  At most
+    :data:`FUSED_ROWS` rows, one kernel (:func:`fused`); past them a launch per
+    instruction, each onto the last's result, or per `compile_triton.PROMOTE`
+    of `k` from zero, each partial scaled as it is summed, `y + p * (s_x *
+    s_w)` in FP32."""
+    if w.shape[0] != 1:
+        raise ValueError(f'{design} takes a scaled product\'s weights whole, not in slices')
+    (_, n, k), m = w.shape, a.shape[0]
+    chained = block_scaled(design)
+    step = _arg_length(_args(design)[0]) if chained else ct.PROMOTE
+    if a.shape[1] != k or k % step:
+        raise ValueError(f"`k` = {a.shape[1]} is not whole blocks of {step} for {design}")
+    if not chained and xs.shape[1] * step != k:
+        raise ValueError(f'scales per {k // xs.shape[1]} of `k`, where {design} promotes every {step}')
+    y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
+    rows = min(max(1, _ELEMS // n), _ROWS)
+    if m <= FUSED_ROWS.get(design, m):
+        kernel = fused(design, k)
+        for i in range(0, m, rows):
+            _launch(a[i:i + rows], w[0], y[i:i + rows], design, xs[i:i + rows], ys, kernel=kernel)
+        return y
+    s = k // step
+    per = xs.shape[1] // s
+    parts, ws = (t.view(t.shape[0], s, step).transpose(0, 1).contiguous() for t in (a, w[0]))
+    for i in range(0, m, rows):
+        blk, ab, sx = y[i:i + rows], parts[:, i:i + rows], xs[i:i + rows]
+        for j in range(s):
+            if chained:
+                cut = j if per == 1 else slice(j * per, (j + 1) * per)
+                _launch(ab[j], ws[j], blk, design, sx[:, cut].contiguous(), ys[:, cut].contiguous())
+            else:
+                blk += _part(ab, ws, design, j) * (sx[:, j, None] * ys[:, j])
     return y
 
 

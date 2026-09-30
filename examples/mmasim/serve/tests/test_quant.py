@@ -69,7 +69,7 @@ def test_nvfp4_comes_back_exactly() -> None:
     assert torch.equal(q.dequantize(), t.double())
 
 
-@pytest.mark.parametrize('name', [*quant.SCHEMES, 'fp8-row:fnuz', 'fp8-block:fnuz'])
+@pytest.mark.parametrize('name', quant.NAMES)
 def test_elements_and_scales_are_in_the_schemes_formats(name: str) -> None:
     """On values over twelve binades, every element and scale is exactly
     representable in the FPy format the scheme names."""
@@ -142,8 +142,7 @@ def _hard(r: int, k: int) -> list[torch.Tensor]:
     return [*out, zero, torch.randn(r, k, generator=g) * 1e-39, torch.randn(r, k, generator=g) * 1e37, tie]
 
 
-@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block', 'mxfp8', 'mxfp4', 'nvfp4',
-                                  'fp8-row:fnuz', 'fp8-block:fnuz'])
+@pytest.mark.parametrize('name', [n for n in quant.NAMES if n != 'bf16'])
 @pytest.mark.parametrize('side, shape', [('x', (7, 512)), ('w', (300, 256))])
 def test_quantize_is_torchao_bit_for_bit(name: str, side: str, shape: tuple[int, int]) -> None:
     """Elements, scales and per-tensor scale, every bit (signed zeros too);
