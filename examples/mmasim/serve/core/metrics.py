@@ -4,8 +4,9 @@ product `Y` (FP64) of its quantized inputs `x` and weights `w`, elementwise
 over every token.
 
 - `normwise`: normwise relative error `||Ŷ - Y||_F / ||Y||_F`;
-- `backward`: componentwise backward error `|ŷ - y| / (|x|ᵀ|w|)` per
-  element, mean and max (Oettli-Prager; Higham, ch. 7);
+- `backward`: log2 of the componentwise backward error `|ŷ - y| / (|x|ᵀ|w|)`
+  per element (Oettli-Prager; Higham, ch. 7), its mean over the elements it
+  is not 0 for and its max, and the share it is 0 for (`backward_exact`);
 - `ulp`: `log2(1 + |ŷ - y| / ulp(y))` per element in FP32 ("bits of error"),
   mean and max;
 - `rounded`: the fraction of elements equal to `fl(y)`, `y` rounded to FP32;
@@ -45,8 +46,10 @@ class Stats:
     """`||Ŷ - Y||_F^2`"""
     ref: float = 0.0
     """`||Y||_F^2`"""
-    backward: float = 0.0
-    backward_max: float = 0.0
+    log_backward_err: float = 0.0
+    """The sum of the nonzero backward errors' log2"""
+    log_backward_err_max: float = -math.inf
+    backward_nonzero: int = 0
     ulp: float = 0.0
     ulp_max: float = 0.0
     rounded: int = 0
@@ -63,17 +66,20 @@ class Stats:
             (getattr(self, f.name), getattr(other, f.name))) for f in fields(self)})
 
     def report(self, metrics: Collection[str]) -> dict[str, float]:
-        """Each of *metrics*' statistics, not log2."""
+        """Each of *metrics*' statistics, not log2 (but `backward`'s)."""
         n = max(self.n, 1)
         out = {
             'normwise': math.sqrt(self.err / self.ref) if self.ref else 0.0,
-            'backward': self.backward / n, 'backward_max': self.backward_max,
+            'backward': self.log_backward_err / max(self.backward_nonzero, 1),
+            'backward_max': self.log_backward_err_max,
+            'backward_exact': 1 - self.backward_nonzero / n,
             'ulp': self.ulp / n, 'ulp_max': self.ulp_max,
             'rounded': self.rounded / n, 'bias': self.bias / n,
             'magnitude_bias': self.magnitude_bias / n,
             'quantization': math.sqrt(self.q_err / self.q_ref) if self.q_ref else 0.0,
         }
-        return {k: v for k, v in out.items() if k.removesuffix('_max') in metrics}
+        return {k: v for k, v in out.items()
+                if k.removesuffix('_max') in metrics or k.startswith('backward_') and 'backward' in metrics}
 
 
 def _rows(n: int) -> int:
@@ -129,9 +135,12 @@ def _against(s: Stats, metrics: Collection[str], r: _Exact, g: torch.Tensor) -> 
         eta = torch.where(r.positive, e / r.scale, 0.0)
         if 'backward' in metrics:
             size = eta.abs()
-            s.backward += float(size.sum())
-            s.backward_max = max(s.backward_max, float(size.max()))
-            del size
+            log = torch.log2(size[size > 0])
+            if log.numel():
+                s.log_backward_err += float(log.sum())
+                s.log_backward_err_max = max(s.log_backward_err_max, float(log.max()))
+                s.backward_nonzero += log.numel()
+            del size, log
         if 'bias' in metrics:
             s.bias += float(eta.sum())
         if r.sign is not None:
@@ -188,10 +197,10 @@ def local(outs: Sequence[tuple[Stats, torch.Tensor, Stats | None]], metrics: Col
 
 def fmt(key: str, v: float) -> str:
     """*v* as printed: errors in log2, `rounded` as a percentage, biases in u."""
-    if key == 'rounded':
+    if key in ('rounded', 'backward_exact'):
         return f'{v:.2%}'
     if key.endswith('bias'):
         return f'{v / U:+.3f}'
-    if key.startswith('ulp'):
+    if key.startswith(('ulp', 'backward')):
         return f'{v:.3f}'
     return f'{math.log2(v):.2f}' if v > 0 else '-inf'

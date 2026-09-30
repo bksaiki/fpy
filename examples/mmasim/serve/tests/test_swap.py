@@ -97,9 +97,10 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
     applied around the kernel, per 128 of `k`, or by its instructions, is
     nearer the exact run than quantizing moved it from R0."""
     scheme = quant.SCHEMES[name]
-    assert swap.modes(scheme) == ('fp32', f'{name}-exact', *designs)
+    assert swap.modes(scheme) == ('fp32', f'{name}-exact', f'{name}-exact-rtz', f'{name}-exact-rand',
+                                  *designs)
     if scheme.applied != 'instruction':
-        assert swap.modes(quant.scheme(f'{name}:fnuz'))[2:] == ('amd.cdna3.fp8',)
+        assert swap.modes(quant.scheme(f'{name}:fnuz'))[4:] == ('amd.cdna3.fp8',)
     run = swap.patch(model)
     r0 = _logits(model, tokens)
     run.scheme, run.mode = scheme, f'{name}-exact'

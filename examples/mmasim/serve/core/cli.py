@@ -63,9 +63,11 @@ def parse(ap: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
     elif args.list_schemes:
         lines = [f'{n:16} {quant.describe(quant.scheme(n))}' for n in quant.NAMES]
     elif args.list_matmuls:
-        fp32, exact, *designs = swap.modes(args.scheme)
+        fp32, exact, rtz, rand, *designs = swap.modes(args.scheme)
         lines = [f'{fp32:24} R0, the model as trained',
                  f"{exact:24} R1, the quantized operands' exact product",
+                 f'{rtz:24} R1 rounded toward zero',
+                 f'{rand:24} R1 moved an ulp up or down at random',
                  *(f'{d:24} a design' for d in designs)]
     if lines:
         print('\n'.join(lines))

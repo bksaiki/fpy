@@ -6,6 +6,10 @@ A run computes under a quantization scheme (`quant`, default `bf16`):
 - `fp32`: the model in full precision, `x @ W.T` in FP32 (TF32 off).
 - `<scheme>-exact` (`bf16-exact`, ...): `x` (from BF16) and `W` quantized
   by the scheme, their product in FP64, rounded once to FP32.
+- `<scheme>-exact-rtz`: the same, rounded toward zero: a perturbation of
+  the exact run under an ulp.
+- `<scheme>-exact-rand`: the exact run moved an ulp up or down, at random
+  per element: a perturbation of it without bias.
 - a design the scheme applies to (`kernels.designs`): the quantized
   elements through its kernel, the scheme's scales applied after it, per
   block of `k`, or by its instructions (:func:`gemm`).
@@ -17,7 +21,7 @@ refused.
 
 from dataclasses import dataclass, field
 from types import MethodType
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
@@ -28,8 +32,10 @@ BF16 = quant.SCHEMES['bf16']
 
 
 def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
-    """*scheme*'s runs: R0, its exact run, and every design it applies to."""
-    return ('fp32', f'{scheme.name}-exact', *kernels.designs(scheme))
+    """*scheme*'s runs: R0, its exact run (to nearest and toward zero), and
+    every design it applies to."""
+    exact = f'{scheme.name}-exact'
+    return ('fp32', exact, f'{exact}-rtz', f'{exact}-rand', *kernels.designs(scheme))
 
 
 MODEL = 'Qwen/Qwen3-0.6B'
@@ -50,8 +56,16 @@ _ELEMS = 1 << 24
 """FP64 weight elements per block of an exact run's columns."""
 
 
-def exact(qa: quant.Quantized, qw: quant.Quantized) -> torch.Tensor:
-    """`qa @ qw.T` in FP64, rounded once to FP32."""
+Rounding = Literal['nearest', 'toward-zero', 'random-sign']
+"""How an exact run rounds: to nearest; toward zero; or to nearest, then an
+ulp up or down at random."""
+
+_EXACT: dict[str, Rounding] = {'': 'nearest', '-rtz': 'toward-zero', '-rand': 'random-sign'}
+"""Each exact run's rounding, by its name's suffix."""
+
+
+def exact(qa: quant.Quantized, qw: quant.Quantized, rounding: Rounding = 'nearest') -> torch.Tensor:
+    """`qa @ qw.T` in FP64, rounded once to FP32 by *rounding*."""
     m, k = qa.elements.shape
     n = qw.elements.shape[0]
     y = torch.empty(m, n, device=qa.elements.device)
@@ -59,8 +73,25 @@ def exact(qa: quant.Quantized, qw: quant.Quantized) -> torch.Tensor:
     for j in range(0, n, cols):
         wd = qw.dequantize(slice(j, j + cols)).T
         for i in range(0, m, _ROWS):
-            y[i:i + _ROWS, j:j + cols] = qa.dequantize(slice(i, i + _ROWS)) @ wd
+            p = qa.dequantize(slice(i, i + _ROWS)) @ wd
+            y[i:i + _ROWS, j:j + cols] = _round(p, rounding)
     return y
+
+
+_SIGNS: dict[torch.device, torch.Generator] = {}
+"""The random-sign rounding's generator per device, seeded once."""
+
+
+def _round(p: torch.Tensor, rounding: Rounding) -> torch.Tensor:
+    """FP64 *p* rounded to FP32 by *rounding*."""
+    f = p.float()
+    if rounding == 'toward-zero':
+        return torch.where(f.double().abs() > p.abs(), torch.nextafter(f, torch.zeros_like(f)), f)
+    if rounding == 'random-sign':
+        g = _SIGNS.setdefault(f.device, torch.Generator(f.device).manual_seed(0))
+        up = torch.rand(f.shape, device=f.device, generator=g) < 0.5
+        return torch.nextafter(f, torch.where(up, torch.inf, -torch.inf).to(f.device))
+    return f
 
 
 def slices(scheme: quant.Scheme, split_k: int) -> int:
@@ -173,8 +204,9 @@ class Run:
         if self.mode == 'fp32' or id(w) in self.ignore:
             return F.linear(x, w)
         qa, qw = self.quantize(x, w), self.weight(w)
-        if self.mode == f'{self.scheme.name}-exact':
-            y = exact(qa, qw)
+        suffix = self.mode.removeprefix(f'{self.scheme.name}-exact')
+        if suffix != self.mode and suffix in _EXACT:
+            y = exact(qa, qw, _EXACT[suffix])
         elif self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
             held = kernels.storage(self.mode)[1]
             y = gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held), self.combine)

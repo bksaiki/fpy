@@ -68,7 +68,7 @@ class Totals:
             if miss is None and (hit := q.argmax(-1) == tgt).logical_not().any():
                 miss = i + int(hit.logical_not().nonzero()[0])
             for j, (name, ref) in enumerate(refs.items()):
-                r = q if ref is None else ref[b]
+                r = q if ref is None else ref[b].to(q.device)
                 kl, same = (r.exp() * (r - q)).sum(-1), r.argmax(-1) == q.argmax(-1)
                 if j == 0:
                     dp = lq.exp() - r[rows, tgt].exp()
@@ -123,9 +123,10 @@ def _log_probs(model: torch.nn.Module, seg: torch.Tensor, first: int = 1) -> Ite
 
 
 def _keep(blocks: Iterable[torch.Tensor], kept: list[torch.Tensor]) -> Iterator[torch.Tensor]:
-    """*blocks*, each also kept on *kept*."""
+    """*blocks*, each also kept on *kept*, in host memory (a large vocabulary's
+    references would not fit beside the model)."""
     for b in blocks:
-        kept.append(b)
+        kept.append(b.cpu())
         yield b
 
 
