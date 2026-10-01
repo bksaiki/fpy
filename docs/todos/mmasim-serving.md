@@ -863,15 +863,49 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
 ##### Phase 3 - The sweep runner and its table
 
-- `serve/stage3/sweep.py`: the sweep specification (anchors; each
-  parameter's values), expansion into one-at-a-time points (deduplicated:
-  an anchor's own value is one point), skipping unformable points with a
-  reason, registration, one `local.py` pass per scheme, and the table.
-- A small run (one anchor, one parameter) end to end.
-- **Separate because** the runner is the last code the full sweep needs, and
-  its table is the interface the plots read.
+**Done.**
+- `serve/stage3/sweep.py`:
+  - **The spec:** `ANCHORS` (Hopper and Blackwell FP8 under `fp8-row`;
+    Hopper and Ampere BF16 and CDNA3 BF16 under `bf16`) and `PARAMS`, each
+    a way to read it off a design and its values: `L` 2-64; `F` 8-35; `F2`
+    16-35; `rho_bits`, `rho`'s fraction bits at FP32's exponents, 7-23;
+    `rho_mode` RTZ, RNE, RTN, RTP; `sum`; `join`; `groups`; `ftz`.  Changing
+    `L` keeps `k` whole instructions.
+  - **`points(anchors, params)`:** one parameter at a time, the anchor's own
+    value always among them (Ampere's `F` 24 is not in `F`'s list); a
+    parameter the anchor's structure does not read is not swept (`F2`
+    without a separate join, `F` without a fused sum).  The full sweep: 188
+    points, 152 designs.
+  - **A run:** every formable point registered (`register()`, also the
+    `--register` of each `local.py` pass), compiled in parallel by
+    `kernels.compile_designs`, which returns each refusal's error rather than
+    raising, and keeps the compiled in the kernel cache; then one `local.py`
+    pass per scheme over its compiled designs, as a subprocess; then the
+    join.
+  - **The table** `<results>/stage3/sweep.csv`: a row per point: anchor,
+    scheme, parameter, value, `is_anchor`, `status` (`ok`, `unformable`,
+    `refused`) and its reason, the design's name and every parameter
+    (`generator.about`), and its metrics against the quantized operands'
+    exact product (group `all`); `sweep.provenance.json` beside it.
+  - `--list` prints the points and their status without running.
+- `serve/tests/test_stage3.py` (191 tests, under 1 s): every point is its
+  anchor but for its parameter (`rho` moves for `rho_bits` and `rho_mode`,
+  `k` with `L`); each anchor's value appears once a parameter; an unread
+  parameter is not swept; `register()` adds every formable design, and again
+  without a clash.
+- **Small runs** (Qwen3-0.6B, 512 tokens):
+  - Hopper FP8, `F` (10 points, 47 s): normwise backward error -8.06 at
+    `F` 8, -12.41 at 13 (Hopper), and flat at -13.05 from `F` 19: with `rho`
+    held at Hopper's E8M13, a wider sum is truncated back by its output (an
+    interaction, as the open item foresaw).
+  - CDNA3 BF16, `sum`, `join`, `groups`: three unformable points recorded;
+    an inside join -23.58 against CDNA3's separate -25.59; even-odd groups
+    change nothing under BF16.
+  - Ampere BF16, `sum`: the tree of exact products and the exact sum
+    recorded as refused, with the compiler's messages (Triton backend,
+    "What is left").
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 serve/tests
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -p no:xdist serve/tests/test_stage3.py
 
 ##### Phase 4 - The plots
 
