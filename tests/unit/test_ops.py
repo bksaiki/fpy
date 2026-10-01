@@ -375,3 +375,42 @@ class TestCopysignReal:
     def test_sign_source(self, y, s) -> None:
         r = fp.copysign(3.0, y, fp.REAL)
         assert r.s == s and abs(r.as_rational()) == 3
+
+
+class TestExactZeroSum:
+    """IEEE 754-2019 Sec. 6.3: an exactly zero sum of opposite signs (a
+    difference of like ones, an FMA's `x*y + z`) is -0 rounding toward
+    negative, +0 otherwise; `x + x` keeps the sign of a zero `x`."""
+
+    _CASES = (
+        ('add', (0.0, -0.0)), ('add', (1.0, -1.0)), ('add', (-0.0, 0.0)),
+        ('sub', (1.0, 1.0)), ('sub', (0.0, 0.0)), ('sub', (-0.0, -0.0)),
+        ('fma', (1.0, -1.0, 1.0)), ('fma', (0.0, -1.0, 0.0)), ('fma', (2.0, 3.0, -6.0)),
+    )
+
+    @pytest.mark.parametrize('rm', [fp.RM.RNE, fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP])
+    @pytest.mark.parametrize('op, args', _CASES)
+    def test_opposite_signs(self, op, args, rm):
+        r = getattr(fp, op)(*args, fp.IEEEContext(8, 32, rm))
+        assert r.is_zero() and r.s == (rm is fp.RM.RTN)
+
+    @pytest.mark.parametrize('rm', [fp.RM.RNE, fp.RM.RTN])
+    @pytest.mark.parametrize('op, args, sign', [
+        ('add', (-0.0, -0.0), True), ('add', (0.0, 0.0), False),
+        ('sub', (-0.0, 0.0), True), ('sub', (0.0, -0.0), False),
+        ('fma', (-0.0, 1.0, -0.0), True), ('fma', (0.0, 1.0, 0.0), False),
+    ])
+    def test_like_zeros_keep_their_sign(self, op, args, sign, rm):
+        r = getattr(fp, op)(*args, fp.IEEEContext(8, 32, rm))
+        assert r.is_zero() and r.s == sign
+
+    def test_a_context_without_negative_zero_keeps_plus_zero(self):
+        ctx = fp.MPFixedContext(-8, fp.RM.RTN, enable_neg_zero=False)
+        r = fp.add(1.0, -1.0, ctx)
+        assert r.is_zero() and not r.s
+
+    def test_an_underflow_keeps_the_exact_sign(self):
+        """Not an exact zero: a tiny positive sum rounding to zero is +0."""
+        tiny = 2.0 ** -149
+        r = fp.add(tiny, -tiny / 2, fp.IEEEContext(8, 32, fp.RM.RTN))
+        assert r.is_zero() and not r.s

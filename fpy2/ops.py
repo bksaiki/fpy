@@ -4,7 +4,7 @@ Mathematical functions under rounding contexts.
 
 from fractions import Fraction
 
-from .number import REAL, Context, Float, Real, RealFloat
+from .number import REAL, RM, Context, Float, Real, RealFloat
 from .number.engine import ENGINES
 from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
@@ -144,6 +144,35 @@ def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, 
                     result._real._flags._set_divzero(True)
         return result
 
+def _rational(x: Float | Fraction) -> Fraction:
+    return x if isinstance(x, Fraction) else x.as_rational()
+
+
+def _zero_sum(r: Real, ctx: Context, terms: tuple[Float | Fraction, ...],
+              zero_signs: tuple[bool, ...]) -> Real:
+    """*r*, the sum of *terms*, with IEEE 754's sign when that sum is exactly
+    zero (Sec. 6.3): its terms' sign when all are zeros of that one sign
+    (*zero_signs*, a zero term's sign), else -0 rounding toward negative and
+    +0 otherwise.  Only the toward-negative case differs from the engines'."""
+    if (getattr(ctx, 'rm', None) is not RM.RTN or not isinstance(r, Float)
+            or not r.is_zero() or r.s):
+        return r
+    if len(zero_signs) == len(terms) and len(set(zero_signs)) == 1:
+        return r
+    if any(isinstance(t, Float) and t.is_nar() for t in terms) or sum(map(_rational, terms)) != 0:
+        return r
+    return ctx.round(Float.from_float(-0.0))
+
+
+def _signbit_of(x: Float | Fraction) -> bool:
+    return x.s if isinstance(x, Float) else x < 0
+
+
+def _zero_sign(x: Float | Fraction) -> tuple[bool, ...]:
+    """`(sign,)` for a zero *x*, else `()`."""
+    return (x.s,) if isinstance(x, Float) and x.is_zero() else ()
+
+
 def _empty(dims_list: list[int]) -> list:
     if len(dims_list) == 1:
         return [UNINIT for _ in range(dims_list[0])]
@@ -199,7 +228,8 @@ def add(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.add(xr, yr, ctx)
         if r is not None:
-            return _normalize(r, ctx, (xr, yr))
+            return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, yr),
+                             _zero_sign(xr) + _zero_sign(yr))
 
     raise NotImplementedError(f'add() not implemented for ctx={ctx}')
 
@@ -455,7 +485,13 @@ def fma(x: Real, y: Real, z: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fma(xr, yr, zr, ctx)
         if r is not None:
-            return _normalize(r, ctx, (xr, yr, zr))
+            out = _normalize(r, ctx, (xr, yr, zr))
+            if any(isinstance(t, Float) and t.is_nar() for t in (xr, yr)):
+                return out
+            # the exact product's sign, when it is zero
+            p = _rational(xr) * _rational(yr)
+            ps = (_signbit_of(xr) != _signbit_of(yr),) if p == 0 else ()
+            return _zero_sum(out, ctx, (p, zr), ps + _zero_sign(zr))
 
     raise NotImplementedError(f'fma() not implemented for ctx={ctx}')
 
@@ -714,7 +750,9 @@ def sub(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.sub(xr, yr, ctx)
         if r is not None:
-            return _normalize(r, ctx, (xr, yr))
+            ny = -_rational(yr) if not (isinstance(yr, Float) and yr.is_nar()) else yr
+            return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, ny),
+                             _zero_sign(xr) + tuple(not s for s in _zero_sign(yr)))
 
     raise NotImplementedError(f'sub() not implemented for ctx={ctx}')
 
