@@ -1,4 +1,4 @@
-"""Stage 3's sweep (`serve/stage3/sweep.py`): its points, without running them."""
+"""The design-parameter sweep (`serve/sweep.py`, `serve/plot_sweep.py`), without running it."""
 
 import importlib.util
 from pathlib import Path
@@ -8,7 +8,7 @@ import pytest
 from core import kernels
 
 _SPEC = importlib.util.spec_from_file_location(
-    'stage3_sweep', Path(__file__).resolve().parents[1] / 'stage3' / 'sweep.py')
+    'sweep', Path(__file__).resolve().parents[1] / 'sweep.py')
 assert _SPEC is not None and _SPEC.loader is not None
 sweep = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(sweep)
@@ -56,3 +56,20 @@ def test_register_adds_each_formable_design_once(registry: None) -> None:
     formable = {generator.name(p.design) for p in ALL if generator.unformable(p.design) is None}
     assert formable <= set(kernels.TILES)
     sweep.register()    # again, as a second `local.py --register` would: no clash
+
+
+def test_a_figure_draws_from_the_table_alone(tmp_path: Path) -> None:
+    """A numeric parameter and a categorical one, a point refused: a PNG."""
+    spec = importlib.util.spec_from_file_location(
+        'plot_sweep', Path(__file__).resolve().parents[1] / 'plot_sweep.py')
+    assert spec is not None and spec.loader is not None
+    plot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plot)
+    row = {'anchor': 'a', 'scheme': 'bf16', 'is_anchor': 'False', 'status': 'ok'}
+    rows = [{**row, 'param': 'F', 'value': str(v), 'backward_normwise': str(-v),
+             'is_anchor': str(v == 13)} for v in (8, 13, 25)]
+    rows += [{**row, 'param': 'sum', 'value': 'fused', 'backward_normwise': '-13'},
+             {**row, 'param': 'sum', 'value': 'exact', 'status': 'refused', 'backward_normwise': ''}]
+    out = tmp_path / 'f.png'
+    plot.figure(rows, 'backward_normwise', out)
+    assert out.stat().st_size > 0
