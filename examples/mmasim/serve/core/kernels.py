@@ -239,6 +239,31 @@ def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int
         _kernel(*t)
 
 
+def compile_designs(designs: Sequence[str], jobs: int | None = None) -> dict[str, str]:
+    """Compile each of *designs* (its kernel over any `k`) not yet compiled,
+    in *jobs* processes as :func:`precompile` does, keeping the compiled in
+    :data:`CACHE`; the refused ones' errors, by design."""
+    todo = [d for d in designs if (d, None) not in _KERNELS and not _load(d, None)]
+    items = [(d, None, _PICKLED.get(d)) for d in todo]
+    jobs = min(len(items), jobs or os.cpu_count() or 1)
+    refused = {}
+    for (d, _, _), (kernel, why) in zip(items, in_processes(_compile_or_refuse, items, jobs)):
+        if kernel is None:
+            refused[d] = why
+        else:
+            _KERNELS[d, None] = kernel
+            _store(d, None)
+    return refused
+
+
+def _compile_or_refuse(item: tuple[str, int | None, Callable | None]) -> tuple[KernelSource | None, str]:
+    """:func:`_compile_in_worker`'s kernel, or `None` and why it was refused."""
+    try:
+        return _compile_in_worker(item), ''
+    except Exception as ex:  # noqa: BLE001 -- a refusal is a result
+        return None, f'{type(ex).__name__}: {str(ex).splitlines()[0] if str(ex) else ""}'
+
+
 def _compile_in_worker(item: tuple[str, int | None, Callable | None]) -> KernelSource:
     """A design's kernel in a worker process, from its pickled build, else by
     its MMA-Sim name."""
