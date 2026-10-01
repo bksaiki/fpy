@@ -20,17 +20,19 @@ Types
 -----
 
 The scalar types mirror the three scalar value kinds — booleans, real numbers,
-and rounding contexts — and are joined by list, tuple, and reference types, one
+and rounding contexts — and are joined by list, record, and reference types, one
 per value kind.
 
 .. math::
 
    T ::= \texttt{bool} \mid \texttt{real} \mid \texttt{context}
        \mid \texttt{list}\ T
-       \mid T_1 \times \cdots \times T_n
+       \mid \{\, l_1 : T_1, \ldots, l_n : T_n \,\}
        \mid \texttt{ref}\ T
 
-Both context constants have type :math:`\texttt{context}`. A reference to a
+A record type's labels are distinct, and record types are identified up to
+permutation of their fields. Every context, whether the literal or constructed,
+has type :math:`\texttt{context}`. A reference to a
 :math:`T` has type :math:`\texttt{ref}\ T`; since a reference is both read and
 written at that one type, :math:`\texttt{ref}` is invariant.
 
@@ -82,7 +84,8 @@ assigns it.
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{ctx}\ \{ \ldots \} : \texttt{context}}
+   \frac{\Gamma \vdash e : \{\, l_1 : T_1, \ldots, l_n : T_n \,\}}
+        {\Gamma \vdash \texttt{ctx}\ e : \texttt{context}}
    \tag{T-Ctx}
 
 .. math::
@@ -90,8 +93,8 @@ assigns it.
    \frac{x : T \in \Gamma}{\Gamma \vdash x : T}
    \tag{T-Var}
 
-A list is homogeneous; indexing recovers the element type. A tuple's type
-records each component.
+A list is homogeneous; indexing recovers the element type. A record's type
+gives each field's type; projection recovers it.
 
 .. math::
 
@@ -108,8 +111,17 @@ records each component.
 .. math::
 
    \frac{\Gamma \vdash e_1 : T_1 \quad \cdots \quad \Gamma \vdash e_n : T_n}
-        {\Gamma \vdash (\, e_1, \ldots, e_n \,) : T_1 \times \cdots \times T_n}
-   \tag{T-Tuple}
+        {\Gamma \vdash \{\, l_1 = e_1, \ldots, l_n = e_n \,\} :
+         \{\, l_1 : T_1, \ldots, l_n : T_n \,\}}
+   \tag{T-Record}
+
+.. math::
+
+   \frac{\Gamma \vdash e : \{\, l_1 : T_1, \ldots, l_n : T_n \,\}
+         \quad
+         l = l_i}
+        {\Gamma \vdash e.l : T_i}
+   \tag{T-Proj}
 
 Dereferencing unwraps a reference type; allocating the reference is a statement
 (see **T-Ref**).
@@ -138,17 +150,13 @@ reals to a real, and comparison maps reals to a boolean.
 Statements
 ^^^^^^^^^^
 
-An assignment checks that its right-hand side's type agrees with the pattern on
-the left. Because :math:`\Gamma` is fixed — every variable already has its
-inferred type — a pattern needs no rules of its own: it is typed by the
-*expression* rules, a variable by **T-Var** and a tuple pattern
-:math:`(\, x_1, \ldots, x_n \,)` like the tuple of the same shape by
-**T-Tuple**.
+An assignment checks that its right-hand side's type agrees with the type
+:math:`\Gamma` assigns the variable.
 
 .. math::
 
-   \frac{\Gamma \vdash e : T \quad \Gamma \vdash p : T}
-        {\Gamma \vdash p = e\ \texttt{ok}}
+   \frac{\Gamma \vdash e : T \quad \Gamma \vdash x : T}
+        {\Gamma \vdash x = e\ \texttt{ok}}
    \tag{T-Assign}
 
 An allocation wraps its operand's type: the variable it binds refers to what the
