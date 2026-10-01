@@ -28,7 +28,9 @@ bit (`tests/test_generator.py`).
 
 # ruff: noqa: C419 -- FPy has no generator expressions
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, fields
 from typing import Any, Literal
 
 from models import amd, nv
@@ -81,6 +83,34 @@ class Design:
     groups: Groups = 'none'
     e_zero: int | None = None
     """A zero term's alignment exponent (`None`: its model's default)."""
+
+
+def describe(ctx: Any) -> str:
+    """*ctx* in short: `E<es>M<m>`, an FNUZ format's `fnuz`, a context's
+    rounding mode when it rounds (`rho`)."""
+    if isinstance(ctx, fp.ExpContext):
+        return f'E{ctx.nbits}M0'
+    return f'E{ctx.es}M{ctx.nbits - 1 - ctx.es}' + ('fnuz' if getattr(ctx, 'eoffset', 0) else '')
+
+
+def about(d: Design) -> dict[str, Any]:
+    """*d*'s parameters, readably (formats by :func:`describe`, `rho` with its
+    rounding mode) and exactly (each context's `repr`, under `exact`)."""
+    out: dict[str, Any] = {}
+    for f in fields(d):
+        v = getattr(d, f.name)
+        if isinstance(v, (fp.EFloatContext, fp.ExpContext)):
+            v = describe(v) + (f' {v.rm.name}' if f.name == 'rho' else '')
+        out[f.name] = v
+    out['exact'] = {f.name: repr(getattr(d, f.name)) for f in fields(d)
+                    if isinstance(getattr(d, f.name), (fp.EFloatContext, fp.ExpContext))}
+    return out
+
+
+def name(d: Design) -> str:
+    """A name for *d* its parameters determine: `gen.` and a digest."""
+    key = json.dumps(about(d), sort_keys=True)
+    return f'gen.{hashlib.sha256(key.encode()).hexdigest()[:12]}'
 
 
 def unformable(d: Design) -> str | None:
@@ -141,49 +171,54 @@ def _e_zero(d: Design) -> int:
     return nv._default_e_zero(d.c, d.F, True)
 
 
+@fp.fpy(ctx=fp.REAL)
+def _keep(x, tiny):
+    """*x*: no flush."""
+    return x
+
+
+def _flushes(d: Design) -> tuple[fp.Function, fp.Function, float, float, float]:
+    """How *d* flushes an input and a result (:func:`_keep` without FTZ), and
+    the thresholds: the inputs' and the output's least normals.  Chosen here,
+    not branched on in FPy: a branch would give a variable two types."""
+    keep_in = amd.flush_subnormal if d.ftz else _keep
+    keep_out = amd.flush_subnormal_signed if d.ftz else _keep
+    return keep_in, keep_out, 2.0 ** d.a.emin, 2.0 ** d.b.emin, 2.0 ** d.rho.emin
+
+
 def _chain(d: Design, block: fp.Function) -> fp.Function:
     """`k / L` instructions of *block*; with FTZ, `c` flushes first."""
-    L, FTZ, tiny_c = d.L, d.ftz, 2.0 ** d.c.emin
+    L, tiny_c = d.L, 2.0 ** d.c.emin
+    keep_in = _flushes(d)[0]
 
     @fp.fpy(ctx=fp.REAL)
     def chain(A, B, c):
-        acc = c
-        if FTZ:
-            acc = amd.flush_subnormal(c, tiny_c)
+        acc = keep_in(c, tiny_c)
         for i in range(0, len(A), L):
             acc = block(A[i:i + L], B[i:i + L], acc)
         return acc
     return chain
 
 
-def _flushes(d: Design) -> tuple[bool, float, float, float]:
-    """FTZ, and its thresholds: the inputs' and the output's least normals."""
-    return d.ftz, 2.0 ** d.a.emin, 2.0 ** d.b.emin, 2.0 ** d.rho.emin
-
-
 def _fused(d: Design) -> fp.Function:
-    """A fused sum with `c` inside, truncated at `F` (T-FDPA)."""
+    """A fused sum with `c` inside, truncated at `F` (T-FDPA).  A product
+    is of flushed inputs; one not 0 has neither flushed, so its exponents read
+    the inputs."""
     F, rho, e_zero = d.F, d.rho, _e_zero(d)
     emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    FTZ, tiny_a, tiny_b, tiny_o = _flushes(d)
+    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
 
     @fp.fpy(ctx=fp.REAL)
     def fused(A, B, c):
-        if FTZ:
-            A = [amd.flush_subnormal(x, tiny_a) for x in A]
-            B = [amd.flush_subnormal(x, tiny_b) for x in B]
-        prods = [a * b for a, b in zip(A, B)]
+        prods = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return dpa_special_values(A, B, c)
+            return sum_special_values(prods, c)
         es = [e_zero if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
               for p, a, b in zip(prods, A, B)]
         e_c = e_zero if c == 0 else exponent(c, emin_c)
         e_max = max(max(es), e_c)
         s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
-        r = nv.fdpa_round(s, rho)
-        if FTZ:
-            r = amd.flush_subnormal_signed(r, tiny_o)
-        return r
+        return keep_out(nv.fdpa_round(s, rho), tiny_o)
     return fused
 
 
@@ -249,14 +284,11 @@ def _separate(d: Design) -> fp.Function:
     (TR-FDPA)."""
     F, F2, rho, e_zero = d.F, d.F2, d.rho, _e_zero(d)
     emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    FTZ, tiny_a, tiny_b, tiny_o = _flushes(d)
+    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
 
     @fp.fpy(ctx=fp.REAL)
     def separate(A, B, c):
-        if FTZ:
-            A = [amd.flush_subnormal(x, tiny_a) for x in A]
-            B = [amd.flush_subnormal(x, tiny_b) for x in B]
-        prods = [amd.overflow_inf(a * b) for a, b in zip(A, B)]
+        prods = [amd.overflow_inf(keep_in(a, tiny_a) * keep_in(b, tiny_b)) for a, b in zip(A, B)]
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
             return sum_special_values(prods, c)
         es = [e_zero if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
@@ -268,9 +300,7 @@ def _separate(d: Design) -> fp.Function:
         s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
         with rho:
             r = fp.round(s)
-        if FTZ:
-            r = amd.flush_subnormal_signed(r, tiny_o)
-        return r
+        return keep_out(r, tiny_o)
     return separate
 
 
@@ -279,14 +309,11 @@ def _even_odd(d: Design) -> fp.Function:
     with `c` rounded down (GTR-FDPA)."""
     F, F2, rho, e_zero = d.F, d.F2, d.rho, _e_zero(d)
     emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    FTZ, tiny_a, tiny_b, tiny_o = _flushes(d)
+    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
 
     @fp.fpy(ctx=fp.REAL)
     def even_odd(A, B, c):
-        if FTZ:
-            A = [amd.flush_subnormal(x, tiny_a) for x in A]
-            B = [amd.flush_subnormal(x, tiny_b) for x in B]
-        prods = [a * b for a, b in zip(A, B)]
+        prods = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
         es = [e_zero if p == 0 else amd.exponent0(a, emin_a) + amd.exponent0(b, emin_b)
               for p, a, b in zip(prods, A, B)]
         L = len(A)
@@ -308,57 +335,68 @@ def _even_odd(d: Design) -> fp.Function:
         s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
         with rho:
             r = fp.round(s)
-        if FTZ:
-            r = amd.flush_subnormal_signed(r, tiny_o)
-        return r
+        return keep_out(r, tiny_o)
     return even_odd
 
 
 def _tree(d: Design) -> fp.Function:
     """Pairwise adds of the products, then `c`, each rounded by `rho`
-    (FTZ-AddMul, `L` = `P`)."""
-    L, rho, LEVELS, ROUNDED = d.L, d.rho, d.L.bit_length() - 1, d.products == 'rounded'
-    FTZ, tiny_a, tiny_b, tiny_o = _flushes(d)
+    (FTZ-AddMul, `L` = `P`): adjacent pairs, then pairs of those."""
+    rho = d.rho
+    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
+
+    @fp.fpy(ctx=fp.REAL)
+    def exact_mul(x, y):
+        return keep_in(x, tiny_a) * keep_in(y, tiny_b)
+
+    @fp.fpy(ctx=fp.REAL)
+    def rounded_mul(x, y):
+        with rho:
+            z = fp.round(keep_in(x, tiny_a) * keep_in(y, tiny_b))
+        return keep_out(z, tiny_o)
+
+    mul = rounded_mul if d.products == 'rounded' else exact_mul
 
     @fp.fpy(ctx=fp.REAL)
     def add(x, y):
         with rho:
             z = fp.round(x + y)
-        if FTZ:
-            z = amd.flush_subnormal_signed(z, tiny_o)
-        return z
+        return keep_out(z, tiny_o)
+
+    @fp.fpy(ctx=fp.REAL)
+    def pair(A, B):
+        return add(mul(A[0], B[0]), mul(A[1], B[1]))
+
+    node = pair
+    for n in (1 << j for j in range(2, d.L.bit_length())):
+        node = _halves(add, node, n)
+    whole = node
 
     @fp.fpy(ctx=fp.REAL)
     def tree(A, B, c):
-        if FTZ:
-            A = [amd.flush_subnormal(x, tiny_a) for x in A]
-            B = [amd.flush_subnormal(x, tiny_b) for x in B]
-        ts = [a * b for a, b in zip(A, B)]
-        if ROUNDED:
-            with rho:
-                ts = [fp.round(t) for t in ts]
-            if FTZ:
-                ts = [amd.flush_subnormal_signed(t, tiny_o) for t in ts]
-        step = 1
-        for _ in range(LEVELS):
-            for i in range(0, L, 2 * step):
-                ts[i] = add(ts[i], ts[i + step])
-            step = 2 * step
-        return add(c, ts[0])
+        return add(c, whole(A, B))
     return tree
+
+
+def _halves(add: fp.Function, half: fp.Function, n: int) -> fp.Function:
+    """A tree over *n* elements: *half* over each half, added.  Scalars only:
+    the backend holds no list of computed values across a call."""
+    H, N = n // 2, n
+
+    @fp.fpy(ctx=fp.REAL)
+    def halves(A, B):
+        return add(half(A[0:H], B[0:H]), half(A[H:N], B[H:N]))
+    return halves
 
 
 def _exact(d: Design) -> fp.Function:
     """The products and `c` summed exactly, rounded once (E-FDPA)."""
     rho = d.rho
-    FTZ, tiny_a, tiny_b, tiny_o = _flushes(d)
+    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
 
     @fp.fpy(ctx=fp.REAL)
     def exact(A, B, c):
-        if FTZ:
-            A = [amd.flush_subnormal(x, tiny_a) for x in A]
-            B = [amd.flush_subnormal(x, tiny_b) for x in B]
-        prods = [a * b for a, b in zip(A, B)]
+        prods = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
             return sum_special_values(prods, c)
         s = sum(join(prods, [c]))
@@ -366,27 +404,18 @@ def _exact(d: Design) -> fp.Function:
             s = 0
         with rho:
             r = fp.round(s)
-        if FTZ:
-            r = amd.flush_subnormal_signed(r, tiny_o)
-        return r
+        return keep_out(r, tiny_o)
     return exact
 
 
 def _fma(d: Design) -> fp.Function:
     """A fused multiply-add rounded by `rho` (`L` = 1)."""
     rho = d.rho
-    FTZ, tiny_a, tiny_b, tiny_o = _flushes(d)
+    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
 
     @fp.fpy(ctx=fp.REAL)
     def fma(A, B, c):
-        a = A[0]
-        b = B[0]
-        if FTZ:
-            a = amd.flush_subnormal(a, tiny_a)
-            b = amd.flush_subnormal(b, tiny_b)
         with rho:
-            r = fp.fma(a, b, c)
-        if FTZ:
-            r = amd.flush_subnormal_signed(r, tiny_o)
-        return r
+            r = fp.fma(keep_in(A[0], tiny_a), keep_in(B[0], tiny_b), c)
+        return keep_out(r, tiny_o)
     return fma
