@@ -691,35 +691,44 @@ factories' stages to compose.  Today each factory fixes its own stages.
 #### The generator
 
 Every factory is the same pipeline with different choices per stage.  One
-parameterized builder, `models/mma.py`, takes a `Design` (a frozen
-dataclass) and returns the dot-product-accumulate function and its argument
-types, as `compile.DESIGNS`' builders do.
+parameterized builder, `examples/mmasim/generator/` (outside `models/`,
+which keeps the paper's explicit models; it imports their helpers), takes a
+`Design` (a frozen dataclass) and returns the dot-product-accumulate
+function and its argument types, as `compile.DESIGNS`' builders do.
 
 | stage | parameter | choices | existing designs |
 |---|---|---|---|
-| products | `products` | exact; each rounded (format, mode) | exact; RNE FP32 (CDNA2) |
-| | `ftz` | flush subnormal inputs and results, or not | on (CDNA2) |
-| | `scales` | none; per instruction; per group (scale format) | MX; MXFP4/NVFP4 |
-| groups | `G`, `layout` | group size (1: none); contiguous or even/odd | 16, 32 contiguous; even/odd (CDNA3 FP8) |
-| block sum | `block_sum` | aligned fused sum truncating at `F` bits; pairwise tree rounded per add; exact | fused (NV, CDNA3); tree (CDNA2); exact (CDNA1, FMA) |
+| products | `products` | `exact`; `rounded`, each by `rho` | exact; rounded (CDNA2) |
+| | `ftz` | flush subnormal inputs to +0, results to signed 0 | on (CDNA2) |
+| | `scales`, `G` | none; a scale pair per instruction; one per group of `G`, each group's sum exact | MX; MXFP4/NVFP4 (`G` 16) |
+| groups | `groups` | `none`; `even-odd`, each half a truncated sum | even-odd (CDNA3 FP8) |
+| block sum | `sum` | `fused`, aligned and truncated past `F` bits; `tree`, pairwise adds rounded by `rho`; `exact`, rounded once; `fma` | fused (NV, CDNA3); tree (CDNA2); exact (CDNA1); fma (FP64/FP32) |
 | | `F` | fraction bits kept | 13, 23-25, 35 |
-| | `L` | elements per instruction | 1 (FMA) - 32 |
-| joining `c` | `join` | inside the fused sum; separate add rounded down at `F2`; rounded add | inside (NV); separate (CDNA3); rounded (CDNA2) |
+| | `L` | elements per instruction | 1 (FMA) - 64 |
+| joining `c` | `join` (`fused` only) | `inside` the sum; `separate`, rounded down at `F2` and `F` bits and added | inside (NV); separate (CDNA3) |
 | | `F2` | | 31 (CDNA3) |
-| output | `rho` | precision, rounding mode (RZ, RNE, RD): the accumulator format the next instruction's `c` is in | RZ FP32, RZ E8M13 (NV FP8), RNE FP16, RNE FP32 (AMD) |
-| fixed per family | `e_zero`, special values | as the factory derives them | not swept |
+| output | `rho` | precision, rounding mode: the accumulator format the next instruction's `c` is in | RZ FP32, RZ E8M13 (NV FP8), RNE FP16, RNE FP32 (AMD) |
+| per structure | `e_zero` (`None`: the model's default), special values | as the models derive them | not swept |
 
 - **Hardware only.**  The kernel's loop over `k` (split-k, promotion
   between instruction chains, the order partials combine in) is software
   and out of scope; every design runs as one unsplit chain of its
   instruction.  The accumulator *format* is in scope: it is the
   instruction's output.
-- **A catalog** maps each `compile.DESIGNS` entry to its `Design` vector.
-  At those points the generator must agree with the factory bit for bit;
-  that is what makes a remixed point a model of something.
-- **`e_zero` and special-value semantics** (NV's `dpa_special_values`,
-  AMD's `sum_special_values`, TR-FDPA's product overflow) are carried for
-  that agreement, not swept: they decide zeros and specials, not accuracy.
+- **A catalog** (`generator/catalog.py`) maps each `compile.DESIGNS` entry
+  to its `Design`.  At those points the generator agrees with the model bit
+  for bit; that is what makes a remixed point a model of something.
+- **`e_zero` and special-value semantics** follow each structure's model
+  (`fused` inside: NVIDIA's `dpa_special_values` and overflow to infinity;
+  `separate` and `exact`: AMD's `sum_special_values`, with TR-FDPA's product
+  overflow; `even-odd`: GTR-FDPA's reading of NaN and infinity): carried for
+  that agreement, not swept.
+- **What is formable** (`unformable` gives the reason otherwise): rounded
+  products only in a `tree`; a `separate` join and `even-odd` groups only on
+  a `fused` sum; scales only on a `fused` sum joined `inside`, without FTZ
+  or groups, one instruction per call (`k` = `L`), `G` dividing `L`; a
+  `tree` over a power of two `L`; `fma` at `L` = 1.  Every other
+  combination builds, FTZ included on every sum.
 
 #### The sweep
 
@@ -760,19 +769,25 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
 ##### Phase 1 - The generator and its catalog
 
-- `models/mma.py`: `Design`, `build(design) -> (fn, arg_types)`, and
-  `CATALOG: dict[str, Design]` with an entry for every `compile.DESIGNS`
-  name.  Built from `models/utils.py`'s pieces (`fused_sum`,
-  `round_down_at`, `exponent`, the special-value helpers); the factories
-  stay as they are.
-- `tests/test_mma.py`: for every catalog entry, the generator's function
-  and the factory's agree bit for bit under the interpreter, on
-  `tests/common.py`'s five input distributions (random bits, edge values,
-  zero-mixed, normal, normal scaled to `emin`).
-- **Separate because** everything after builds on the generator being
-  exact at known points; nothing else changes.
+**Done.**
+- `generator/__init__.py`: `Design`, `unformable`, `build(design) -> (fn,
+  arg_types)`; one FPy block per structure (`fused`, its scaled and
+  group-scaled forms, `separate`, `even-odd`, `tree`, `exact`, `fma`),
+  stages chosen by closure constants, chained `k / L` times.
+  `generator/catalog.py`: `CATALOG`, all 62 designs.
+- `tests/test_generator.py` (77 tests, ~20 s at `-n 8`): every catalog
+  entry has its model's argument types and agrees with it bit for bit on
+  400 draws, four mixes of `compile.py`'s samplers (over the range and near
+  one; a quarter hard cases: zeros, extremes, specials; all hard cases;
+  subnormal-centred); the refusals; a fused sum wide enough (`F` 600) equal
+  to the exact sum rounded once; four remixes no model has build and run.
+- **Diverged from the plan:** `compile.py`'s samplers, not
+  `tests/common.py`'s (those need torch dtypes, which E2M1 and the scale
+  formats lack); no `is_mma` (it only chose `e_zero`; the catalog gives
+  `e_zero` where it differs); the tree generalized to any power of two `L`,
+  its products `exact` or `rounded`; FTZ on every sum, not CDNA2's only.
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_mma.py
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_generator.py
 
 ##### Phase 2 - Remixed points compile and register
 
@@ -787,7 +802,7 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 - **Separate because** remixed points reach backend paths the catalog never
   did; a backend gap found here is fixed or recorded before any sweep.
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_triton.py tests/test_mma.py
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_triton.py tests/test_generator.py
 
 ##### Phase 3 - The sweep runner and its table
 
@@ -819,7 +834,7 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
     .venv/bin/python -m pytest -n 8 tests/unit
     cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests serve/tests
-    cd examples/mmasim && ../../.venv/bin/ruff check serve models/mma.py tests/test_mma.py
+    cd examples/mmasim && ../../.venv/bin/ruff check serve generator tests/test_generator.py
 
 #### Open items
 
@@ -840,8 +855,9 @@ anchors is a candidate for a two-axis grid later.
 ##### What is the generator's interface for formats and scales?
 
 Contexts as the factories take them (`EFloatContext`, `ExpContext`), or the
-format names `quant` uses.  **Provisional:** contexts, as the factories;
-reopen if naming registered designs needs the names.
+format names `quant` uses.  **Provisional:** contexts, as the factories
+(Phase 1 built it so); Phase 2's registered names and `about` need a
+readable form of each, derived from the context, not a second interface.
 
 ##### How many tokens per design?
 
