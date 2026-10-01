@@ -96,15 +96,12 @@ def _remixes():
 
 
 REFUSED = {
-    'cdna2-rz': 'Mul under context .*RTZ',
-    'fma-rz': 'Fma under context .*RTZ',
     'exact-e8m13': '`sum` is exact, and no storage holds',
     'tree-8-exact': 'narrow tl.float64 to tl.float32',
 }
-"""The remixes the backend refuses, and why: no arithmetic but RNE's (the
-target's rule; libdevice has `add_rz` and the rest), no storage for an exact
-sum of FP8 products and an FP32 accumulator (CDNA1's too), and a sum of exact
-BF16 products, held in FP64, would round twice to FP32."""
+"""The remixes the backend refuses, and why: no storage for an exact sum of
+FP8 products and an FP32 accumulator (CDNA1's too), and a sum of exact BF16
+products, held in FP64, would round twice to FP32."""
 
 
 @pytest.mark.parametrize('remix', list(REFUSED))

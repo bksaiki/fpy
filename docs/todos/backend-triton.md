@@ -103,6 +103,20 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
 - **A uniform condition.** The special-value arm runs on every row even
   where no row in the program is special; a real `if` on a condition the
   whole program shares would skip it.
+- **Directed arithmetic** (done, `mmasim-serving.md`, Stage 3 Phase 2):
+  Add, Sub, Mul, Div, Fma, Sqrt at FP32 and FP64 rounding toward zero, down
+  or up, by libdevice's `add_rz` and the rest.
+- **Two refusals a generated design hits, each needing a design of its
+  own** (not started; `examples/mmasim/tests/test_triton.py`'s `REFUSED`
+  pins them):
+  - *An add of values held wider than its context's storage:* a tree of
+    exact BF16 products holds them in FP64, and an FP64 add narrowed to FP32
+    rounds twice ("would narrow tl.float64 to tl.float32 implicitly").
+  - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
+    accumulator spans ~500 bits, which no storage holds ("`sum` is exact,
+    and no storage holds its elements and partial sums"): CDNA1's E-FDPA,
+    the two of the 62 MMA-Sim designs that never compiled, and an exact sum
+    of FP8 products.
 - **Not blocking a design:** iterating a pointer-backed list (`for t in
   xss[r]`); a `zip` over slice expressions, which `ZipElim` leaves since it
   takes names; a row of a slice, refused.

@@ -823,13 +823,26 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
 | remix | refused because |
 |---|---|
-| CDNA2's tree, or an FMA, rounding toward zero | no arithmetic but RNE's (`target.py`'s rule; libdevice has `add_rz`, `mul_rz`, `fma_rz` and the `_rd`/`_ru` ones) |
 | an exact sum of FP8 products, E8M13 out | no storage holds the exact sum of the products and an FP32 accumulator (CDNA1, from the paper's builder too: 2 of the 62 designs) |
 | a tree of exact BF16 products | held in FP64, adding them under FP32 rounds twice |
 
   - `serve/tests/test_kernels.py`: a registered generator design (Hopper's
     FP8 chain at `F` 17; CDNA2's BF16 tree over 16), compiled in workers,
     runs through `kernels.linear` bit for bit against the generator.
+- **After Phase 2** (the policy: a design the compiler refuses gets a
+  compiler fix): directed arithmetic.  The Triton target refused Add, Sub,
+  Mul, Div, Fma and Sqrt in any mode but RNE; libdevice's `add_rz` and the
+  rest are correctly rounded at FP32 and FP64, now in the op table
+  (`target.py`; Sub as an add of the negation; the exact ops under directed
+  contexts too; not FP16, which libdevice lacks).  CDNA2's tree and an FMA
+  rounding toward zero agree with the interpreter.  Its tests
+  (`test_directed_arithmetic_agrees_bit_for_bit`: six ops, three modes, FP32
+  and FP64, edges and random) found **the interpreter wrong** on an exact
+  zero sum rounding toward negative: IEEE 754 Sec. 6.3 makes `x + (-x)`,
+  `(+0) + (-0)` and an FMA's exact zero `-0` there, `+0` in every other mode;
+  FPy gave `+0` in all.  Fixed in `fpy2/ops.py` (`_zero_sum`, for add, sub,
+  fma), with `tests/unit/test_ops.py::TestExactZeroSum`; the full unit suite
+  passes on it.
 - **Calibration** (Qwen3-0.6B, 2048 tokens, `local.py --register`, 8
   compile processes):
 
@@ -902,18 +915,6 @@ Contexts as the factories take them (`EFloatContext`, `ExpContext`), or the
 format names `quant` uses.  **Provisional:** contexts, as the factories
 (Phase 1 built it so); Phase 2's registered names and `about` need a
 readable form of each, derived from the context, not a second interface.
-
-##### Should the Triton backend round arithmetic other than to nearest?
-
-`target.py` refuses Add, Mul, Fma (and Div, Sqrt) in any mode but RNE, as
-Triton has no per-instruction rounding modifier; but libdevice's `add_rz`,
-`mul_rz`, `fma_rz` and the `_rd`/`_ru` ones are correctly rounded (PTX's
-`add.rz.f32` and the rest).  At stake: `rho`'s rounding mode is swept, and
-today a `tree` or `fma` design rounds only to nearest (a `fused` or
-`separate` one rounds its exact sum once, which directed modes already
-take).  **Provisional:** sweep the mode only where it compiles, the others
-recorded as refused; reopen to extend the target (a backend change, with
-its own tests), before the sweep's `rho` mode graphs.
 
 ##### How many tokens per design?
 
