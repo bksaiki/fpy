@@ -166,6 +166,20 @@ def test_batched_shape():
     )
 
 
+def test_raw_operator_accepts_noncontiguous_batches():
+    a, b = _inputs(torch.float64)
+    a = a.repeat(3, 1).t().contiguous().t()
+    b = b.repeat(3, 1).t().contiguous().t()
+    assert not a.is_contiguous()
+    assert not b.is_contiguous()
+
+    output = torch.ops.fpy2_models.fp64_fma.default(a, b, 2.0**23)
+
+    torch.testing.assert_close(
+        output, torch.full((3,), -0.875, dtype=torch.float64)
+    )
+
+
 def test_operator_registration():
     a, b = _inputs(torch.float64)
     output = torch.ops.fpy2_models.fp64_fma.default(a, b, 2.0**23)

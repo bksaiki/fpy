@@ -1,9 +1,9 @@
 #include <Python.h>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <vector>
 
 #include <torch/csrc/stable/library.h>
@@ -16,6 +16,19 @@
 namespace {
 
 using torch::stable::Tensor;
+
+template <typename T, std::size_t N>
+const std::array<T, N>& unsafe_array_view(const T* data) {
+  // The generated models accept std::array references, while a contiguous
+  // tensor already stores each batch row as N adjacent T objects. Avoid a
+  // copy by relying on std::array's implementation layout. This is
+  // intentionally unsafe: the tensor storage does not formally contain a
+  // std::array object under the C++ object-lifetime rules.
+  static_assert(std::is_standard_layout_v<std::array<T, N>>);
+  static_assert(sizeof(std::array<T, N>) == N * sizeof(T));
+  static_assert(alignof(std::array<T, N>) <= alignof(T));
+  return *reinterpret_cast<const std::array<T, N>*>(data);
+}
 
 template <typename Compute, std::size_t K, auto Model>
 Tensor run_dpa(
@@ -53,11 +66,9 @@ Tensor run_dpa(
   const int64_t batch_size = a.numel() / static_cast<int64_t>(K);
 
   for (int64_t batch = 0; batch < batch_size; ++batch) {
-    std::array<Compute, K> a_values{};
-    std::array<Compute, K> b_values{};
     const auto offset = batch * static_cast<int64_t>(K);
-    std::copy_n(a_ptr + offset, K, a_values.begin());
-    std::copy_n(b_ptr + offset, K, b_values.begin());
+    const auto& a_values = unsafe_array_view<Compute, K>(a_ptr + offset);
+    const auto& b_values = unsafe_array_view<Compute, K>(b_ptr + offset);
     output_ptr[batch] =
         Model(a_values, b_values, static_cast<Compute>(c));
   }
@@ -103,11 +114,9 @@ Tensor run_scaled_dpa(
   const int64_t batch_size = a.numel() / static_cast<int64_t>(K);
 
   for (int64_t batch = 0; batch < batch_size; ++batch) {
-    std::array<Compute, K> a_values{};
-    std::array<Compute, K> b_values{};
     const auto offset = batch * static_cast<int64_t>(K);
-    std::copy_n(a_ptr + offset, K, a_values.begin());
-    std::copy_n(b_ptr + offset, K, b_values.begin());
+    const auto& a_values = unsafe_array_view<Compute, K>(a_ptr + offset);
+    const auto& b_values = unsafe_array_view<Compute, K>(b_ptr + offset);
     output_ptr[batch] = Model(
         a_values,
         b_values,
@@ -190,16 +199,14 @@ Tensor run_group_scaled_dpa(
   const int64_t batch_size = a.numel() / static_cast<int64_t>(K);
 
   for (int64_t batch = 0; batch < batch_size; ++batch) {
-    std::array<Compute, K> a_values{};
-    std::array<Compute, K> b_values{};
-    std::array<Compute, ScaleK> alpha_values{};
-    std::array<Compute, ScaleK> beta_values{};
     const auto offset = batch * static_cast<int64_t>(K);
     const auto scale_offset = batch * static_cast<int64_t>(ScaleK);
-    std::copy_n(a_ptr + offset, K, a_values.begin());
-    std::copy_n(b_ptr + offset, K, b_values.begin());
-    std::copy_n(alphas_ptr + scale_offset, ScaleK, alpha_values.begin());
-    std::copy_n(betas_ptr + scale_offset, ScaleK, beta_values.begin());
+    const auto& a_values = unsafe_array_view<Compute, K>(a_ptr + offset);
+    const auto& b_values = unsafe_array_view<Compute, K>(b_ptr + offset);
+    const auto& alpha_values =
+        unsafe_array_view<Compute, ScaleK>(alphas_ptr + scale_offset);
+    const auto& beta_values =
+        unsafe_array_view<Compute, ScaleK>(betas_ptr + scale_offset);
     output_ptr[batch] = Model(
         a_values,
         b_values,
