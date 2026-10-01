@@ -12,17 +12,19 @@ The rules follow the grammar: expressions, then statements, then programs.
 Syntax
 ------
 
-FPy's expressions are constants, arithmetic, comparisons, lists, tuples, and
-dereference. Its statements are the usual imperative ones—assignment,
-sequencing, conditionals, loops, return, assertion, and skip—together with
-reference allocation, update, and function application. One is unique to FPy: the
-*context statement*, which sets the rounding context for the expressions
-it evaluates.
+FPy's expressions are constants, arithmetic, comparisons, lists, records,
+the context constructor, and dereference. Its statements are the usual
+imperative ones—assignment, sequencing, conditionals, loops, return, assertion,
+and skip—together with reference allocation, update, and function
+application. One is unique to FPy: the *context statement*, which sets the
+rounding context for the expressions it evaluates.
 
 In the formal syntax, :math:`n` ranges over the reals together with
 :math:`\pm\infty` and NaN, :math:`x` over a countable set of identifiers
-:math:`\mathit{Var}`, and :math:`f` over a separate set of function names
-:math:`\mathit{FuncName}`.
+:math:`\mathit{Var}`, :math:`l` over a countable set of labels
+:math:`\mathit{Label}`, and :math:`f` over a separate set of function names
+:math:`\mathit{FuncName}`. A record's labels are distinct, and records are
+identified up to permutation of their fields.
 
 .. math::
 
@@ -31,21 +33,25 @@ In the formal syntax, :math:`n` ranges over the reals together with
        & \text{boolean constants} \\
      & \mid & n
        & \text{numerical constants} \\
-     & \mid & \R \mid \mathsf{ctx}\ \{ \ldots \}
-       & \text{context constants} \\
+     & \mid & \R
+       & \text{context literal} \\
      & \mid & x
        & \text{variable} \\
      & \mid & [\, e_1, \ldots, e_m \,]
        & \text{list constructor} \\
      & \mid & e_1[e_2]
        & \text{list indexing} \\
-     & \mid & (\, e_1, \ldots, e_m \,)
-       & \text{tuple} \\
+     & \mid & \{\, l_1 = e_1, \ldots, l_m = e_m \,\}
+       & \text{record constructor} \\
+     & \mid & e.l
+       & \text{record projection} \\
+     & \mid & \mathsf{ctx}\ e
+       & \text{context constructor} \\
      & \mid & \mathsf{!}\, e
        & \text{dereference} \\
      & \mid & \mathit{op}(e_1, \ldots, e_k)
        & \text{operator application} \\[1ex]
-   s & ::= & p = e
+   s & ::= & x = e
        & \text{assignment} \\
      & \mid & x = \mathsf{ref}\ e
        & \text{allocation} \\
@@ -67,10 +73,6 @@ In the formal syntax, :math:`n` ranges over the reals together with
        & \text{assertion} \\
      & \mid & \mathsf{skip}
        & \text{no-op} \\[1ex]
-   p & ::= & x
-       & \text{variable pattern} \\
-     & \mid & (\, p_1, \ldots, p_m \,)
-       & \text{tuple pattern} \\[1ex]
    \mathit{op} & ::= & + \mid - \mid \times \mid \div \mid \ldots
        & \mathit{Arith} \text{ operators} \\
      & \mid & < \mid \le \mid = \mid \mathit{len} \mid \mathit{isnan}
@@ -78,16 +80,10 @@ In the formal syntax, :math:`n` ranges over the reals together with
        & \mathit{Exact} \text{ operators}
    \end{array}
 
-There are two rounding context literals.
-:math:`\R` is the *real rounding context*, whose rounding operation is the
-identity. :math:`\mathsf{ctx}\ \{ \ldots \}` is a schema standing for every
-other context, where the :math:`\{ \ldots \}` are the parameters that fix a
-rounding operation. Distinct parameters give distinct constants, so a program
-may use several at once.
-
-An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
-tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
-position by position, the only way to take a tuple apart.
+The only context literal is :math:`\R`, the *real rounding context*, whose
+rounding operation is the identity. Every other context is built by the
+*context constructor* :math:`\mathsf{ctx}\ e` from a single record argument,
+which alone determines the context's rounding operation.
 
 Operators :math:`\mathit{op}` fall into one of two sets, according to what the
 rounding context does to the result. An :math:`\mathit{op} \in \mathit{Arith}`
@@ -102,22 +98,24 @@ Values
 ------
 
 Evaluating an FPy expression produces one of six kinds of value: a boolean, a
-number :math:`n`, a *rounding context* :math:`C`, a list of values, a tuple of
+number :math:`n`, a *rounding context* :math:`C`, a list of values, a record of
 values, or a *location* :math:`\ell`.
 
 .. math::
 
    \begin{array}{rcl}
    v & ::= & \mathsf{true} \mid \mathsf{false} \mid n \mid C
-       \mid [\, v_1, \ldots, v_m \,] \mid (\, v_1, \ldots, v_m \,) \mid \ell \\
-   C & ::= & \R \mid \mathsf{ctx}\ \{ \ldots \}
+       \mid [\, v_1, \ldots, v_m \,]
+       \mid \{\, l_1 = v_1, \ldots, l_m = v_m \,\} \mid \ell \\
+   C & ::= & \R \mid \mathsf{ctx}\ \{\, l_1 = v_1, \ldots, l_m = v_m \,\}
    \end{array}
 
-A rounding context :math:`C` is a context constant, and is a value in its own
-right (**E-Val**). A context is opaque: the semantics uses only its rounding
-operation, written :math:`C(\cdot)`, whose result need not be finite.
-Full FPy provides constructors for the common rounding contexts, all of which
-the core abstracts as :math:`\mathsf{ctx}\ \{ \ldots \}`.
+.. note::
+
+   Two records are equal when they have the same labels and equal values at
+   each label. Two constructed contexts are equal when their records are
+   equal, so contexts that round alike but are built from different records
+   are unequal. :math:`\R` is equal only to itself.
 
 A *location* :math:`\ell` is the value of a reference. Locations are drawn from
 a countable set :math:`\mathit{Loc}` and are used only by :math:`\mathsf{!}`
@@ -143,8 +141,8 @@ Where a premise cannot be met—an undefined lookup, a false side condition—no
 rule applies and evaluation is stuck.
 
 Values evaluate to themselves. A location is not an expression, so **E-Val**
-applies only where a value can be written in a program: the boolean, numerical,
-and context constants.
+applies only where a value can be written in a program: the boolean and
+numerical constants and the context literal.
 
 .. math::
 
@@ -179,15 +177,43 @@ A list evaluates its elements; indexing selects one.
         {\langle \sigma, \mu, C, e_1[e_2] \rangle \Downarrow v_{n+1}}
    \tag{E-Index}
 
-Tuples evaluate like lists.
+A record evaluates its fields; projection selects one by label.
 
 .. math::
 
    \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
          \quad (1 \le i \le m)}
-        {\langle \sigma, \mu, C, (\, e_1, \ldots, e_m \,) \rangle \Downarrow
-         (\, v_1, \ldots, v_m \,)}
-   \tag{E-Tuple}
+        {\langle \sigma, \mu, C, \{\, l_1 = e_1, \ldots, l_m = e_m \,\} \rangle
+         \Downarrow \{\, l_1 = v_1, \ldots, l_m = v_m \,\}}
+   \tag{E-Record}
+
+.. math::
+
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow
+         \{\, l_1 = v_1, \ldots, l_m = v_m \,\}
+         \quad
+         l = l_i}
+        {\langle \sigma, \mu, C, e.l \rangle \Downarrow v_i}
+   \tag{E-Proj}
+
+Contexts are interpreted by a global, partial map :math:`\rho` from records to
+rounding operations. It is fixed throughout evaluation: every judgement takes
+it implicitly. The context constructor evaluates its argument to a record and
+builds a context from it. The record must have an interpretation under
+:math:`\rho`.
+
+.. math::
+
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v
+         \quad
+         v \in \mathrm{dom}(\rho)}
+        {\langle \sigma, \mu, C, \mathsf{ctx}\ e \rangle \Downarrow
+         \mathsf{ctx}\ v}
+   \tag{E-Ctx}
+
+We write :math:`C(\cdot)` for the rounding operation of a context :math:`C`:
+the identity function for :math:`\R`, and :math:`\rho(v)` for
+:math:`\mathsf{ctx}\ v`.
 
 A reference is a mutable cell. Dereferencing reads the location's current value
 from the heap; allocating the cell is a statement, since it writes one (see
@@ -204,8 +230,7 @@ from the heap; allocating the cell is a statement, since it writes one (see
 An :math:`\mathit{Arith}` operator is where rounding happens. The brackets
 :math:`\exact{\cdot}` mark a value computed exactly, with no intermediate
 rounding, so :math:`\exact{\mathit{op}(v_1, \ldots, v_k)}` is the true result
-and :math:`C` rounds it once. Under :math:`\R`, rounding is the identity, so the
-exact result is returned unchanged.
+and :math:`C` rounds it once.
 
 .. math::
 
@@ -259,43 +284,15 @@ complete normally; :math:`\mathsf{ret}` returns. Sequencing, conditionals, loops
 and the context statement pass along the outcome of the sub-statement they run,
 so a :math:`\mathsf{return}` propagates out to the enclosing function.
 
-Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
-read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
-Bindings combine by disjoint union :math:`\uplus`. Matching inspects a value
-without allocating, so it needs no heap.
+Assignment evaluates its right-hand side and binds :math:`x` to the value. It
+copies nothing: if :math:`v` is a location, :math:`x` becomes a second name for
+the same cell.
 
 .. math::
 
-   \frac{}{x \triangleright v \Rightarrow [\, x \mapsto v \,]}
-   \tag{M-Var}
-
-.. math::
-
-   \frac{p_1 \triangleright v_1 \Rightarrow \theta_1
-         \quad \cdots \quad
-         p_m \triangleright v_m \Rightarrow \theta_m}
-        {(\, p_1, \ldots, p_m \,) \triangleright (\, v_1, \ldots, v_m \,)
-         \Rightarrow \theta_1 \uplus \cdots \uplus \theta_m}
-   \tag{M-Tuple}
-
-.. note::
-
-   Because :math:`\uplus` is defined only on disjoint domains,
-   a program with a pattern such as :math:`(x, x)` has no interpretation.
-
-Assignment evaluates its right-hand side, matches the value against the
-pattern, and extends the store with the bindings (:math:`\sigma[\theta]`
-is :math:`\sigma` updated with every binding in :math:`\theta`). It copies
-nothing: if :math:`v` is a location, the pattern's variable becomes a second
-name for the same cell.
-
-.. math::
-
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v
-         \quad
-         p \triangleright v \Rightarrow \theta}
-        {\langle \sigma, \mu, C, p = e \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma[\theta] \,;\, \mu}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v}
+        {\langle \sigma, \mu, C, x = e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma[x \mapsto v] \,;\, \mu}
    \tag{E-Assign}
 
 An allocation statement creates a mutable cell: it picks a location not already
@@ -469,8 +466,8 @@ The rounding context is scoped; the store and heap are not.
 .. note::
 
    The context expression is evaluated under :math:`\R` rather than the rounding
-   context :math:`C` because a constructor's arguments in the full FPy language
-   are usually precisions, bitwidths, maximum values, etc. Rounding under :math:`C`
+   context :math:`C` because the constructor's record fields are usually
+   precisions, bitwidths, maximum values, etc. Rounding under :math:`C`
    may inadvertently change the desired result.
 
 Programs
