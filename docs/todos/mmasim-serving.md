@@ -791,18 +791,62 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
 ##### Phase 2 - Remixed points compile and register
 
-- Compile catalog and remixed `Design`s through `compile_triton`
-  (`compile_matmul`), checked against the interpreter
-  (`run_matmul`, hard cases included); a default tile for a synthetic
-  design (a rule from `L`; tiles change speed, not results - checked here).
-- `serve/core/kernels.py` (or a small module beside it): register a
-  `Design` under a stable name derived from its parameters.
-- **Calibration** (recorded here): compile time and local-evaluation time
-  per synthetic design, which size the sweep.
-- **Separate because** remixed points reach backend paths the catalog never
-  did; a backend gap found here is fixed or recorded before any sweep.
+**Done.**
+- **The generator, for the backend.**  Two structures the interpreter took
+  but Triton did not, restructured (bit for bit still: `test_generator.py`):
+  - FTZ is chosen in Python (`_flushes`: a flush, or `_keep`), not branched
+    on in FPy: a closure-constant branch is not folded before storage
+    inference, so a reassigned list (`A = [flush(x) ...]`) had two element
+    types even with FTZ off.  Products take flushed inputs; special values
+    are decided on the products; exponents read the inputs (a product not 0
+    has neither flushed).
+  - The tree is nested halves of scalars (`_halves`): a loop-carried stride
+    became a tile, which Triton's `range` refuses; `**` has no Triton
+    signature; a list of computed values cannot cross a call.
+- **Registering:** `kernels.register_design(design, name=None)` registers
+  under `generator.name` (`gen.` and a digest of `generator.about`, the
+  parameters readably: formats as `E<e>M<m>`, `rho` with its mode, each
+  context's `repr` under `exact`), at `kernels.tile` (`(16, 64)` for a tree,
+  `(16, 1)` from `L` = 64, else `(32, 1)`: the catalog's most common), its
+  build kept so `precompile` compiles it in worker processes (the pool
+  starts by `forkserver`, so a worker sees no runtime registration; the
+  pickled build carries the design).  The kernel cache's key covers
+  `generator/`'s sources.
+- **Tests:**
+  - `tests/test_triton.py`: ten remixes, every structure (NVIDIA's FP8
+    chain joined as CDNA3 joins, and with FTZ; CDNA3's even-odd over E4M3 at
+    13 bits; MX at 13 bits; NVFP4 with groups of 32; CDNA2's tree over 16;
+    ...), agree with the interpreter at two tiles (a tile changes the
+    launch, not the result); two fuse over a static `k`.
+  - `test_a_backend_gap_is_refused` pins four refusals, each a compile-time
+    error, never a wrong result:
+
+| remix | refused because |
+|---|---|
+| CDNA2's tree, or an FMA, rounding toward zero | no arithmetic but RNE's (`target.py`'s rule; libdevice has `add_rz`, `mul_rz`, `fma_rz` and the `_rd`/`_ru` ones) |
+| an exact sum of FP8 products, E8M13 out | no storage holds the exact sum of the products and an FP32 accumulator (CDNA1, from the paper's builder too: 2 of the 62 designs) |
+| a tree of exact BF16 products | held in FP64, adding them under FP32 rounds twice |
+
+  - `serve/tests/test_kernels.py`: a registered generator design (Hopper's
+    FP8 chain at `F` 17; CDNA2's BF16 tree over 16), compiled in workers,
+    runs through `kernels.linear` bit for bit against the generator.
+- **Calibration** (Qwen3-0.6B, 2048 tokens, `local.py --register`, 8
+  compile processes):
+
+| pass | designs | cold | warm (kernels cached) | per design, kernels | shared metrics |
+|---|---|---|---|---|---|
+| `fp8-row`, Hopper's FP8 chain remixed | 11 | 112 s | 91 s | 4.6-12 s | 17 s |
+| `bf16`, Hopper, Ampere, CDNA3, CDNA2 remixed | 10 | 159 s | 131 s | 3.5-20 s | 27 s |
+
+  - Compiling is ~2-3 s a design at 8 processes; evaluating ~8 s (FP8) to
+    ~13 s (BF16).  So ~300 designs are ~1 h, at 2048 tokens.
+  - The generator's catalog points reproduce Stage 2's numbers exactly
+    (normwise backward: Hopper FP8 -12.34, CDNA3 BF16 -25.59, CDNA2 BF16
+    `_1k` -25.21), at the default tile 10% (CDNA3) to 1.7x (CDNA2, 2 s) the
+    catalog design's time.
 
       cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_triton.py tests/test_generator.py
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -p no:xdist serve/tests/test_kernels.py
 
 ##### Phase 3 - The sweep runner and its table
 
@@ -859,11 +903,22 @@ format names `quant` uses.  **Provisional:** contexts, as the factories
 (Phase 1 built it so); Phase 2's registered names and `about` need a
 readable form of each, derived from the context, not a second interface.
 
+##### Should the Triton backend round arithmetic other than to nearest?
+
+`target.py` refuses Add, Mul, Fma (and Div, Sqrt) in any mode but RNE, as
+Triton has no per-instruction rounding modifier; but libdevice's `add_rz`,
+`mul_rz`, `fma_rz` and the `_rd`/`_ru` ones are correctly rounded (PTX's
+`add.rz.f32` and the rest).  At stake: `rho`'s rounding mode is swept, and
+today a `tree` or `fma` design rounds only to nearest (a `fused` or
+`separate` one rounds its exact sum once, which directed modes already
+take).  **Provisional:** sweep the mode only where it compiles, the others
+recorded as refused; reopen to extend the target (a backend change, with
+its own tests), before the sweep's `rho` mode graphs.
+
 ##### How many tokens per design?
 
 2048 is Stage 2's size; the Roadmap suggested 512 for a cheap level.
-**Provisional:** 2048, unless Phase 2's calibration puts the full sweep
-past a few hours.
+**Provisional:** 2048: Phase 2's calibration puts ~300 designs at ~1 h.
 
 ##### Which anchors?
 

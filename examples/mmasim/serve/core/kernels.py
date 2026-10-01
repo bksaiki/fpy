@@ -24,6 +24,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import compile_triton as ct
+import generator
 from compile import DESIGNS, in_processes
 from compile import _length as _arg_length
 
@@ -65,6 +66,9 @@ _KERNELS: dict[tuple[str, int | None], KernelSource] = {}
 REGISTERED: dict[str, dict[str, Any] | None] = {}
 """Each :func:`register`ed design's description (its parameters), by name."""
 
+_PICKLED: dict[str, Callable] = {}
+"""The builds that pickle, by design: compiled in worker processes."""
+
 CACHE: Path | None = None
 """Where compiled kernels persist across runs (`cli.parse` sets it), keyed
 by the design and every source a kernel depends on; `None`: they do not."""
@@ -89,6 +93,26 @@ def register(name: str, build: Callable, block: int, block_m: int,
     _BUILDS[name] = build
     TILES[name] = (block, block_m)
     REGISTERED[name] = about
+
+
+def tile(d: generator.Design) -> tuple[int, int]:
+    """A generator design's tile `(block, block_m)`, by the catalog's fastest
+    of its kind: a tree's short instructions take tall tiles, a long scaled
+    one narrow ones."""
+    if d.sum == 'tree':
+        return 16, 64
+    return (16, 1) if d.L >= 64 else (32, 1)
+
+
+def register_design(d: generator.Design, name: str | None = None) -> str:
+    """Register generator design *d* under *name* (default
+    `generator.name`), at its :func:`tile`, described by `generator.about`;
+    its name."""
+    name = name or generator.name(d)
+    build = partial(generator.build, d)
+    register(name, build, *tile(d), about=generator.about(d))
+    _PICKLED[name] = build
+    return name
 
 
 @cache
@@ -164,8 +188,8 @@ def _sources() -> str:
     """A digest of every source a kernel depends on: FPy, the models, and the
     compilers."""
     here = Path(__file__).resolve().parents[2]
-    files = sorted([*Path(fpy2.__file__).parent.rglob('*.py'),
-                    *(here / 'models').rglob('*.py'), here / 'compile.py', here / 'compile_triton.py'])
+    files = sorted([*Path(fpy2.__file__).parent.rglob('*.py'), *(here / 'models').rglob('*.py'),
+                    *(here / 'generator').rglob('*.py'), here / 'compile.py', here / 'compile_triton.py'])
     digest = hashlib.sha256()
     for f in files:
         digest.update(f.read_bytes())
@@ -201,21 +225,27 @@ def _store(design: str, k: int | None) -> None:
 
 def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int] = ()) -> None:
     """Compile *designs* not yet compiled, and each fused over each of *ks*
-    (:func:`fused`), MMA-Sim's in *jobs* processes (one per core by default);
-    a :func:`register`ed one compiles here."""
+    (:func:`fused`), in *jobs* processes (one per core by default): MMA-Sim's
+    and :func:`register_design`'s; another :func:`register`ed one compiles
+    here."""
     todo = [(d, k) for d in designs for k in (None, *ks) if (d, k) not in _KERNELS and not _load(d, k)]
-    named = [t for t in todo if _BUILDS[t[0]] is dict(DESIGNS).get(t[0])]
+    named = [(d, k, _PICKLED.get(d)) for d, k in todo
+             if d in _PICKLED or _BUILDS[d] is dict(DESIGNS).get(d)]
     jobs = min(len(named), jobs or os.cpu_count() or 1)
-    _KERNELS.update(zip(named, in_processes(_compile_named, named, jobs)))
-    for t in named:
-        _store(*t)
+    _KERNELS.update(zip([t[:2] for t in named], in_processes(_compile_in_worker, named, jobs)))
+    for d, k, _ in named:
+        _store(d, k)
     for t in todo:
         _kernel(*t)
 
 
-def _compile_named(item: tuple[str, int | None]) -> KernelSource:
-    """:func:`_kernel` in a worker process, for an MMA-Sim design."""
-    return _kernel(*item)
+def _compile_in_worker(item: tuple[str, int | None, Callable | None]) -> KernelSource:
+    """A design's kernel in a worker process, from its pickled build, else by
+    its MMA-Sim name."""
+    design, k, build = item
+    if build is None:
+        return _kernel(design, k)
+    return ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)
 
 
 @cache
