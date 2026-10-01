@@ -334,6 +334,79 @@ def test_a_directed_round_from_f64_agrees_bit_for_bit(rctx):
     _agree(src, rnd, [xt, torch.zeros(len(vals)).cuda()], block=16)
 
 
+def _directed_op(op: str, rctx: fp.Context) -> fp.Function:
+    """*op* of each lane's `xs`, `ys`, `zs`, rounded by *rctx*."""
+    if op == 'add':
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, zs, out, BLOCK):
+            for i in range(len(xs)):
+                with rctx:
+                    out[i] = xs[i] + ys[i]
+            return out
+    elif op == 'sub':
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, zs, out, BLOCK):
+            for i in range(len(xs)):
+                with rctx:
+                    out[i] = xs[i] - ys[i]
+            return out
+    elif op == 'mul':
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, zs, out, BLOCK):
+            for i in range(len(xs)):
+                with rctx:
+                    out[i] = xs[i] * ys[i]
+            return out
+    elif op == 'div':
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, zs, out, BLOCK):
+            for i in range(len(xs)):
+                with rctx:
+                    out[i] = xs[i] / ys[i]
+            return out
+    elif op == 'fma':
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, zs, out, BLOCK):
+            for i in range(len(xs)):
+                with rctx:
+                    out[i] = fp.fma(xs[i], ys[i], zs[i])
+            return out
+    else:
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, zs, out, BLOCK):
+            for i in range(len(xs)):
+                with rctx:
+                    out[i] = fp.sqrt(xs[i])
+            return out
+    return f
+
+
+@pytest.mark.parametrize('rm', [fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP], ids=['rtz', 'rtn', 'rtp'])
+@pytest.mark.parametrize('shape', [(8, 32), (11, 64)], ids=['f32', 'f64'])
+@pytest.mark.parametrize('op', ['add', 'sub', 'mul', 'div', 'fma', 'sqrt'])
+def test_directed_arithmetic_agrees_bit_for_bit(op, shape, rm):
+    """libdevice's directed operation is the context's: on the edges (both
+    zeros, subnormals, the largest finite, values whose result overflows or
+    underflows, the specials) and random values."""
+    rctx = fp.IEEEContext(*shape, rm)
+    f = _directed_op(op, rctx)
+    dtype = torch.float32 if shape == (8, 32) else torch.float64
+    fi = torch.finfo(dtype)
+    edges = [0.0, -0.0, 1.0, -1.0, 1 / 3, -3.0, fi.tiny, -fi.tiny, fi.tiny * fi.eps,
+             fi.max, -fi.max, fi.max / 3, fi.tiny / 7, math.inf, -math.inf, math.nan]
+    g = torch.Generator().manual_seed(0)
+    rand = (torch.randn(48, generator=g, dtype=torch.float64) * 8).tolist()
+    xs, ys, zs = (edges * len(edges) + rand,
+                  [y for y in edges for _ in edges] + rand[::-1],
+                  [edges[(i * 7) % len(edges)] for i in range(len(edges) ** 2)] + rand)
+    n = len(xs)
+    lst = ListType(RealType(rctx), n)
+    src = _compile(f, [lst, lst, lst, lst, INT])
+    assert 'libdevice.' in src.source
+    tensors = [torch.tensor(v, dtype=dtype).cuda() for v in (xs, ys, zs)]
+    _agree(src, f, [*tensors, torch.zeros(n, dtype=dtype).cuda()], block=64)
+
+
 @fp.fpy(ctx=fp.REAL)
 def _prefix_plus(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real],
                  BLOCK: fp.Real):

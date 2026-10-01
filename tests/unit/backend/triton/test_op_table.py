@@ -32,6 +32,7 @@ from fpy2.backend.triton.types import TritonScalar as T
 _TABLE = make_op_table()
 _FP16 = fp.IEEEContext(5, 16, fp.RM.RNE)
 _FP32 = fp.IEEEContext(8, 32, fp.RM.RNE)
+_SUFFIX = {fp.RM.RTZ: 'rz', fp.RM.RTN: 'rd', fp.RM.RTP: 'ru'}
 _FP64 = fp.IEEEContext(11, 64, fp.RM.RNE)
 
 
@@ -59,16 +60,20 @@ class TestDivision:
             assert ctx not in _ctxs(_TABLE.binary, Div)
 
     def test_divide_uses_the_correctly_rounded_spelling(self):
-        """Triton's `/` is `fdiv`, the fast variant; `tl.div_rn` is IEEE."""
+        """Triton's `/` is `fdiv`, the fast variant; `tl.div_rn` is IEEE, and
+        libdevice's `div_rz` and the rest its directed modes."""
         for sig in _TABLE.binary[Div]:
-            assert sig.name == 'tl.div_rn'
+            assert sig.name == ('tl.div_rn' if sig.out_ctx.rm is fp.RM.RNE
+                                else f'libdevice.div_{_SUFFIX[sig.out_ctx.rm]}')
 
 
 class TestSquareRoot:
     def test_uses_the_correctly_rounded_spelling(self):
-        """`tl.sqrt` is the fast variant; `tl.sqrt_rn` is IEEE."""
+        """`tl.sqrt` is the fast variant; `tl.sqrt_rn` is IEEE, and
+        libdevice's `sqrt_rz` and the rest its directed modes."""
         for sig in _TABLE.unary[Sqrt]:
-            assert sig.name == 'tl.sqrt_rn'
+            assert sig.name == ('tl.sqrt_rn' if sig.out_ctx.rm is fp.RM.RNE
+                                else f'libdevice.sqrt_{_SUFFIX[sig.out_ctx.rm]}')
 
 
 class TestNoTranscendentals:
@@ -85,6 +90,34 @@ class TestNoTranscendentals:
         assert op not in _TABLE.unary
         assert op not in _TABLE.binary
         assert op not in _TABLE.ternary
+
+
+class TestDirectedArithmetic:
+    """libdevice's directed `add_rz` and the rest, at FP32 and FP64 only."""
+
+    _DIRECTED = tuple(fp.IEEEContext(es, nbits, rm) for es, nbits in ((8, 32), (11, 64))
+                      for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP))
+
+    @pytest.mark.parametrize('op', [Add, Sub, Mul, Div])
+    def test_binary_present(self, op):
+        assert set(self._DIRECTED) <= set(_ctxs(_TABLE.binary, op))
+
+    def test_fma_and_sqrt_present(self):
+        assert set(self._DIRECTED) <= set(_ctxs(_TABLE.ternary, Fma))
+        assert set(self._DIRECTED) <= set(_ctxs(_TABLE.unary, Sqrt))
+
+    def test_not_at_fp16(self):
+        """libdevice has no directed half arithmetic."""
+        for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP):
+            assert fp.IEEEContext(5, 16, rm) not in _ctxs(_TABLE.binary, Add)
+
+    def test_spellings(self):
+        rz = fp.IEEEContext(8, 32, fp.RM.RTZ)
+        add = next(s for s in _TABLE.binary[Add] if s.out_ctx == rz)
+        sub = next(s for s in _TABLE.binary[Sub] if s.out_ctx == rz)
+        assert add.in_tys == (T.F32, T.F32)
+        assert add.format('a', 'b') == 'libdevice.add_rz(a, b)'
+        assert sub.format('a', 'b') == 'libdevice.add_rz(a, -(b))'
 
 
 class TestNativeContexts:
