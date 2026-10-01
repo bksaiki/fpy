@@ -757,12 +757,12 @@ function and its argument types, as `compile.DESIGNS`' builders do.
 Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 `examples/mmasim`):
 
-- **A table**, `<results>/stage3/sweep.csv`: one row per evaluated design -
+- **A table**, `<results>/sweep/sweep.csv`: one row per evaluated design -
   its anchor, the parameter varied and its value, every parameter, every
   metric - and the skipped points with their reason.
 - **Cached activations** under `<results>/cache/`.
-- **The plots** from the table alone (`serve/stage3/plot.py`), replayable,
-  in `<results>/plots/stage3/`: a grid of panels, one per `(P_i, M_j)`, a
+- **The plots** from the table alone (`serve/plot_sweep.py`), replayable,
+  in `<results>/plots/sweep/`: a grid of panels, one per `(P_i, M_j)`, a
   line per anchor, the anchor's own value marked.
 
 #### Phases
@@ -864,7 +864,7 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 ##### Phase 3 - The sweep runner and its table
 
 **Done.**
-- `serve/stage3/sweep.py`:
+- `serve/sweep.py`:
   - **The spec:** `ANCHORS` (Hopper and Blackwell FP8 under `fp8-row`;
     Hopper and Ampere BF16 and CDNA3 BF16 under `bf16`) and `PARAMS`, each
     a way to read it off a design and its values: `L` 2-64; `F` 8-35; `F2`
@@ -882,13 +882,13 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
     raising, and keeps the compiled in the kernel cache; then one `local.py`
     pass per scheme over its compiled designs, as a subprocess; then the
     join.
-  - **The table** `<results>/stage3/sweep.csv`: a row per point: anchor,
+  - **The table** `<results>/sweep/sweep.csv`: a row per point: anchor,
     scheme, parameter, value, `is_anchor`, `status` (`ok`, `unformable`,
     `refused`) and its reason, the design's name and every parameter
     (`generator.about`), and its metrics against the quantized operands'
     exact product (group `all`); `sweep.provenance.json` beside it.
   - `--list` prints the points and their status without running.
-- `serve/tests/test_stage3.py` (191 tests, under 1 s): every point is its
+- `serve/tests/test_sweep.py` (191 tests, under 1 s): every point is its
   anchor but for its parameter (`rho` moves for `rho_bits` and `rho_mode`,
   `k` with `L`); each anchor's value appears once a parameter; an unread
   parameter is not swept; `register()` adds every formable design, and again
@@ -905,21 +905,68 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
     recorded as refused, with the compiler's messages (Triton backend,
     "What is left").
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -p no:xdist serve/tests/test_stage3.py
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -p no:xdist serve/tests/test_sweep.py
 
 ##### Phase 4 - The plots
 
-- `serve/stage3/plot.py`: the `(P_i, M_j)` grid from `sweep.csv` only;
-  numeric parameters on their axis (log2 where they double), categorical
-  ones as categories; a line per anchor, its own value marked.
-- **Separate because** plotting reads only the table and can be redrawn
-  without rerunning.
+**Done.**
+- `serve/plot_sweep.py`: from `sweep.csv` alone, one figure per metric
+  (`<results>/plots/sweep/<metric>.png`; `--metrics`, default normwise and
+  componentwise backward error, its max, magnitude bias), a panel per
+  parameter, a line per anchor.
+  - Numeric parameters on their axis (`L`'s log2, as it doubles), labels
+    thinned within a twentieth of the span (CDNA3's `F` 24 beside 25);
+    categorical ones as categories, not joined (their values have no order).
+  - An anchor's own value ringed; a point not measured an x on the panel's
+    floor, the anchors' side by side so none hides another.
+  - Colours: the dataviz reference's categorical slots 1-5, in that order,
+    each anchor also its own marker, so identity is not colour alone (the
+    palette validator needs Node, not installed here: the slots are the
+    reference's validated order).
+  - Each metric from `local.py`'s value: log2 ones as they are, `normwise`
+    to log2, biases in `u`, `flips` as a log10 share.
+- `serve/tests/test_sweep.py`: a figure draws from a hand-made table (a
+  numeric and a categorical parameter, a refused point).
 
 ##### Phase 5 - The full sweep
 
-- Run every anchor's sweeps; record the run's size and time, skipped
-  points, and what the graphs show in this document's Record.  No code
-  beyond fixes the run turns up.
+**Done** (2026-10-01; Qwen3-0.6B, 2048 tokens, `results/sweep/`).
+- **The run:** 188 points, 152 designs: 126 measured, 15 refused by the
+  compiler, 11 unformable.  Compiling 14 s (every kernel cached by the run
+  the background limit stopped, ~10 min of compiling at 8 processes); the
+  `bf16` pass 24 min (87 designs), `fp8-row` 9 min (54); run detached
+  (`nohup`), past the tool's 30-minute background limit.
+- **Refused** (`sweep.csv`'s `reason`; the Triton backend, "What is left"):
+  - rounding to a precision below FP32's other than toward zero (8 points:
+    Hopper's E8M13 output to nearest, down or up; CDNA3's output at 7-19
+    bits to nearest): "storing tl.float64 through a tl.float32 pointer would
+    round";
+  - Hopper's tree, its adds rounding to E8M13 toward zero: no Add under that
+    context;
+  - the trees of exact products and the exact sums, as Phase 2 found.
+- **What the graphs show** (`results/plots/sweep/`; normwise backward
+  error, log2, unless said):
+  - **`F` and `rho_bits` trade one for one until the other limits:** each
+    bit of either removes about one bit of error, until the error reaches the
+    other's precision.  Hopper's FP8 (`F` 13, `rho` E8M13) plateaus at -13
+    either way; the BF16 designs plateau near -22 to -24.6 (`rho` FP32
+    toward zero), CDNA3 at -25.6 (to nearest).
+  - **`L`:** longer instructions err less, about half a bit a doubling, for
+    every anchor but Hopper's FP8, flat at -12.4: its 13 bits, not its chain,
+    set its error.  Its magnitude bias does halve a doubling (-210 u at `L`
+    2, -88 at 64): fewer instructions truncate to E8M13.
+  - **`rho_mode`:** to nearest is 2-3 bits better than toward zero and
+    removes the bias; down and up are as toward zero in size, their bias of
+    either sign.
+  - **`ftz`:** flushing subnormals costs Blackwell's FP8 6 bits (-24.6 to
+    -18.5); E4M3's subnormals carry information.  BF16's (FP32's range)
+    change nothing.
+  - **`join`:** CDNA3's separate join, rounded down, is 2 bits better than
+    NVIDIA's inside one for the BF16 designs; for Hopper's FP8 its round-down
+    at 13 bits makes its bias ten times larger (-1090 u).
+  - **`F2`** (CDNA3): error falls until 28 bits, flat past.
+  - **`groups`:** even-odd only formable for CDNA3, where it changes nothing
+    under BF16.
 
 ##### After the last phase
 
@@ -1245,6 +1292,8 @@ examples/mmasim/serve/
   zeroshot.py     lm-evaluation-harness suite, paired Δ acc and flips
   decode.py       R0's greedy decode, then every matmul teacher-forced on it
   chat.py         terminal chat
+  sweep.py        hardware design parameters swept around anchors (generator/), local metrics
+  plot_sweep.py   the sweep's graphs, from its table
   core/           the library; no script imports another script
     kernels.py      compile each design (precompile in parallel); prepare, matmul, linear; register
     quant.py        schemes, torchao's RTN, Quantized with an exact FP64 dequantize

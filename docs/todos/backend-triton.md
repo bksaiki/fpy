@@ -117,6 +117,12 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
     and no storage holds its elements and partial sums"): CDNA1's E-FDPA,
     the two of the 62 MMA-Sim designs that never compiled, and an exact sum
     of FP8 products.
+  - *A round below FP32's precision other than toward zero:* to nearest,
+    down or up onto E8M13 or narrower ("storing tl.float64 through a
+    tl.float32 pointer would round"; toward zero is a truncating cast, which
+    composes).  Stage 3's sweep hits it 8 times.
+  - *Arithmetic under such a context:* an Add rounding to E8M13 toward zero
+    (a tree of FP8 products) has no signature.
 - **Not blocking a design:** iterating a pointer-backed list (`for t in
   xss[r]`); a `zip` over slice expressions, which `ZipElim` leaves since it
   takes names; a row of a slice, refused.

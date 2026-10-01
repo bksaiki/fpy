@@ -1,19 +1,20 @@
 """
-Stage 3's sweep (`docs/todos/mmasim-serving.md`): around each anchor design,
-one hardware parameter at a time over its values, every other held at the
-anchor's; each point's local metrics on cached activations; one table.
+A sweep of hardware design parameters (`docs/todos/mmasim-serving.md`,
+Stage 3): around each anchor design, one parameter at a time over its values,
+every other held at the anchor's; each point's local metrics on cached
+activations; one table.
 
 A point the generator cannot form, or the compiler refuses, is a row with its
 reason.  Every formable point is registered (this file is `local.py`'s
 `--register`), compiled in parallel, and the compiled ones of each scheme run
-in one `local.py` pass.  The table, `<results>/stage3/sweep.csv`: a row per
+in one `local.py` pass.  The table, `<results>/sweep/sweep.csv`: a row per
 point -- its anchor, the parameter varied and its value, every parameter, its
 status, and the design's metrics against the quantized operands' exact
 product -- and beside it what it came from (`sweep.provenance.json`).
 
-    python serve/stage3/sweep.py                          # from examples/mmasim
-    python serve/stage3/sweep.py --anchors nv.hopper.e4m3.f32 --params F --tokens 512
-    python serve/stage3/sweep.py --list                   # the points, and stop
+    python serve/sweep.py                          # from examples/mmasim
+    python serve/sweep.py --anchors nv.hopper.e4m3.f32 --params F --tokens 512
+    python serve/sweep.py --list                   # the points, and stop
 """
 
 import argparse
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 # `serve`, for `core`; `examples/mmasim`, for `generator`
-sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2])]
+sys.path[:0] = [str(Path(__file__).resolve().parent), str(Path(__file__).resolve().parents[1])]
 
 import generator
 from core import cli, kernels, outputs
@@ -152,7 +153,7 @@ def main(argv: list[str]) -> int:
     for d, n in names.items():
         if n in refused:
             status[d] = ('refused', refused[n])
-    out = args.results / 'stage3'
+    out = args.results / 'sweep'
     metrics: dict[str, dict[str, str]] = {}
     for scheme in sorted({ANCHORS[p.anchor] for p in pts}):
         run = [names[d] for d in dict.fromkeys(p.design for p in pts if ANCHORS[p.anchor] == scheme)
@@ -161,7 +162,7 @@ def main(argv: list[str]) -> int:
             continue
         json_out = out / f'local-{scheme}.json'
         done = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parents[1] / 'local.py'),
+            [sys.executable, str(Path(__file__).resolve().parent / 'local.py'),
              '--model', args.model, '--scheme', scheme, '--tokens', str(args.tokens),
              '--register', str(Path(__file__).resolve()), '--results', str(args.results),
              '-j', str(args.jobs), '-d', *run, '-o', str(json_out)], check=False)
