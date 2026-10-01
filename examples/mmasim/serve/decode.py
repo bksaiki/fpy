@@ -19,13 +19,12 @@ diverged and the median index among them; all in `<out>/forced.json`.
 """
 
 import argparse
-import json
 import statistics
 import sys
 from pathlib import Path
 
 import torch
-from core import cli, generate, scoring, workloads
+from core import cli, generate, outputs, scoring, workloads
 
 
 def main(argv: list[str]) -> int:
@@ -33,7 +32,7 @@ def main(argv: list[str]) -> int:
     cli.add_args(ap)
     cli.add_scheme_args(ap)
     cli.add_runs(ap)
-    ap.add_argument('-o', '--out', help="directory for R0's tokens and the results (required)")
+    ap.add_argument('-o', '--out', type=Path, help="directory for R0's tokens and the results (required)")
     ap.add_argument('--prompts', type=int, default=30,
                     help='MATH-500 problems, at random, 0 for all (default: %(default)s)')
     ap.add_argument('--max-new', type=int, default=2048,
@@ -51,7 +50,7 @@ def main(argv: list[str]) -> int:
     prompts = workloads.math500(tok, args.prompts or None, args.seed)
     model, run, about = cli.load(args, designs=modes)
 
-    out = Path(args.out)
+    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     path = out / 'fp32.json'
     if cached := cli.cached(path, settings):
@@ -62,7 +61,7 @@ def main(argv: list[str]) -> int:
         for i, p in enumerate(prompts):
             ref.append(generate.greedy(model, p, args.max_new, eos))
             print(f'fp32 prompt {i + 1}', file=sys.stderr, flush=True)
-        path.write_text(json.dumps({'settings': settings, 'tokens': ref}))
+        outputs.write_json(path, {'settings': settings, 'tokens': ref})
 
     seqs = [torch.cat([p, p.new_tensor([r])], -1) for p, r in zip(prompts, ref)]
     totals = scoring.evaluate(model, run, seqs, modes, starts=[p.shape[1] for p in prompts],
@@ -74,8 +73,9 @@ def main(argv: list[str]) -> int:
         'floor': {'missed': sum(f is not None for f in floor) / len(floor), 'first': floor},
         'paired': scoring.against(totals),
         'per_prompt': {mode: t.per_sequence() for mode, t in totals.items()},
+        'provenance': cli.provenance(args),
     }
-    (out / 'forced.json').write_text(json.dumps(results, indent=2))
+    outputs.write_json(out / 'forced.json', results)
 
     print(f'R0: {len(ref)} prompts, mean length {statistics.mean(map(len, ref)):.0f} tokens, '
           f'{sum(len(r) == args.max_new for r in ref)} at the limit; forced, it misses its own '

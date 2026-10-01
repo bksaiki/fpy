@@ -14,10 +14,10 @@ segments against R0 and the scheme's exact matmul (`scoring.against`).
 """
 
 import argparse
-import json
 import sys
+from pathlib import Path
 
-from core import cli, scoring, workloads
+from core import cli, outputs, scoring, workloads
 
 
 def main(argv: list[str]) -> int:
@@ -27,7 +27,7 @@ def main(argv: list[str]) -> int:
     cli.add_runs(ap)
     ap.add_argument('--segments', type=int, default=50,
                     help='this many segments at random, 0 for all (default: %(default)s)')
-    ap.add_argument('-o', '--out', default=None, help='write the results as JSON here')
+    ap.add_argument('-o', '--out', type=Path, default=None, help='write the results as JSON here')
     args = cli.parse(ap, argv)
 
     runs = cli.runs(ap, args)
@@ -43,6 +43,7 @@ def main(argv: list[str]) -> int:
         'runs': {mode: t.report() for mode, t in totals.items()},
         'paired': scoring.against(totals),
         'per_segment': {mode: t.per_sequence() for mode, t in totals.items()},
+        'provenance': cli.provenance(args),
     }
     print(f'{"run":20} {"ppl":>14} {"KL":>20} {"top-1":>16} {"RMS dp":>8} {"s":>7}')
     for mode, r in results['runs'].items():
@@ -56,8 +57,7 @@ def main(argv: list[str]) -> int:
             print(f'{mode:20} {r["dnll"]:+10.3e} ±{r["dnll_se"]:.1e} {r["p_holm"]:7.3f} '
                   f'{r["kl"]:10.3e} ±{r["kl_se"]:.1e} {r["disagree"]:8.4%} ±{r["disagree_se"]:.3%}')
     if args.out:
-        with open(args.out, 'w') as f:
-            json.dump(results, f, indent=2)
+        outputs.write_json(args.out, results)
     return 0
 
 

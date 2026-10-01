@@ -9,7 +9,10 @@ formats in the kernel's storage dtype; the result is its FP32 accumulator.
 weight and :func:`matmul` per call.
 """
 
+import hashlib
+import json
 import os
+import pickle
 import sys
 from collections.abc import Callable, Sequence
 from functools import cache, partial
@@ -24,6 +27,7 @@ import compile_triton as ct
 from compile import DESIGNS, in_processes
 from compile import _length as _arg_length
 
+import fpy2
 from fpy2.backend.triton import KernelSource, launch
 from fpy2.backend.triton.launcher import _torch_dtype
 
@@ -58,6 +62,13 @@ _BUILDS: dict[str, Callable] = dict(DESIGNS)
 _KERNELS: dict[tuple[str, int | None], KernelSource] = {}
 """Each design compiled so far: over any `k` (`None`), or fused over one."""
 
+REGISTERED: dict[str, dict[str, Any] | None] = {}
+"""Each :func:`register`ed design's description (its parameters), by name."""
+
+CACHE: Path | None = None
+"""Where compiled kernels persist across runs (`cli.parse` sets it), keyed
+by the design and every source a kernel depends on; `None`: they do not."""
+
 _ROWS = 65535
 """Rows per launch at most: CUDA's grid limit on its second axis."""
 
@@ -66,13 +77,18 @@ _ELEMS = 1 << 26
 `split_k > 1`, and a launch's size."""
 
 
-def register(name: str, build: Callable, block: int, block_m: int) -> None:
+def register(name: str, build: Callable, block: int, block_m: int,
+             about: dict[str, Any] | None = None) -> None:
     """Add a design, as `compile.DESIGNS` defines them (*build* returns the
-    FPy function and its argument types), run at the tile `(block, block_m)`."""
+    FPy function and its argument types), run at the tile `(block, block_m)`;
+    *about* describes it (its parameters) for the results.  Without *about*
+    its kernel is not kept on disk: its name alone does not say what it
+    computes."""
     if name in TILES:
         raise ValueError(f'{name!r} is already a design')
     _BUILDS[name] = build
     TILES[name] = (block, block_m)
+    REGISTERED[name] = about
 
 
 @cache
@@ -133,22 +149,66 @@ def fused(design: str, k: int) -> KernelSource:
 
 
 def _kernel(design: str, k: int | None = None) -> KernelSource:
-    """*design*'s kernel over any `k` (`None`), or fused over *k*; cached."""
-    if (design, k) not in _KERNELS:
+    """*design*'s kernel over any `k` (`None`), or fused over *k*; cached, in
+    memory and in :data:`CACHE`."""
+    if (design, k) not in _KERNELS and not _load(design, k):
         build = _BUILDS[design]
         _KERNELS[design, k] = (ct.compile_matmul(build, None)[0] if k is None
                                else ct.compile_fused(build, k))
+        _store(design, k)
     return _KERNELS[design, k]
+
+
+@cache
+def _sources() -> str:
+    """A digest of every source a kernel depends on: FPy, the models, and the
+    compilers."""
+    here = Path(__file__).resolve().parents[2]
+    files = sorted([*Path(fpy2.__file__).parent.rglob('*.py'),
+                    *(here / 'models').rglob('*.py'), here / 'compile.py', here / 'compile_triton.py'])
+    digest = hashlib.sha256()
+    for f in files:
+        digest.update(f.read_bytes())
+    return digest.hexdigest()
+
+
+def _path(design: str, k: int | None) -> Path | None:
+    """Where :data:`CACHE` keeps *design*'s kernel over *k*, if it does."""
+    if CACHE is None or (design in REGISTERED and REGISTERED[design] is None):
+        return None
+    key = json.dumps([design, k, REGISTERED.get(design), _sources()], sort_keys=True, default=str)
+    return CACHE / f'{hashlib.sha256(key.encode()).hexdigest()[:24]}.pkl'
+
+
+def _load(design: str, k: int | None) -> bool:
+    """Whether *design*'s kernel over *k* was in :data:`CACHE` (now in memory)."""
+    path = _path(design, k)
+    if path is None or not path.exists():
+        return False
+    _KERNELS[design, k] = pickle.loads(path.read_bytes())
+    return True
+
+
+def _store(design: str, k: int | None) -> None:
+    """*design*'s kernel over *k* into :data:`CACHE`, whole or not at all."""
+    path = _path(design, k)
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f'.{path.name}.tmp')
+        tmp.write_bytes(pickle.dumps(_KERNELS[design, k]))
+        os.replace(tmp, path)
 
 
 def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int] = ()) -> None:
     """Compile *designs* not yet compiled, and each fused over each of *ks*
     (:func:`fused`), MMA-Sim's in *jobs* processes (one per core by default);
     a :func:`register`ed one compiles here."""
-    todo = [(d, k) for d in designs for k in (None, *ks) if (d, k) not in _KERNELS]
+    todo = [(d, k) for d in designs for k in (None, *ks) if (d, k) not in _KERNELS and not _load(d, k)]
     named = [t for t in todo if _BUILDS[t[0]] is dict(DESIGNS).get(t[0])]
     jobs = min(len(named), jobs or os.cpu_count() or 1)
     _KERNELS.update(zip(named, in_processes(_compile_named, named, jobs)))
+    for t in named:
+        _store(*t)
     for t in todo:
         _kernel(*t)
 

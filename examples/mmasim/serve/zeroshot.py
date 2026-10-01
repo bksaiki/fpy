@@ -22,7 +22,6 @@ with the same settings, so the suite can be run a design at a time.
 """
 
 import argparse
-import json
 import math
 import statistics
 import sys
@@ -30,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from core import cli, stats, swap, workloads
+from core import cli, outputs, stats, swap, workloads
 
 TASKS = ('piqa', 'arc_easy', 'arc_challenge', 'hellaswag', 'winogrande', 'lambada_openai')
 METRICS = ('acc', 'acc_norm')
@@ -158,7 +157,7 @@ def main(argv: list[str]) -> int:
     cli.add_args(ap)
     cli.add_scheme_args(ap)
     cli.add_runs(ap)
-    ap.add_argument('-o', '--out', help="directory for each matmul's JSON (required)")
+    ap.add_argument('-o', '--out', type=Path, help="directory for each matmul's JSON (required)")
     ap.add_argument('--items', type=int, default=500,
                     help='items per task at most, at random, 0 for all (default: %(default)s)')
     ap.add_argument('--batch-size', type=int, default=16,
@@ -175,7 +174,7 @@ def main(argv: list[str]) -> int:
                 'batch_size': args.batch_size}
     samples = subsets(sizes(), args.items or None, args.seed) or None
 
-    out = Path(args.out)
+    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     lm = run = None
     runs: dict[str, dict[str, Any]] = {}
@@ -191,9 +190,9 @@ def main(argv: list[str]) -> int:
             model, run, _ = cli.load(args, designs=modes)
             lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
-        runs[mode] = {'settings': want,
+        runs[mode] = {'settings': want, 'provenance': cli.provenance(args),
                       **evaluate(lm, run, mode, samples=samples)}
-        path.write_text(json.dumps(runs[mode]))
+        outputs.write_json(path, runs[mode])
 
     ref = runs['fp32']['items']
     for t in TASKS:
@@ -205,7 +204,7 @@ def main(argv: list[str]) -> int:
             print(f'  {mode:20} ' + '   '.join(cells))
 
     paired = against({mode: r['items'] for mode, r in runs.items()}, f'{args.scheme.name}-exact')
-    (out / 'paired.json').write_text(json.dumps(paired, indent=2))
+    outputs.write_json(out / 'paired.json', paired)
     for ref, rows in paired.items():
         for m, show in (('acc', '{:+7.2%} ±{:.2%}'), ('ll', '{:+.1e} ±{:.0e}')):
             print(f'\npaired per item, Δ {m} against {ref}\n{"run":20} '

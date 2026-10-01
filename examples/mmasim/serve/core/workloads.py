@@ -24,7 +24,7 @@ from typing import Any
 
 import torch
 
-from . import generate, swap
+from . import generate, outputs, swap
 
 CONTEXT = 2048
 """Tokens per WikiText-2 segment (the GPTQ convention)."""
@@ -130,8 +130,7 @@ def mtbench(model: torch.nn.Module, run: swap.Run, tok: Any, path: Path) -> list
             conversations.append({'category': row['category'],
                                   'ids': prompt[0].tolist() + reply})
         cached = {'model': name, 'max_new': MAX_NEW, 'conversations': conversations}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cached))
+        outputs.write_json(path, cached)
     return [Sequence(c['ids'], {'category': [c['category']] * len(c['ids']),
                                 'role': roles(c['ids'], tok)})
             for c in cached['conversations']]
