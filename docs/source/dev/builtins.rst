@@ -3,15 +3,10 @@ Builtins
 
 The :doc:`expansion <expansion>` page covers FPy's surface syntax, independent
 of how an implementation spells it; this page covers the names FPy's library
-provides and what they mean. *Primitives* are core operators. Every other
-builtin function could be written as an FPy function and is given as an ``@fp.fpy``
-program: a call expands to that body, under the rounding context where it
-expands; its parameters are the call's arguments.
-
-.. note::
-
-   A call hoists to a fresh variable first; in an ``@fp.fpy`` program,
-   ``return e`` is the assignment to that variable.
+provides and what they mean. *Primitives* are core operators or core values.
+Every other builtin function could be written as an FPy function and is given as
+an ``@fp.fpy`` program; a call to it is an ordinary call (**X-Call**), so its body
+runs under the caller's rounding context.
 
 Primitives
 ----------
@@ -57,8 +52,8 @@ these operations are elements of :math:`\mathit{Arith}`.
    * - Constant
      - ``fp.const_pi()``
 
-``fp.fma(e1, e2, e3)`` computes ``e1 * e2 + e3`` with a *single* rounding,
-:math:`C(\exact{e_1 \cdot e_2 + e_3})`. The three remainders differ in sign
+``fp.fma(e1, e2, e3)`` computes ``e1 * e2 + e3`` with a *single* rounding. The
+three remainders differ in sign
 convention: the divisor's, the dividend's, and nearest-zero. The integer-valued
 operators differ in which integer they choose. ``fp.round(e)`` is idempotent,
 and ``fp.round_at(e, n)`` rounds at digit position ``n`` first.
@@ -88,9 +83,8 @@ these operations are elements of :math:`\mathit{Exact}`.
    * - Special values
      - ``fp.nan()``, ``fp.inf()``
 
-A chained comparison is the conjunction of adjacent pairwise tests, and all six
-chain. The four ordering tests take numbers, while ``==`` and ``!=`` compare
-lists element-wise and tuples field-wise, and reject operands of unequal type.
+The four ordering tests take numbers. ``==`` and ``!=`` compare by the equality
+of the :doc:`core semantics <semantics>` and reject operands of unequal type.
 
 Literals
 --------
@@ -118,7 +112,9 @@ Contexts
 :math:`\mathsf{ctx}\ e`. The full language provides them as *values*—``fp.FP64``
 and the other named contexts—and as *context constructors*, functions such as
 ``fp.IEEEContext`` that build one from its parameters. Each is
-:math:`\mathsf{ctx}` applied to a record describing the context.
+:math:`\mathsf{ctx}` applied to a record describing the context. Both are
+primitives: FPy has no syntax for records or :math:`\mathsf{ctx}`, so neither
+can be written as an FPy function.
 
 Accessors and casts
 -------------------
@@ -146,6 +142,17 @@ tuple of exactly two elements::
 
 Lists
 -----
+
+``fp.empty(d1, ..., dn)`` allocates a nested ``d1 x ... x dn`` list. Its cells
+start unspecified, so a program that reads one before writing it is undefined.
+
+.. admonition:: Open issue
+
+   ``fp.empty`` is the one builtin with no core counterpart: the core's list
+   constructor is fixed-width, so nothing there allocates a run-time number of
+   cells. Its semantics is that of a list constructor whose width is a run-time
+   value: ``z = fp.empty(n)`` allocates :math:`n` fresh cells and binds ``z`` to
+   the list of their locations, nesting for higher dimensions.
 
 ``range(start, stop, step)`` counts its iterations before filling rather than
 dividing to get the length: ``step`` may be negative, and a rounded division
@@ -281,7 +288,7 @@ The element type is exactly ``bool``: FPy has no truthiness, so
 Constants
 ---------
 
-Every constant expands to an expression that rounds exactly once.
+Every constant is defined by an expression that rounds exactly once.
 ``fp.const_pi()`` is the primitive. The simple cases round in their outermost
 operation.
 

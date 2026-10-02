@@ -131,18 +131,6 @@ statements stay inside it.
           \mathsf{else}\ (s_3' \,\mathsf{;}\, t = e_3'),\ t)}
    \tag{X-Cond}
 
-``fp.empty(d1, ..., dn)`` allocates too, creating a nested ``d1 x ... x dn``
-list. Its cells start unspecified, so a program that reads one before writing
-it is undefined.
-
-.. admonition:: Open issue
-
-   ``fp.empty`` is the one syntactic form with no expansion: the core's list
-   constructor is fixed-width, so nothing there allocates a run-time number of
-   cells. Its semantics is that of a list constructor whose width is a run-time
-   value: ``z = fp.empty(n)`` allocates :math:`n` fresh cells and binds ``z`` to
-   the list of their locations, nesting for higher dimensions.
-
 Statements
 ----------
 
@@ -286,7 +274,8 @@ Statements
 ~~~~~~~~~~
 
 A one-armed conditional has an empty ``else``. A failing ``assert`` is stuck,
-so its optional message is dropped.
+so its optional message is dropped. A ``with`` without a target binds a fresh
+one.
 
 .. list-table::
    :widths: 42 58
@@ -298,6 +287,8 @@ so its optional message is dropped.
      - ``if c: s else: pass``
    * - ``assert e, msg``
      - ``assert e``
+   * - ``with e: s``
+     - ``with e as t: s``
 
 Conditional expressions
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -335,11 +326,11 @@ Loops and comprehensions
         with ℝ:
             t2 = t2 + 1
 
-``z = [e2 for p in e1]`` allocates the result, then fills it. A target may be a
-tuple pattern::
+``z = [e2 for p in e1]`` allocates the result with the ``empty`` builtin (see
+:doc:`builtins`), then fills it. A target may be a tuple pattern::
 
     t1 = e1
-    z = fp.empty(len(t1))
+    z = empty(len(t1))
     t2 = 0
     for p in t1:
         z[t2] = e2
@@ -355,7 +346,7 @@ rows with the rewrite above, then flatten; *k* generators nest the same way::
     for t3 in t1:
         with ℝ:
             t2 = t2 + len(t3)
-    z = fp.empty(t2)
+    z = empty(t2)
     t4 = 0
     for t3 in t1:
         for t5 in t3:

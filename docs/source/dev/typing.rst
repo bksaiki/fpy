@@ -64,12 +64,12 @@ assigns it.
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{true} : \texttt{bool}}
+   \frac{}{\Gamma \vdash \mathsf{true} : \texttt{bool}}
    \tag{T-True}
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{false} : \texttt{bool}}
+   \frac{}{\Gamma \vdash \mathsf{false} : \texttt{bool}}
    \tag{T-False}
 
 .. math::
@@ -85,7 +85,7 @@ assigns it.
 .. math::
 
    \frac{\Gamma \vdash e : \{\, l_1 : T_1, \ldots, l_n : T_n \,\}}
-        {\Gamma \vdash \texttt{ctx}\ e : \texttt{context}}
+        {\Gamma \vdash \mathsf{ctx}\ e : \texttt{context}}
    \tag{T-Ctx}
 
 .. math::
@@ -129,7 +129,7 @@ Dereferencing unwraps a reference type; allocating the reference is a statement
 .. math::
 
    \frac{\Gamma \vdash e : \texttt{ref}\ T}
-        {\Gamma \vdash \texttt{!}\, e : T}
+        {\Gamma \vdash \mathsf{!}\, e : T}
    \tag{T-Deref}
 
 As in :doc:`semantics`, ``+`` and ``<`` are representatives: arithmetic maps
@@ -165,7 +165,7 @@ right-hand side produced.
 .. math::
 
    \frac{\Gamma \vdash e : T \quad \Gamma \vdash x : \texttt{ref}\ T}
-        {\Gamma \vdash x = \texttt{ref}\ e\ \texttt{ok}}
+        {\Gamma \vdash x = \mathsf{ref}\ e\ \texttt{ok}}
    \tag{T-Ref}
 
 An update writes at the type its target refers to, so the two sides agree only
@@ -190,21 +190,21 @@ result at the signature's result type.
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{skip}\ \texttt{ok}}
+   \frac{}{\Gamma \vdash \mathsf{skip}\ \texttt{ok}}
    \tag{T-Skip}
 
-The :math:`\texttt{ret}` operand may have any type; all returns in a function
+The :math:`\mathsf{ret}` operand may have any type; all returns in a function
 share one type, which becomes the function's result type. An assertion tests a
 boolean.
 
 .. math::
 
-   \frac{\Gamma \vdash e : T}{\Gamma \vdash \texttt{ret}\ e\ \texttt{ok}}
+   \frac{\Gamma \vdash e : T}{\Gamma \vdash \mathsf{ret}\ e\ \texttt{ok}}
    \tag{T-Ret}
 
 .. math::
 
-   \frac{\Gamma \vdash e : \texttt{bool}}{\Gamma \vdash \texttt{assert}\ e\ \texttt{ok}}
+   \frac{\Gamma \vdash e : \texttt{bool}}{\Gamma \vdash \mathsf{assert}\ e\ \texttt{ok}}
    \tag{T-Assert}
 
 Sequencing and conditionals require their parts to be well-typed; a conditional
@@ -213,7 +213,7 @@ also requires a boolean guard.
 .. math::
 
    \frac{\Gamma \vdash s_1\ \texttt{ok} \quad \Gamma \vdash s_2\ \texttt{ok}}
-        {\Gamma \vdash s_1\, \texttt{;}\, s_2\ \texttt{ok}}
+        {\Gamma \vdash s_1\, \mathsf{;}\, s_2\ \texttt{ok}}
    \tag{T-Seq}
 
 .. math::
@@ -221,7 +221,7 @@ also requires a boolean guard.
    \frac{\Gamma \vdash e : \texttt{bool} \quad
          \Gamma \vdash s_1\ \texttt{ok} \quad
          \Gamma \vdash s_2\ \texttt{ok}}
-        {\Gamma \vdash \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2\ \texttt{ok}}
+        {\Gamma \vdash \mathsf{if}\ e\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2\ \texttt{ok}}
    \tag{T-If}
 
 The context statement requires a context-typed expression — evaluating it yields
@@ -232,5 +232,5 @@ the active rounding context for the body — and binds the target to that contex
    \frac{\Gamma \vdash e : \texttt{context} \quad
          x : \texttt{context} \in \Gamma \quad
          \Gamma \vdash s\ \texttt{ok}}
-        {\Gamma \vdash \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s\ \texttt{ok}}
+        {\Gamma \vdash \mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s\ \texttt{ok}}
    \tag{T-Context}

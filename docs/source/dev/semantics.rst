@@ -112,14 +112,17 @@ values, or a *location* :math:`\ell`.
 
 .. note::
 
-   Two records are equal when they have the same labels and equal values at
-   each label. Two constructed contexts are equal when their records are
-   equal, so contexts that round alike but are built from different records
-   are unequal. :math:`\R` is equal only to itself.
+   Two lists are equal when they have the same length and equal elements. Two
+   records are equal when they have the same labels and equal values at each
+   label. Two constructed contexts are equal when their records are equal, so
+   contexts that round alike but are built from different records are
+   unequal. :math:`\R` is equal only to itself. Two locations are equal when
+   the values they currently hold are equal, even if the locations differ;
+   equality between cyclic structures is undefined.
 
 A *location* :math:`\ell` is the value of a reference. Locations are drawn from
-a countable set :math:`\mathit{Loc}` and are used only by :math:`\mathsf{!}`
-and :math:`:=`.
+a countable set :math:`\mathit{Loc}` and are read by :math:`\mathsf{!}` and
+written by :math:`:=`.
 
 Expressions
 -----------
@@ -135,7 +138,8 @@ three:
    \langle \sigma, \mu, C, e \rangle \Downarrow v
 
 read ":math:`e` evaluates to value :math:`v`". Expressions are pure;
-:math:`\mu` remains an input because :math:`\mathsf{!}` reads it.
+:math:`\mu` remains an input because :math:`\mathsf{!}` reads it, as do
+:math:`\mathit{Exact}` operators that inspect what locations hold.
 
 Where a premise cannot be met—an undefined lookup, a false side condition—no
 rule applies and evaluation is stuck.
