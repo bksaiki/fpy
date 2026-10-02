@@ -947,26 +947,33 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 ##### Phase 5 - The full sweep
 
 **Done** (2026-10-01; Qwen3-0.6B, 2048 tokens, `results/sweep/`; rerun after
-every combination of stages became a design).
-- **The run:** 188 points, 152 designs: 133 measured, 19 refused by the
-  compiler, none unformable.  Compiling ~2 min at 8 processes (every design
+every combination of stages became a design, and 2026-10-02 after the
+sub-FP32 roundings compiled).
+- **The run:** 188 points, 152 designs: 141 measured, 11 refused by the
+  compiler, none unformable (before the second rerun: 133 and 19).  Compiling ~2 min at 8 processes (every design
   anew: the kernel cache's key covers the generator's source); the `bf16`
   pass ~30 min, `fp8-row` ~10; run detached (`nohup`), past the tool's
   30-minute background limit.
 - **Refused** (`sweep.csv`'s `reason`; the Triton backend, "What is left"):
-  - 8: rounding to a precision below FP32's other than toward zero (Hopper's
-    E8M13 output to nearest, down or up; CDNA3's output at 7-19 bits to
-    nearest);
-  - 5: an exact sum (four anchors' `sum` = `exact`, and CDNA3's);
+  - 5: an exact sum (every anchor's `sum` = `exact`); not planned, as it
+    needs error-free transformations;
   - 4: exact BF16 products held in FP64 and added under FP32, which rounds
     twice (the BF16 trees, CDNA3's chain of FMAs);
   - 2: an Add or an Fma rounding to E8M13 toward zero (Hopper's tree and
     chain of FMAs).
-- **Since closed:** the 8 sub-FP32 roundings.  `unfold_round`'s normal arm
+- **Since closed by double rounding** (`compile_triton` now compiles with
+  `DOUBLE_ROUND`; not yet rerun): the 2 E8M13 ones, through FP32 toward zero,
+  and Hopper's and Ampere's BF16 trees, through FP64 toward zero
+  (`UnfoldKind.WIDE`).  CDNA3's two, to nearest, stay refused: no rule
+  admits FP64 to nearest for them (Triton backend, "What a generated design
+  still hits").
+- **Since closed:** 8 refusals of a rounding below FP32's precision other
+  than toward zero (Hopper's E8M13 output to nearest, down or up; CDNA3's
+  output at 7-19 bits to nearest).  `unfold_round`'s normal arm
   (`|x| >= 2 ** emin`) bounded `logb(x)` by `x`'s finest digit, not by
   `emin`, so the unfolded round looked finer than FP32; format inference now
   carries the arm's least magnitude to `logb` (`test_triton.py`'s
-  `hopper-rne`, `cdna3-rne-7`).  Not yet rerun.
+  `hopper-rne`, `cdna3-rne-7`).
 - **What the graphs show** (`results/plots/sweep/`; normwise backward
   error, log2, unless said):
   - **`F` and `rho_bits` trade one for one until the other limits:** each
@@ -980,7 +987,11 @@ every combination of stages became a design).
     2, -88 at 64): fewer instructions truncate to E8M13.
   - **`rho_mode`:** to nearest is 2-3 bits better than toward zero and
     removes the bias; down and up are as toward zero in size, their bias of
-    either sign.
+    either sign.  Not for Hopper's FP8: -12.34 in every mode, its 13-bit sum
+    truncated before `rho` rounds; to nearest cuts its bias by about 3.6x
+    and leaves it negative.
+  - **`rho_bits` under CDNA3's to nearest:** one bit of error a bit, -9.5
+    at 7 to -25.6 at 23 (before, only 23 compiled).
   - **`ftz`:** flushing subnormals costs Blackwell's FP8 6 bits (-24.6 to
     -18.5); E4M3's subnormals carry information.  BF16's (FP32's range)
     change nothing.
