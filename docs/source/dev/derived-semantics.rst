@@ -49,16 +49,19 @@ rational number.
    * - ``x``
      - :math:`x`
    * - ``(e1, ..., em)``
-     - :math:`(\, e_1, \ldots, e_m \,)`
+     - :math:`\{\, 1 = e_1, \ldots, m = e_m \,\}`
    * - ``op(e1, ..., ek)``
      - :math:`\mathit{op}(e_1, \ldots, e_k)`
    * - ``xs[i]``
      - :math:`\mathsf{!}\,(xs[i])`
 
-Every other context is a :math:`\mathsf{ctx}\ \{ \ldots \}`. The full language
-provides them as *values*—``fp.FP64`` and the other named contexts—and as
-*context constructors*, functions such as ``fp.IEEEContext`` that build one from
-its parameters.
+A tuple is a record whose labels are its positions.
+
+Every other context is a :math:`\mathsf{ctx}\ e`. The full language provides
+them as *values*—``fp.FP64`` and the other named contexts—and as *context
+constructors*, functions such as ``fp.IEEEContext`` that build one from its
+parameters. Each is :math:`\mathsf{ctx}` applied to a record describing the
+context.
 
 .. note::
 
@@ -139,7 +142,7 @@ these operations are elements of :math:`\mathit{Exact}`.
 
 A chained comparison is the conjunction of adjacent pairwise tests, and all six
 chain. The four ordering tests take numbers, while ``==`` and ``!=`` compare
-lists and tuples element-wise and reject operands of unequal type.
+lists element-wise and tuples field-wise, and reject operands of unequal type.
 
 Effectful expressions
 ~~~~~~~~~~~~~~~~~~~~~
@@ -207,29 +210,9 @@ body runs under the callee's declared context if it has one, else the caller's
 Patterns
 ~~~~~~~~
 
-An assignment's target is a *pattern*. FPy allows a wildcard where the core does
-not, so it takes a fresh variable that nothing reads.
-
-.. list-table::
-   :widths: 42 58
-   :header-rows: 1
-
-   * - FPy pattern
-     - Core pattern
-   * - ``x``
-     - :math:`x`
-   * - ``_``
-     - :math:`t`
-   * - ``p1, ..., pm``
-     - :math:`(\, p_1, \ldots, p_m \,)`
-
-Tuple patterns nest, so ``a, (b, c) = e`` binds all three.
-
-Statements
-~~~~~~~~~~
-
-These follow the core's statement grammar. Only the indexed assignment inserts
-a statement of its own, binding the cell before writing through it.
+An assignment's target is a *pattern*. The core has none: its assignment binds
+a single variable. A wildcard takes a fresh variable that nothing reads, and a
+tuple pattern binds the tuple, then assigns each field to its sub-pattern.
 
 .. list-table::
    :widths: 42 58
@@ -237,8 +220,30 @@ a statement of its own, binding the cell before writing through it.
 
    * - FPy form
      - Core form
-   * - ``p = e``
-     - :math:`p = e`
+   * - ``x = e``
+     - :math:`x = e`
+   * - ``_ = e``
+     - :math:`t = e`
+   * - ``p1, ..., pm = e``
+     - :math:`t = e \,\mathsf{;}\, p_1 = t.1 \,\mathsf{;}\, \cdots
+       \,\mathsf{;}\, p_m = t.m`
+
+Tuple patterns nest, so ``a, (b, c) = e`` binds all three. A tuple whose length
+differs from its pattern's is undefined.
+
+Statements
+~~~~~~~~~~
+
+These follow the core's statement grammar; assignment is covered under
+patterns. Only the indexed assignment inserts a statement of its own, binding
+the cell before writing through it.
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Core form
    * - ``xs[i] = e``
      - :math:`t = xs[i] \,\mathsf{;}\, t := e`
    * - ``e``
@@ -323,7 +328,7 @@ Accessors and casts
 ~~~~~~~~~~~~~~~~~~~
 
 ``fp.fst(pair)`` and ``fp.snd(pair)`` take the halves of a pair. Both require a
-tuple of exactly two elements; a longer one is an error, not a shorter tuple::
+tuple of exactly two elements::
 
     @fp.fpy
     def fst(pair: tuple[Any, Any]) -> Any:
