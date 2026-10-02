@@ -117,6 +117,8 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
     and no storage holds its elements and partial sums"): CDNA1's E-FDPA,
     the two of the 62 MMA-Sim designs that never compiled, and an exact sum
     of FP8 products.
+  - *Arithmetic under such a context:* an Add or an Fma rounding to E8M13
+    toward zero (a tree or a chain of FMAs over FP8) has no signature.
 - **Not blocking a design:** iterating a pointer-backed list (`for t in
   xss[r]`); a `zip` over slice expressions, which `ZipElim` leaves since it
   takes names; a row of a slice, refused.

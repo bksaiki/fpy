@@ -1739,7 +1739,12 @@ class _Emitter(Visitor):
                 want = self._storage(e)
             except StorageSelectionError:
                 want = self._storage(value)
-            return f'libdevice.ldexp({self._emit_as(value, want)}, {n})'
+            if want != TritonScalar.F16:
+                return f'libdevice.ldexp({self._emit_as(value, want)}, {n})'
+            # no `fp16` signature: scale in `fp32`, exactly, then narrow, also
+            # exactly, the product being held in `fp16`
+            wide = f'libdevice.ldexp({self._emit_as(value, TritonScalar.F32)}, {n})'
+            return self._explicit_cast(wide, want)
         return None
 
     def _emit_logb(self, e: Logb) -> str:

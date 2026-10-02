@@ -8,6 +8,7 @@ import pytest
 import fpy2 as fp
 from fpy2.ast.fpyast import FuncDef
 from fpy2.backend.triton import TritonCompiler, TritonEmitError, launch, unavailable
+from fpy2.backend.triton.launcher import _torch_dtype
 from fpy2.backend.triton.unfold_round import UnfoldKind, UnfoldMode, sites, unfold
 from fpy2.number import MPFixedContext, RealFloat
 from fpy2.transform import Monomorphize
@@ -173,12 +174,12 @@ def test_double_round_matches_the_interpreter(target, op):
     torch.manual_seed(0)
     vals = [float(target.round(v)) for v in (torch.randn(n) * 8).tolist()]
     xt = torch.tensor(vals, dtype=torch.float16).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
     launch(src, [xt, ot], block=128)
 
     xs = [target.round(v) for v in vals]
     want = [float(v) for v in k(xs, [target.round(0)] * n, 128)]
-    got = ot.cpu().tolist()
+    got = ot.float().cpu().tolist()
     bad = [(v, g, w) for v, g, w in zip(vals, got, want)
            if not ((math.isnan(g) and math.isnan(w)) or g == w)]
     assert not bad, f'{len(bad)} differ, first: {bad[:3]}'
