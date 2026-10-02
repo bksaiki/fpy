@@ -51,10 +51,11 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(kernels, name, dict(getattr(kernels, name)))
 
 
-def test_register_adds_each_formable_design_once(registry: None) -> None:
+def test_every_point_is_a_design(registry: None) -> None:
+    """None invalid; `register()` adds each, and again without a clash."""
+    assert not [p for p in ALL if generator.invalid(p.design)]
     sweep.register()
-    formable = {generator.name(p.design) for p in ALL if generator.unformable(p.design) is None}
-    assert formable <= set(kernels.TILES)
+    assert {generator.name(p.design) for p in ALL} <= set(kernels.TILES)
     sweep.register()    # again, as a second `local.py --register` would: no clash
 
 

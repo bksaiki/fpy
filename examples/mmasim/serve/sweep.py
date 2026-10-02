@@ -4,8 +4,8 @@ Stage 3): around each anchor design, one parameter at a time over its values,
 every other held at the anchor's; each point's local metrics on cached
 activations; one table.
 
-A point the generator cannot form, or the compiler refuses, is a row with its
-reason.  Every formable point is registered (this file is `local.py`'s
+Every point is a design (`generator`); one the compiler refuses is a row with
+its reason.  Every point is registered (this file is `local.py`'s
 `--register`), compiled in parallel, and the compiled ones of each scheme run
 in one `local.py` pass.  The table, `<results>/sweep/sweep.csv`: a row per
 point -- its anchor, the parameter varied and its value, every parameter, its
@@ -77,7 +77,8 @@ PARAMS: dict[str, tuple[Callable[[generator.Design], Any], list[tuple[Any, Calla
 """Each parameter: how to read it off a design, and its values, each with the
 change that sets it."""
 
-_UNUSED = {'F2': lambda d: d.join != 'separate', 'F': lambda d: d.sum != 'fused'}
+_UNUSED = {'F2': lambda d: d.join != 'separate',
+           'F': lambda d: d.sum != 'fused' and d.join != 'separate'}
 """A parameter an anchor's structure does not read, so not swept around it."""
 
 
@@ -113,10 +114,9 @@ def points(anchors: list[str], params: list[str]) -> list[Point]:
 
 
 def register() -> None:
-    """Every formable point of the full sweep, as `local.py --register` calls
-    it."""
+    """Every point of the full sweep, as `local.py --register` calls it."""
     for d in dict.fromkeys(p.design for p in points(list(ANCHORS), list(PARAMS))):
-        if generator.unformable(d) is None and generator.name(d) not in kernels.TILES:
+        if generator.name(d) not in kernels.TILES:
             kernels.register_design(d)
 
 
@@ -136,9 +136,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     pts = points(args.anchors, args.params)
-    status = {}
-    for d in dict.fromkeys(p.design for p in pts):
-        status[d] = ('unformable', why) if (why := generator.unformable(d)) else ('ok', '')
+    status = {d: ('ok', '') for d in dict.fromkeys(p.design for p in pts)}
     if args.list:
         for p in pts:
             print(f'{p.anchor:24} {p.param:9} {p.value!s:9} {status[p.design][0]:10} '
@@ -188,8 +186,7 @@ def main(argv: list[str]) -> int:
         'argv': sys.argv, **outputs.commit(),
         'settings': {k: v if isinstance(v, (int, list)) else str(v) for k, v in vars(args).items()}})
     print(f'{len(rows)} points, {sum(s == "ok" for s, _ in status.values())} designs measured, '
-          f'{sum(s == "refused" for s, _ in status.values())} refused, '
-          f'{sum(s == "unformable" for s, _ in status.values())} unformable: {out / "sweep.csv"}')
+          f'{sum(s == "refused" for s, _ in status.values())} refused: {out / "sweep.csv"}')
     return 0
 
 
