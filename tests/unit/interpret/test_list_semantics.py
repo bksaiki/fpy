@@ -1,5 +1,5 @@
 """
-Interpreter conformance with the *Lists* section of the derived semantics.
+Interpreter conformance with the list encoding of the expansion page.
 
 An FPy list is a core list of *references* — one cell per element — so the three
 consequences the documentation draws from that encoding are what these tests

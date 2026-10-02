@@ -1,6 +1,6 @@
 """
 `UnfoldZip` and `UnfoldEnumerate` — stating a derived iterable as the
-comprehension `derived-semantics.rst` defines it to be.
+comprehension `builtins.rst` defines it to be.
 """
 
 import pytest

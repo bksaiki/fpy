@@ -81,7 +81,8 @@ Internal
    :maxdepth: 1
    :caption: Table of Contents
 
-   ast
    semantics
-   derived-semantics
+   expansion
+   builtins
    typing
+   ast

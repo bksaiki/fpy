@@ -2,7 +2,7 @@
 Tests for the cpp emitter's list built-ins.  ``sum`` is in ``test_emit_sum.py``.
 
 ``enumerate`` and ``zip`` never reach the emitter: `UnfoldEnumerate` and
-`UnfoldZip` state each as the comprehension `derived-semantics.rst` defines it
+`UnfoldZip` state each as the comprehension `builtins.rst` defines it
 to be, inside `StatementForm`'s fixpoint, and `CompToLoop` lowers that; the
 tuple list is built by the comprehension's own fill loop.
 

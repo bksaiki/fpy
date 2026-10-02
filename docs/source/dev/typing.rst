@@ -20,17 +20,19 @@ Types
 -----
 
 The scalar types mirror the three scalar value kinds — booleans, real numbers,
-and rounding contexts — and are joined by list, tuple, and reference types, one
+and rounding contexts — and are joined by list, record, and reference types, one
 per value kind.
 
 .. math::
 
    T ::= \texttt{bool} \mid \texttt{real} \mid \texttt{context}
        \mid \texttt{list}\ T
-       \mid T_1 \times \cdots \times T_n
+       \mid \{\, l_1 : T_1, \ldots, l_n : T_n \,\}
        \mid \texttt{ref}\ T
 
-Both context constants have type :math:`\texttt{context}`. A reference to a
+A record type's labels are distinct, and record types are identified up to
+permutation of their fields. Every context, whether the literal or constructed,
+has type :math:`\texttt{context}`. A reference to a
 :math:`T` has type :math:`\texttt{ref}\ T`; since a reference is both read and
 written at that one type, :math:`\texttt{ref}` is invariant.
 
@@ -62,12 +64,12 @@ assigns it.
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{true} : \texttt{bool}}
+   \frac{}{\Gamma \vdash \mathsf{true} : \texttt{bool}}
    \tag{T-True}
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{false} : \texttt{bool}}
+   \frac{}{\Gamma \vdash \mathsf{false} : \texttt{bool}}
    \tag{T-False}
 
 .. math::
@@ -82,7 +84,8 @@ assigns it.
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{ctx}\ \{ \ldots \} : \texttt{context}}
+   \frac{\Gamma \vdash e : \{\, l_1 : T_1, \ldots, l_n : T_n \,\}}
+        {\Gamma \vdash \mathsf{ctx}\ e : \texttt{context}}
    \tag{T-Ctx}
 
 .. math::
@@ -90,8 +93,8 @@ assigns it.
    \frac{x : T \in \Gamma}{\Gamma \vdash x : T}
    \tag{T-Var}
 
-A list is homogeneous; indexing recovers the element type. A tuple's type
-records each component.
+A list is homogeneous; indexing recovers the element type. A record's type
+gives each field's type; projection recovers it.
 
 .. math::
 
@@ -108,8 +111,17 @@ records each component.
 .. math::
 
    \frac{\Gamma \vdash e_1 : T_1 \quad \cdots \quad \Gamma \vdash e_n : T_n}
-        {\Gamma \vdash (\, e_1, \ldots, e_n \,) : T_1 \times \cdots \times T_n}
-   \tag{T-Tuple}
+        {\Gamma \vdash \{\, l_1 = e_1, \ldots, l_n = e_n \,\} :
+         \{\, l_1 : T_1, \ldots, l_n : T_n \,\}}
+   \tag{T-Record}
+
+.. math::
+
+   \frac{\Gamma \vdash e : \{\, l_1 : T_1, \ldots, l_n : T_n \,\}
+         \quad
+         l = l_i}
+        {\Gamma \vdash e.l : T_i}
+   \tag{T-Proj}
 
 Dereferencing unwraps a reference type; allocating the reference is a statement
 (see **T-Ref**).
@@ -117,7 +129,7 @@ Dereferencing unwraps a reference type; allocating the reference is a statement
 .. math::
 
    \frac{\Gamma \vdash e : \texttt{ref}\ T}
-        {\Gamma \vdash \texttt{!}\, e : T}
+        {\Gamma \vdash \mathsf{!}\, e : T}
    \tag{T-Deref}
 
 As in :doc:`semantics`, ``+`` and ``<`` are representatives: arithmetic maps
@@ -138,17 +150,13 @@ reals to a real, and comparison maps reals to a boolean.
 Statements
 ^^^^^^^^^^
 
-An assignment checks that its right-hand side's type agrees with the pattern on
-the left. Because :math:`\Gamma` is fixed — every variable already has its
-inferred type — a pattern needs no rules of its own: it is typed by the
-*expression* rules, a variable by **T-Var** and a tuple pattern
-:math:`(\, x_1, \ldots, x_n \,)` like the tuple of the same shape by
-**T-Tuple**.
+An assignment checks that its right-hand side's type agrees with the type
+:math:`\Gamma` assigns the variable.
 
 .. math::
 
-   \frac{\Gamma \vdash e : T \quad \Gamma \vdash p : T}
-        {\Gamma \vdash p = e\ \texttt{ok}}
+   \frac{\Gamma \vdash e : T \quad \Gamma \vdash x : T}
+        {\Gamma \vdash x = e\ \texttt{ok}}
    \tag{T-Assign}
 
 An allocation wraps its operand's type: the variable it binds refers to what the
@@ -157,7 +165,7 @@ right-hand side produced.
 .. math::
 
    \frac{\Gamma \vdash e : T \quad \Gamma \vdash x : \texttt{ref}\ T}
-        {\Gamma \vdash x = \texttt{ref}\ e\ \texttt{ok}}
+        {\Gamma \vdash x = \mathsf{ref}\ e\ \texttt{ok}}
    \tag{T-Ref}
 
 An update writes at the type its target refers to, so the two sides agree only
@@ -182,21 +190,21 @@ result at the signature's result type.
 
 .. math::
 
-   \frac{}{\Gamma \vdash \texttt{skip}\ \texttt{ok}}
+   \frac{}{\Gamma \vdash \mathsf{skip}\ \texttt{ok}}
    \tag{T-Skip}
 
-The :math:`\texttt{ret}` operand may have any type; all returns in a function
+The :math:`\mathsf{ret}` operand may have any type; all returns in a function
 share one type, which becomes the function's result type. An assertion tests a
 boolean.
 
 .. math::
 
-   \frac{\Gamma \vdash e : T}{\Gamma \vdash \texttt{ret}\ e\ \texttt{ok}}
+   \frac{\Gamma \vdash e : T}{\Gamma \vdash \mathsf{ret}\ e\ \texttt{ok}}
    \tag{T-Ret}
 
 .. math::
 
-   \frac{\Gamma \vdash e : \texttt{bool}}{\Gamma \vdash \texttt{assert}\ e\ \texttt{ok}}
+   \frac{\Gamma \vdash e : \texttt{bool}}{\Gamma \vdash \mathsf{assert}\ e\ \texttt{ok}}
    \tag{T-Assert}
 
 Sequencing and conditionals require their parts to be well-typed; a conditional
@@ -205,7 +213,7 @@ also requires a boolean guard.
 .. math::
 
    \frac{\Gamma \vdash s_1\ \texttt{ok} \quad \Gamma \vdash s_2\ \texttt{ok}}
-        {\Gamma \vdash s_1\, \texttt{;}\, s_2\ \texttt{ok}}
+        {\Gamma \vdash s_1\, \mathsf{;}\, s_2\ \texttt{ok}}
    \tag{T-Seq}
 
 .. math::
@@ -213,7 +221,7 @@ also requires a boolean guard.
    \frac{\Gamma \vdash e : \texttt{bool} \quad
          \Gamma \vdash s_1\ \texttt{ok} \quad
          \Gamma \vdash s_2\ \texttt{ok}}
-        {\Gamma \vdash \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2\ \texttt{ok}}
+        {\Gamma \vdash \mathsf{if}\ e\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2\ \texttt{ok}}
    \tag{T-If}
 
 The context statement requires a context-typed expression — evaluating it yields
@@ -224,5 +232,5 @@ the active rounding context for the body — and binds the target to that contex
    \frac{\Gamma \vdash e : \texttt{context} \quad
          x : \texttt{context} \in \Gamma \quad
          \Gamma \vdash s\ \texttt{ok}}
-        {\Gamma \vdash \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s\ \texttt{ok}}
+        {\Gamma \vdash \mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s\ \texttt{ok}}
    \tag{T-Context}
