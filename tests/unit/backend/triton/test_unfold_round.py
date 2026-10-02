@@ -156,10 +156,12 @@ _GPU_WHY = unavailable()
 @pytest.mark.skipif(
     _GPU_WHY is not None and os.environ.get('FPY_REQUIRE_GPU') in (None, '', '0'),
     reason=_GPU_WHY or '')
-@pytest.mark.parametrize('target', [RNA_FP16, fp.MX_E4M3], ids=['fp16_rna', 'e4m3'])
+@pytest.mark.parametrize('target', [RNA_FP16, fp.MX_E4M3, fp.IEEEContext(8, 22, fp.RM.RTZ)],
+                         ids=['fp16_rna', 'e4m3', 'e8m13_rz'])
 @pytest.mark.parametrize('op', ['div', 'sqrt'])
 def test_double_round_matches_the_interpreter(target, op):
-    """Arithmetic the op table has no signature for, bit-for-bit on the GPU."""
+    """Arithmetic the op table has no signature for, bit-for-bit on the GPU;
+    toward zero, through libdevice's directed FP32."""
     import torch
 
     k = _arith_kernels(target)[op]
@@ -173,7 +175,7 @@ def test_double_round_matches_the_interpreter(target, op):
 
     torch.manual_seed(0)
     vals = [float(target.round(v)) for v in (torch.randn(n) * 8).tolist()]
-    xt = torch.tensor(vals, dtype=torch.float16).cuda()
+    xt = torch.tensor(vals, dtype=_torch_dtype(dict(src.dtypes)[0])).cuda()
     ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
     launch(src, [xt, ot], block=128)
 
@@ -181,5 +183,74 @@ def test_double_round_matches_the_interpreter(target, op):
     want = [float(v) for v in k(xs, [target.round(0)] * n, 128)]
     got = ot.float().cpu().tolist()
     bad = [(v, g, w) for v, g, w in zip(vals, got, want)
+           if not ((math.isnan(g) and math.isnan(w)) or g == w)]
+    assert not bad, f'{len(bad)} differ, first: {bad[:3]}'
+
+
+RZ_FP32 = fp.IEEEContext(8, 32, fp.RM.RTZ)
+
+
+def _wide_kernel(target: fp.Context):
+    """A sum of two exact BF16 products, held in FP64 (FP32's range is too
+    small), rounded to *target*."""
+    @fp.fpy(ctx=fp.REAL)
+    def wide(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for i in range(len(xs)):
+            p = xs[i] * ys[i]
+            q = xs[i] * xs[i]
+            with target:
+                y = p + q
+            out[i] = y
+        return out
+
+    return wide
+
+
+_WIDE_TYPES = [ListType(RealType(fp.BF16), NamedId('n'))] * 2 + [
+    ListType(RealType(fp.FP32), NamedId('n')), RealType(fp.INTEGER)]
+
+
+def test_operands_held_wider_are_a_site():
+    """An FP32 add of FP64-held operands; split through FP64 toward zero."""
+    func = Monomorphize.apply(_wide_kernel(RZ_FP32).ast, fp.REAL, _WIDE_TYPES)
+    assert _kinds(func) == [(UnfoldKind.WIDE, RZ_FP32)]
+    assert sites(unfold(func, UnfoldMode.DOUBLE_ROUND)) == []
+
+
+@pytest.mark.skipif(
+    _GPU_WHY is not None and os.environ.get('FPY_REQUIRE_GPU') in (None, '', '0'),
+    reason=_GPU_WHY or '')
+@pytest.mark.parametrize('target', [RZ_FP32, fp.FP32], ids=['rz', 'rne'])
+def test_operands_held_wider_match_the_interpreter(target):
+    """Toward zero composes through FP64 for every operand; to nearest does
+    not (`2 ** -150 + 2 ** -266` lands on a tie), so it stays refused."""
+    import torch
+
+    k = _wide_kernel(target)
+    with pytest.raises(TritonEmitError, match='narrow'):
+        TritonCompiler(drop_asserts=True, unfold=UnfoldMode.ROUNDINGS).compile(
+            k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
+    double = TritonCompiler(drop_asserts=True, unfold=UnfoldMode.DOUBLE_ROUND)
+    if target is fp.FP32:
+        with pytest.raises(TritonEmitError, match='narrow'):
+            double.compile(k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
+        return
+    src = double.compile(k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
+
+    hard = [0.0, -0.0, 2.0 ** -133, -(2.0 ** -133), 2.0 ** -126, 3.0 * 2.0 ** -120,
+            3.3895313892515355e38, -1.5, 1.0, math.inf, math.nan]
+    torch.manual_seed(0)
+    vals = [float(fp.BF16.round(v)) for v in (torch.randn(512) * 8).tolist()]
+    xs = [hard[i % len(hard)] if i % 2 else v for i, v in enumerate(vals)]
+    ys = [hard[(i * 7) % len(hard)] if i % 3 else v for i, v in enumerate(reversed(vals))]
+    dtypes = {i: _torch_dtype(t) for i, t in src.dtypes}
+    xt, yt = (torch.tensor(v, dtype=dtypes[i]).cuda() for i, v in enumerate((xs, ys)))
+    ot = torch.zeros(len(xs), dtype=dtypes[2]).cuda()
+    launch(src, [xt, yt, ot], block=128)
+
+    want = [float(v) for v in k([fp.BF16.round(v) for v in xs], [fp.BF16.round(v) for v in ys],
+                                [fp.FP32.round(0)] * len(xs), 128)]
+    got = ot.cpu().tolist()
+    bad = [(x, y, g, w) for x, y, g, w in zip(xs, ys, got, want)
            if not ((math.isnan(g) and math.isnan(w)) or g == w)]
     assert not bad, f'{len(bad)} differ, first: {bad[:3]}'

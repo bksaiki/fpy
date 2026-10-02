@@ -106,19 +106,28 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
 - **Directed arithmetic** (done, `mmasim-serving.md`, Stage 3 Phase 2):
   Add, Sub, Mul, Div, Fma, Sqrt at FP32 and FP64 rounding toward zero, down
   or up, by libdevice's `add_rz` and the rest.
-- **Two refusals a generated design hits, each needing a design of its
-  own** (not started; `examples/mmasim/tests/test_triton.py`'s `REFUSED`
-  pins them):
-  - *An add of values held wider than its context's storage:* a tree of
-    exact BF16 products holds them in FP64, and an FP64 add narrowed to FP32
-    rounds twice ("would narrow tl.float64 to tl.float32 implicitly").
+- **Double rounding through directed intermediates** (done): `DOUBLE_ROUND`
+  offers FP32 and FP64 toward zero, down and up as intermediates beside to
+  nearest, so `SplitRound`'s Figure 8 admits a directed target through the
+  same mode: an Add or an Fma rounding to E8M13 toward zero (Hopper's tree
+  and chain of FMAs) is FP32's `add_rz` / `fma_rz`, then truncated.
+- **Operands held wider than their context's storage** (done, `UnfoldKind.WIDE`):
+  an FP32 add of exact BF16 products, held in FP64, is split through FP64 at
+  the same mode where the rules allow, found by format inference
+  (`UnfoldTarget.holds`).  Toward zero composes for every operand.
+- **What a generated design still hits** (`examples/mmasim/tests/test_triton.py`'s
+  `REFUSED` pins them):
+  - *The WIDE add to nearest:* no rule admits FP64 to nearest then FP32 to
+    nearest for operands outside FP32's range: two BF16 products summing to
+    `2 ** -150 + 2 ** -266` round in FP64 onto a tie, which FP32 breaks to 0
+    rather than `2 ** -149`.  CDNA3's tree and chain of FMAs; a round-to-odd
+    intermediate (`dadd_rz`, made sticky where inexact) would close it.
   - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
     accumulator spans ~500 bits, which no storage holds ("`sum` is exact,
     and no storage holds its elements and partial sums"): CDNA1's E-FDPA,
     the two of the 62 MMA-Sim designs that never compiled, and an exact sum
-    of FP8 products.
-  - *Arithmetic under such a context:* an Add or an Fma rounding to E8M13
-    toward zero (a tree or a chain of FMAs over FP8) has no signature.
+    of FP8 products.  **Not planned:** it needs error-free transformations
+    to carry the sum across storages.
 - **Not blocking a design:** iterating a pointer-backed list (`for t in
   xss[r]`); a `zip` over slice expressions, which `ZipElim` leaves since it
   takes names; a row of a slice, refused.
