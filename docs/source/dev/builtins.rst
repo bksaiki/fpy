@@ -1,9 +1,10 @@
 Builtins
 ========
 
-The :doc:`expansion <expansion>` page covers FPy's surface syntax; this page
-covers the functions FPy provides. *Primitives* are core operators. Every other
-builtin could be written as an FPy function and is given as an ``@fp.fpy``
+The :doc:`expansion <expansion>` page covers FPy's surface syntax, independent
+of how an implementation spells it; this page covers the names FPy's library
+provides and what they mean. *Primitives* are core operators. Every other
+builtin function could be written as an FPy function and is given as an ``@fp.fpy``
 program: a call expands to that body, under the rounding context where it
 expands; its parameters are the call's arguments.
 
@@ -91,14 +92,33 @@ A chained comparison is the conjunction of adjacent pairwise tests, and all six
 chain. The four ordering tests take numbers, while ``==`` and ``!=`` compare
 lists element-wise and tuples field-wise, and reject operands of unequal type.
 
+Literals
+--------
+
+These are numeric literals spelled as calls: their arguments are literals, not
+expressions. Each denotes its number exactly (**X-Num**).
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Denotes
+   * - ``fp.hexfloat(h)``
+     - the value of the hexadecimal float string ``h``
+   * - ``fp.rational(p, q)``
+     - :math:`p/q`
+   * - ``fp.digits(m, e, b)``
+     - :math:`m \cdot b^{e}`
+
 Contexts
 --------
 
-Every other context is a :math:`\mathsf{ctx}\ e`. The full language provides
-them as *values*—``fp.FP64`` and the other named contexts—and as *context
-constructors*, functions such as ``fp.IEEEContext`` that build one from its
-parameters. Each is :math:`\mathsf{ctx}` applied to a record describing the
-context.
+``fp.REAL`` is the context literal :math:`\R`. Every other context is a
+:math:`\mathsf{ctx}\ e`. The full language provides them as *values*—``fp.FP64``
+and the other named contexts—and as *context constructors*, functions such as
+``fp.IEEEContext`` that build one from its parameters. Each is
+:math:`\mathsf{ctx}` applied to a record describing the context.
 
 Accessors and casts
 -------------------

@@ -3,88 +3,133 @@ Expansion
 
 The :doc:`core semantics <semantics>` page covers a minimal fragment of FPy;
 this page covers the rest of its surface syntax by expanding it into the core.
-The :doc:`builtins <builtins>` page covers the functions FPy provides.
+The :doc:`builtins <builtins>` page covers the names FPy's library provides.
 
-Elaboration is given as *rewrite rules* of two kinds: a syntactic form rewrites
-either directly to core syntax, or to another FPy form. Rewriting to fixpoint
-leaves only core syntax.
+Expansion has three parts. Expressions and statements translate to the core
+compositionally. The core separates effects from expressions: calls,
+allocations, and heap reads are statements or explicit dereferences, so an FPy
+expression may need statements that run before it. *Derived forms* rewrite to
+other FPy forms; every rewrite is a *macro* that substitutes operands in place,
+and a rewrite that repeats an operand binds it to a fresh variable first, so it
+is evaluated once. Throughout, a variable written :math:`t`, :math:`t_1`,
+:math:`t_2`, ``t1``, ``t2``, and so on is fresh.
 
-Every rewrite is a *macro*: elaboration substitutes operands in place. A rewrite
-that repeats an operand binds it to a fresh variable first, so it is evaluated
-once.
+FPy syntax is set in monospace (:math:`\fpy{while e: s}`) and core syntax in
+math (:math:`\mathsf{while}\ e'\ \mathsf{do}\ s'`). A primed metavariable
+names the core counterpart of its FPy namesake. In FPy code, ``ℝ`` is the real
+rounding context, however an implementation spells it.
 
-Translating to core semantics
------------------------------
+Expressions
+-----------
 
-Each syntactic form below has a counterpart in the core. The effectful ones
-reach it by hoisting to statement position first.
+An expression expands to a core statement and a core expression:
 
-Pure expressions
-~~~~~~~~~~~~~~~~
+.. math::
 
-A pure expression translates directly to a core form.
-In the surface syntax, ``n`` is any integer or decimal literal, and
-:math:`\text{to\_rational}(s)` converts a hexadecimal float string to a
-rational number.
+   \fpy{e} \leadsto (s', e')
 
-.. list-table::
-   :widths: 42 58
-   :header-rows: 1
+read ":math:`\fpy{e}` expands to :math:`s'`, after which :math:`e'` computes its
+value". Running :math:`s'` and then evaluating :math:`e'` is equivalent to
+evaluating :math:`\fpy{e}`.
 
-   * - FPy form
-     - Core form
-   * - ``False`` / ``True``
-     - :math:`\mathsf{false}` / :math:`\mathsf{true}`
-   * - ``n``
-     - :math:`n`
-   * - ``fp.hexfloat(s)``
-     - :math:`\exact{\text{to\_rational}(s)}`
-   * - ``fp.rational(p, q)``
-     - :math:`\exact{p/q}`
-   * - ``fp.digits(m, e, b)``
-     - :math:`\exact{m \cdot b^{e}}`
-   * - ``fp.REAL``
-     - :math:`\R`
-   * - ``x``
-     - :math:`x`
-   * - ``(e1, ..., em)``
-     - :math:`\{\, 1 = e_1, \ldots, m = e_m \,\}`
-   * - ``op(e1, ..., ek)``
-     - :math:`\mathit{op}(e_1, \ldots, e_k)`
-   * - ``xs[i]``
-     - :math:`\mathsf{!}\,(xs[i])`
+Constants and variables expand to no statements. A numeric literal
+:math:`\fpy{n}` expands to the number :math:`n` it denotes, exactly: ``0.1`` is
+:math:`1/10`.
 
-A tuple is a record whose labels are its positions.
+.. math::
+
+   \frac{}{\fpy{False} \leadsto (\mathsf{skip}, \mathsf{false})}
+   \qquad
+   \frac{}{\fpy{True} \leadsto (\mathsf{skip}, \mathsf{true})}
+   \tag{X-Bool}
+
+.. math::
+
+   \frac{}{\fpy{n} \leadsto (\mathsf{skip}, n)}
+   \tag{X-Num}
+
+.. math::
+
+   \frac{}{\fpy{ℝ} \leadsto (\mathsf{skip}, \R)}
+   \tag{X-Real}
+
+.. math::
+
+   \frac{}{\fpy{x} \leadsto (\mathsf{skip}, x)}
+   \tag{X-Var}
+
+A compound expression expands its operands left to right and concatenates their
+statements. Operators and tuples add no statements; a tuple is a record whose
+labels are its positions.
+
+.. math::
+
+   \frac{\fpy{ei} \leadsto (s_i', e_i') \quad (1 \le i \le k)}
+        {\fpy{op(e1, ..., ek)} \leadsto
+         (s_1' \,\mathsf{;}\, \cdots \,\mathsf{;}\, s_k',\
+          \mathit{op}(e_1', \ldots, e_k'))}
+   \tag{X-Op}
+
+.. math::
+
+   \frac{\fpy{ei} \leadsto (s_i', e_i') \quad (1 \le i \le m)}
+        {\fpy{(e1, ..., em)} \leadsto
+         (s_1' \,\mathsf{;}\, \cdots \,\mathsf{;}\, s_m',\
+          \{\, 1 = e_1', \ldots, m = e_m' \,\})}
+   \tag{X-Tuple}
+
+Indexing reads the heap, so it binds what it reads: a later operand's
+statements may write the same cell.
+
+.. math::
+
+   \frac{\fpy{e1} \leadsto (s_1', e_1') \quad \fpy{e2} \leadsto (s_2', e_2')}
+        {\fpy{e1[e2]} \leadsto
+         (s_1' \,\mathsf{;}\, s_2' \,\mathsf{;}\, t = \mathsf{!}\,(e_1'[e_2']),\ t)}
+   \tag{X-Index}
+
+A list allocates one cell per element.
+
+.. math::
+
+   \frac{\fpy{ei} \leadsto (s_i', e_i') \quad (1 \le i \le m)}
+        {\fpy{[e1, ..., em]} \leadsto
+         (s_1' \,\mathsf{;}\, \cdots \,\mathsf{;}\, s_m' \,\mathsf{;}\,
+          t_1 = \mathsf{ref}\ e_1' \,\mathsf{;}\, \cdots \,\mathsf{;}\,
+          t_m = \mathsf{ref}\ e_m' \,\mathsf{;}\,
+          t = [\, t_1, \ldots, t_m \,],\ t)}
+   \tag{X-List}
 
 .. note::
 
-   Literals are **exact**; they do not round.
-   For example, ``0.1`` is exactly :math:`1/10`.
+   A list is a list of *references*: construction allocates one cell per
+   element, so a list's value is a list of locations. **E-Update** replaces a
+   cell's contents and no rule changes a list's length, so FPy has no
+   ``append``.
 
-Effectful expressions
-~~~~~~~~~~~~~~~~~~~~~
+A call passes its arguments as a tuple, and the callee binds each parameter to
+its field.
 
-The full FPy language has *effectful* expressions, but the core language does
-not: there, calls and allocations are statements. The translation inserts those
-statements, binding each result to a fresh temporary. Below, a variable written
-:math:`t`, :math:`t_1`, :math:`t_2`, and so on is fresh.
+.. math::
 
-.. list-table::
-   :widths: 42 58
-   :header-rows: 1
+   \frac{\fpy{ei} \leadsto (s_i', e_i') \quad (1 \le i \le k)}
+        {\fpy{f(e1, ..., ek)} \leadsto
+         (s_1' \,\mathsf{;}\, \cdots \,\mathsf{;}\, s_k' \,\mathsf{;}\,
+          t = f\ \{\, 1 = e_1', \ldots, k = e_k' \,\},\ t)}
+   \tag{X-Call}
 
-   * - FPy form
-     - Equivalent FPy form
-   * - ``... f(e) ...``
-     - ``t = f(e) ; ... t ...``
-   * - ``... [e1, ..., em] ...``
-     - ``t = [e1, ..., em] ; ... t ...``
+A conditional expression runs only the branch it takes, so each branch's
+statements stay inside it.
 
-.. note::
+.. math::
 
-   Hoisting is a post-order traversal.
-   For example, ``z = xs[0] + f(xs)`` becomes
-   ``t1 = xs[0] ; t2 = f(xs) ; z = t1 + t2``.
+   \frac{\fpy{e1} \leadsto (s_1', e_1') \quad \fpy{e2} \leadsto (s_2', e_2')
+         \quad \fpy{e3} \leadsto (s_3', e_3')}
+        {\fpy{e2 if e1 else e3} \leadsto
+         (s_1' \,\mathsf{;}\, \mathsf{if}\ e_1'\
+          \mathsf{then}\ (s_2' \,\mathsf{;}\, t = e_2')\
+          \mathsf{else}\ (s_3' \,\mathsf{;}\, t = e_3'),\ t)}
+   \tag{X-Cond}
 
 ``fp.empty(d1, ..., dn)`` allocates too, creating a nested ``d1 x ... x dn``
 list. Its cells start unspecified, so a program that reads one before writing
@@ -92,113 +137,135 @@ it is undefined.
 
 .. admonition:: Open issue
 
-   ``fp.empty`` is the one syntactic form with no rewrite: the core's list
+   ``fp.empty`` is the one syntactic form with no expansion: the core's list
    constructor is fixed-width, so nothing there allocates a run-time number of
    cells. Its semantics is that of a list constructor whose width is a run-time
    value: ``z = fp.empty(n)`` allocates :math:`n` fresh cells and binds ``z`` to
    the list of their locations, nesting for higher dimensions.
 
-Once in statement position, each translates to core syntax.
+Statements
+----------
 
-.. list-table::
-   :widths: 42 58
-   :header-rows: 1
+A statement expands to a core statement:
 
-   * - FPy form
-     - Core form
-   * - ``z = f(e)``
-     - :math:`z = f\ e`
-   * - ``z = [e1, ..., em]``
-     - :math:`t_1 = \mathsf{ref}\ e_1 \,\mathsf{;}\, \cdots \,\mathsf{;}\,
-       t_m = \mathsf{ref}\ e_m \,\mathsf{;}\, z = [\, t_1, \ldots, t_m \,]`
+.. math::
 
-.. note::
+   \fpy{s} \leadsto s'
 
-   A list is a list of *references*: construction allocates one cell per
-   element, so ``z`` binds to a list of locations. **E-Update** replaces a
-   cell's contents and no rule changes a list's length, so FPy has no
-   ``append``.
+Each statement places its expressions' statements before it. A bare expression
+statement keeps only their effects.
 
-A call is **E-App** generalized to many arguments, so the
-function map :math:`\Phi` takes a name to a parameter *list* and a body. The
-body runs under the callee's declared context if it has one, else the caller's
-:math:`C`.
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e') \quad \fpy{p} \triangleright e' \leadsto s_1'}
+        {\fpy{p = e} \leadsto s_0' \,\mathsf{;}\, s_1'}
+   \tag{X-Assign}
+
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e')}
+        {\fpy{e} \leadsto s_0'}
+   \tag{X-Expr}
+
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e')}
+        {\fpy{return e} \leadsto s_0' \,\mathsf{;}\, \mathsf{ret}\ e'}
+   \tag{X-Ret}
+
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e')}
+        {\fpy{assert e} \leadsto s_0' \,\mathsf{;}\, \mathsf{assert}\ e'}
+   \tag{X-Assert}
+
+.. math::
+
+   \frac{}{\fpy{pass} \leadsto \mathsf{skip}}
+   \tag{X-Pass}
+
+An indexed assignment binds the cell before evaluating the value it writes.
+
+.. math::
+
+   \frac{\fpy{e1} \leadsto (s_1', e_1') \quad \fpy{e2} \leadsto (s_2', e_2')
+         \quad \fpy{e3} \leadsto (s_3', e_3')}
+        {\fpy{e1[e2] = e3} \leadsto
+         s_1' \,\mathsf{;}\, s_2' \,\mathsf{;}\, t = e_1'[e_2'] \,\mathsf{;}\,
+         s_3' \,\mathsf{;}\, t := e_3'}
+   \tag{X-Index-Assign}
+
+Compound statements expand their parts.
+
+.. math::
+
+   \frac{\fpy{s1} \leadsto s_1' \quad \fpy{s2} \leadsto s_2'}
+        {\fpy{s1 ; s2} \leadsto s_1' \,\mathsf{;}\, s_2'}
+   \tag{X-Seq}
+
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e') \quad \fpy{s1} \leadsto s_1'
+         \quad \fpy{s2} \leadsto s_2'}
+        {\fpy{if e: s1 else: s2} \leadsto
+         s_0' \,\mathsf{;}\, \mathsf{if}\ e'\ \mathsf{then}\ s_1'\ \mathsf{else}\ s_2'}
+   \tag{X-If}
+
+A loop re-tests its condition each iteration, so the condition's statements run
+before the loop and again at the end of the body.
+
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e') \quad \fpy{s} \leadsto s'}
+        {\fpy{while e: s} \leadsto
+         s_0' \,\mathsf{;}\, \mathsf{while}\ e'\ \mathsf{do}\ (s' \,\mathsf{;}\, s_0')}
+   \tag{X-While}
+
+**E-Context** evaluates a ``with``'s context expression under :math:`\R`, so its
+statements run under :math:`\R` too; the store is not scoped, so their bindings
+remain visible to :math:`e'`.
+
+.. math::
+
+   \frac{\fpy{e} \leadsto (s_0', e') \quad \fpy{s} \leadsto s'}
+        {\fpy{with e as x: s} \leadsto
+         \mathsf{with}\ \R\ \mathsf{as}\ t\ \mathsf{in}\ s_0' \,\mathsf{;}\,
+         \mathsf{with}\ e'\ \mathsf{as}\ x\ \mathsf{in}\ s'}
+   \tag{X-With}
 
 Patterns
 ~~~~~~~~
 
 An assignment's target is a *pattern*. The core has none: its assignment binds
-a single variable. A wildcard takes a fresh variable that nothing reads, and a
-tuple pattern binds the tuple, then assigns each field to its sub-pattern.
+a single variable. Binding a pattern to a core expression expands to core
+statements:
 
-.. list-table::
-   :widths: 42 58
-   :header-rows: 1
+.. math::
 
-   * - FPy form
-     - Core form
-   * - ``x = e``
-     - :math:`x = e`
-   * - ``_ = e``
-     - :math:`t = e`
-   * - ``p1, ..., pm = e``
-     - :math:`t = e \,\mathsf{;}\, p_1 = t.1 \,\mathsf{;}\, \cdots
-       \,\mathsf{;}\, p_m = t.m`
+   \fpy{p} \triangleright e' \leadsto s'
+
+A wildcard drops the value, and a tuple pattern binds the tuple, then binds each
+field to its sub-pattern.
+
+.. math::
+
+   \frac{}{\fpy{x} \triangleright e' \leadsto x = e'}
+   \tag{X-Pat-Var}
+
+.. math::
+
+   \frac{}{\fpy{\_} \triangleright e' \leadsto \mathsf{skip}}
+   \tag{X-Pat-Wild}
+
+.. math::
+
+   \frac{\fpy{pi} \triangleright t.i \leadsto s_i' \quad (1 \le i \le m)}
+        {\fpy{(p1, ..., pm)} \triangleright e' \leadsto
+         t = e' \,\mathsf{;}\, s_1' \,\mathsf{;}\, \cdots \,\mathsf{;}\, s_m'}
+   \tag{X-Pat-Tuple}
 
 Tuple patterns nest, so ``a, (b, c) = e`` binds all three. A tuple whose length
 differs from its pattern's is undefined.
-
-Statements
-~~~~~~~~~~
-
-These follow the core's statement grammar; assignment is covered under
-patterns. Only the indexed assignment inserts a statement of its own, binding
-the cell before writing through it.
-
-.. list-table::
-   :widths: 42 58
-   :header-rows: 1
-
-   * - FPy form
-     - Core form
-   * - ``xs[i] = e``
-     - :math:`t = xs[i] \,\mathsf{;}\, t := e`
-   * - ``e``
-     - :math:`t = e`
-   * - ``s1 ; s2``
-     - :math:`s_1 \,\mathsf{;}\, s_2`
-   * - ``if c: s``
-     - :math:`\mathsf{if}\ c\ \mathsf{then}\ s\ \mathsf{else}\ \mathsf{skip}`
-   * - ``if c: s1 else: s2``
-     - :math:`\mathsf{if}\ c\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2`
-   * - ``while c: s``
-     - :math:`\mathsf{while}\ c\ \mathsf{do}\ s`
-   * - ``return e``
-     - :math:`\mathsf{ret}\ e`
-   * - ``with e as x: s``
-     - :math:`\mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s`
-   * - ``assert e`` / ``assert e, msg``
-     - :math:`\mathsf{assert}\ e`
-   * - ``pass``
-     - :math:`\mathsf{skip}`
-
-A bare expression statement discards its value, so it binds a fresh variable
-that nothing reads; it is worth writing only for the effects inside ``e``.
-**E-Context** evaluates a ``with``'s context expression under :math:`\R`, so
-anything hoisted out of it runs there too, not before the ``with``. A failing
-``assert`` is stuck, so its optional message is dropped.
-
-.. note::
-
-   The rewrite for ``while`` statements assumes ``c`` is already a core expression.
-   A condition that hoists is re-tested each iteration, so its statements run before
-   the loop and again at the end of the body. Writing ``H`` for those statements
-   and ``c'`` for what remains of ``c``::
-
-       H
-       while c':
-           s
-           H
 
 Derived forms
 -------------
@@ -208,16 +275,18 @@ Each syntactic form below rewrites to another term in the full FPy language.
 .. note::
 
    A rewrite whose right side is a statement block is written in assignment
-   position; in expression position the form hoists to a fresh variable first,
-   as a call does. In an ``@fp.fpy`` program, ``return e`` is the assignment to
-   that target.
+   position ``z = e``. In expression position, the form expands through that
+   block:
 
+   .. math::
 
-Conditional expressions
-~~~~~~~~~~~~~~~~~~~~~~~
+      \frac{\fpy{t = e} \leadsto s'}{\fpy{e} \leadsto (s', t)}
 
-The core has no conditional expression, only the statement, so a conditional in
-expression position hoists even though it has no effect.
+Statements
+~~~~~~~~~~
+
+A one-armed conditional has an empty ``else``. A failing ``assert`` is stuck,
+so its optional message is dropped.
 
 .. list-table::
    :widths: 42 58
@@ -225,16 +294,27 @@ expression position hoists even though it has no effect.
 
    * - FPy form
      - Equivalent FPy form
-   * - ``... (a if c else b) ...``
-     - ``t = a if c else b ; ... t ...``
-   * - ``z = a if c else b``
-     - ``if c: z = a else: z = b``
+   * - ``if c: s``
+     - ``if c: s else: pass``
+   * - ``assert e, msg``
+     - ``assert e``
+
+Conditional expressions
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Logical operators and comparison chains rewrite to conditional expressions
+(**X-Cond**).
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Equivalent FPy form
    * - ``a and b``
      - ``b if a else False``
    * - ``a or b``
      - ``True if a else b``
-   * - ``... (a < b <= c) ...``
-     - ``t = a < b <= c ; ... t ...``
    * - ``z = a < b <= c``
      - ``t1 = a ; t2 = b ; z = (t1 < t2) and (t2 <= c)``
 
@@ -252,7 +332,7 @@ Loops and comprehensions
     while t2 < len(t1):
         p = t1[t2]
         s
-        with fp.REAL:
+        with ℝ:
             t2 = t2 + 1
 
 ``z = [e2 for p in e1]`` allocates the result, then fills it. A target may be a
@@ -263,7 +343,7 @@ tuple pattern::
     t2 = 0
     for p in t1:
         z[t2] = e2
-        with fp.REAL:
+        with ℝ:
             t2 = t2 + 1
 
 ``z = [e3 for p1 in e1 for p2 in e2]`` nests, and ``e2`` may mention ``p1``, so
@@ -273,15 +353,30 @@ rows with the rewrite above, then flatten; *k* generators nest the same way::
     t1 = [[e3 for p2 in e2] for p1 in e1]
     t2 = 0
     for t3 in t1:
-        with fp.REAL:
+        with ℝ:
             t2 = t2 + len(t3)
     z = fp.empty(t2)
     t4 = 0
     for t3 in t1:
         for t5 in t3:
             z[t4] = t5
-            with fp.REAL:
+            with ℝ:
                 t4 = t4 + 1
 
-``xs[start:stop]`` is ``slice(xs, start, stop)`` (see :doc:`builtins`).
-``xs[start:]`` is ``xs[start:len(xs)]``, and ``xs[:stop]`` is ``xs[0:stop]``.
+Slices
+~~~~~~
+
+Slice notation calls the ``slice`` builtin (see :doc:`builtins`).
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Equivalent FPy form
+   * - ``xs[start:stop]``
+     - ``slice(xs, start, stop)``
+   * - ``xs[start:]``
+     - ``xs[start:len(xs)]``
+   * - ``xs[:stop]``
+     - ``xs[0:stop]``

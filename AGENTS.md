@@ -106,6 +106,6 @@ The `examples/` directory contains runnable FPy programs organized by topic:
 ## Key Concepts to Know
 
 - **Rounding contexts** control how every operation is rounded. See [docs/USAGE.md](docs/USAGE.md) for details.
-- **Semantics** are specified in two parts: the [core semantics](docs/source/dev/semantics.rst) gives inference rules for a minimal fragment, the [expansion](docs/source/dev/expansion.rst) page expands every remaining surface form into it, and the [builtins](docs/source/dev/builtins.rst) page defines the functions FPy provides.
+- **Semantics** are specified in two parts: the [core semantics](docs/source/dev/semantics.rst) gives inference rules for a minimal fragment, the [expansion](docs/source/dev/expansion.rst) page expands every remaining surface form into it, and the [builtins](docs/source/dev/builtins.rst) page defines the names FPy's library provides.
 - **FPy AST** is the internal representation produced by the frontend and consumed by analyses, transforms, and backends.
 - The `@fpy` decorator (in `decorator.py`) triggers parsing and compilation of the decorated function at definition time.
