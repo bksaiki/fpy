@@ -18,7 +18,8 @@ It consists of two main components:
 | README | [README.md](README.md) | Installation, testing, and quick links |
 | Developer docs | [docs/source/dev/index.rst](docs/source/dev/index.rst) | Internal design documentation |
 | Core semantics | [docs/source/dev/semantics.rst](docs/source/dev/semantics.rst) | Big-step operational semantics for the core language |
-| Derived semantics | [docs/source/dev/derived-semantics.rst](docs/source/dev/derived-semantics.rst) | Elaboration of the full surface language into the core |
+| Expansion | [docs/source/dev/expansion.rst](docs/source/dev/expansion.rst) | Expansion of the surface syntax into the core |
+| Builtins | [docs/source/dev/builtins.rst](docs/source/dev/builtins.rst) | Primitive operators and builtins definable as FPy functions |
 | Online docs | [fpy.readthedocs.io](https://fpy.readthedocs.io/) | Full built documentation |
 
 ## Repository Layout
@@ -105,6 +106,6 @@ The `examples/` directory contains runnable FPy programs organized by topic:
 ## Key Concepts to Know
 
 - **Rounding contexts** control how every operation is rounded. See [docs/USAGE.md](docs/USAGE.md) for details.
-- **Semantics** are specified in two parts: the [core semantics](docs/source/dev/semantics.rst) gives inference rules for a minimal fragment, and the [derived semantics](docs/source/dev/derived-semantics.rst) elaborates every remaining surface form into it.
+- **Semantics** are specified in two parts: the [core semantics](docs/source/dev/semantics.rst) gives inference rules for a minimal fragment, the [expansion](docs/source/dev/expansion.rst) page expands every remaining surface form into it, and the [builtins](docs/source/dev/builtins.rst) page defines the functions FPy provides.
 - **FPy AST** is the internal representation produced by the frontend and consumed by analyses, transforms, and backends.
 - The `@fpy` decorator (in `decorator.py`) triggers parsing and compilation of the decorated function at definition time.

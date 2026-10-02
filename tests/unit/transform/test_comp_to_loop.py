@@ -347,7 +347,7 @@ class TestDependentClauses:
     ])
     def test_a_dependent_clause_list_lowers_by_default(self, f, args):
         """Builds the rows, adds up their lengths, then flattens -- the rewrite
-        ``derived-semantics.rst`` prescribes.  Only the *first* clause is peeled
+        ``expansion.rst`` prescribes.  Only the *first* clause is peeled
         per pass, so the rest become one nested comprehension that a later pass
         takes."""
         func = {'_ragged': _ragged, '_ragged3': _ragged3}[f]

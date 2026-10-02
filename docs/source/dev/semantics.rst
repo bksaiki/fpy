@@ -2,7 +2,7 @@ Core Semantics
 ======================
 
 This page documents the semantics of FPy for a *core* subset of the language.
-The :doc:`derived semantics <derived-semantics>` page covers semantics for
+The :doc:`expansion <expansion>` and :doc:`builtins <builtins>` pages cover
 the full language.
 
 It describes how FPy programs *evaluate*, and in particular how the *rounding
@@ -92,7 +92,7 @@ returns a number that is then rounded under a rounding context :math:`C`
 without rounding (**E-Exact**).
 Operators are written in prefix form even where FPy spells them infix, so
 :math:`x < y` is :math:`\mathit{op}(x, y)`. The
-:doc:`derived semantics <derived-semantics>` page enumerates FPy's operators.
+:doc:`builtins <builtins>` page enumerates FPy's operators.
 
 Values
 ------

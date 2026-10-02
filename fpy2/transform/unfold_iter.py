@@ -1,7 +1,7 @@
 """
 Unfolding ``zip`` and ``enumerate`` into comprehensions.
 
-Both are derived forms, and `derived-semantics.rst` gives each as a
+Both are derived forms, and `builtins.rst` gives each as a
 comprehension over ``range(len(...))``.  Stating that trades a node a consumer
 must special-case for one `CompToLoop` already lowers totally.
 

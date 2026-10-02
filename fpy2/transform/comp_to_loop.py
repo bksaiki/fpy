@@ -248,7 +248,7 @@ class _CompToLoopInstance(SiteRewriter):
 
         `fp.empty` needs the total up front, with no ``append`` and no counting
         an iterable twice.  So build the rows, add up their lengths, then
-        flatten -- ``derived-semantics.rst``'s rewrite.
+        flatten -- ``expansion.rst``'s rewrite.
 
         Split at the *first* clause only: its iterable can read no target, so
         the outer comprehension is independent and the rest become one nested

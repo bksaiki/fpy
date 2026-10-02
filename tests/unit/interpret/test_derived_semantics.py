@@ -1,5 +1,6 @@
 """
-Interpreter checks backing ``docs/source/dev/derived-semantics.rst``.
+Interpreter checks backing ``docs/source/dev/expansion.rst`` and
+``docs/source/dev/builtins.rst``.
 
 Every AST node outside the core fragment is documented there as either
 (i) evaluating like a core rule, (ii) desugaring to a core FPy program, or

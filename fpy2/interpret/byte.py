@@ -1038,7 +1038,7 @@ class BytecodeCompiler(Visitor):
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         """``xs[i] = e``, with each index bound to a name first.
 
-        The derived semantics elaborates this to ``t = xs[i] ; t := e`` --
+        The expansion page elaborates this to ``t = xs[i] ; t := e`` --
         "binding the cell before writing through it" -- so the indices are
         evaluated before the value.  A Python ``Assign`` evaluates its value
         before its target's subscripts, the other way round, so emitting one
