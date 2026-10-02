@@ -3364,6 +3364,47 @@ class TestMagnitudeRefinement:
 
         assert self._af(self._defs(f)['y']).exp == -14 - 24 + 1
 
+    def test_a_lower_test_bounds_logb(self):
+        """``abs(x) >= 2 ** -14``, so ``logb(x) >= -14``, not ``x``'s finest
+        digit; on the other arm, ``x``'s finest digit."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if abs(x) < fp.rational(1, 16384):
+                e = fp.logb(x)
+            else:
+                d = fp.logb(x)
+            return x
+
+        defs = self._defs(f)
+        assert float(self._af(defs['d']).neg_bound) == -14.0
+        assert float(self._af(defs['e']).neg_bound) == -149.0
+
+    def test_a_signed_test_bounds_logb(self):
+        """``x >= 2 ** -14``, ``x <= -2 ** -14``, and the else arms of their
+        converses, say as much of ``abs(x)``; ``x <= 2 ** -14`` nothing."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= fp.rational(1, 16384):
+                a = fp.logb(x)
+            if x < fp.rational(1, 16384):
+                pass
+            else:
+                b = fp.logb(x)
+            if x <= fp.rational(-1, 16384):
+                c = fp.logb(x)
+            if x > fp.rational(-1, 16384):
+                pass
+            else:
+                d = fp.logb(x)
+            if x <= fp.rational(1, 16384):
+                e = fp.logb(x)
+            return x
+
+        defs = self._defs(f)
+        for v in 'abcd':
+            assert float(self._af(defs[v]).neg_bound) == -14.0, v
+        assert float(self._af(defs['e']).neg_bound) == -149.0
+
     def test_a_non_dyadic_literal_refines_nothing(self):
         """A rounded bound could be tighter than the truth."""
         @fp.fpy(ctx=fp.REAL)
