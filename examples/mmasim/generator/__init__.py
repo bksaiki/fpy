@@ -1,27 +1,32 @@
 """
 MMA designs from one parameter vector: the paper's (`models/`), and remixes.
 
-An instruction computes `d = c + sum a_k b_k` over `L` elements in stages:
+An instruction computes `d = c + sum a_k b_k` over `L` elements in stages,
+any choice at each with any at the others:
 
-- **products**, exact or each rounded by `rho`; with `ftz`, subnormal inputs
-  flush to +0 and subnormal results to signed 0;
-- **scales** (`scales`, the scale format): one pair per instruction (MX), or
-  one per group of `G` elements, each group's sum exact (MXFP4, NVFP4);
-- **groups**: `even-odd` splits the products in two, each a truncated sum
-  (CDNA3 FP8);
-- **the block sum**: `fused`, the terms aligned at the largest exponent and
-  truncated past `F` fraction bits; `tree`, pairwise adds each rounded by
-  `rho` (CDNA2); `exact`, rounded once (CDNA1); `fma`, a chain of fused
-  multiply-adds (`L` = 1);
-- **joining `c`** (`fused` only): `inside` the fused sum (NVIDIA), or
-  `separate`, the sum and `c` rounded down at `F2` and `F` bits and added
-  (CDNA3);
+- **terms**: the products, exact or each rounded by `rho`; with `ftz`,
+  subnormal inputs flush to +0 and subnormal results to signed 0; with
+  `scales`, scaled by one pair per instruction (MX), or summed exactly in
+  groups of `G`, each scaled by its pair and aligned at its scales'
+  exponents (MXFP4, NVFP4);
+- **groups**: `even-odd` splits the terms in two, each summed alone, the two
+  combined (CDNA3 FP8);
+- **the block sum**: `fused`, aligned at the largest exponent and truncated
+  past `F` fraction bits; `tree`, pairwise adds each rounded by `rho`
+  (CDNA2); `exact` (CDNA1); `fma`, a chain of adds each rounded by `rho`
+  (fused multiply-adds, its terms the products);
+- **joining `c`**: `inside`, `c` a term of the fused sum (NVIDIA), the last
+  add of a tree or chain, or in the exact sum; or `separate`, the sum and `c`
+  rounded down at `F2` and `F` bits and added (CDNA3);
 - **the output**, rounded by `rho`: the accumulator the next instruction
   takes.
 
 A call chains `k / L` instructions; a scaled design is one instruction.
-Zeros' alignment exponent (`e_zero`) and special values follow each
-structure's model.  :data:`catalog.CATALOG` places every `compile.DESIGNS`
+Special values, zeros' alignment exponent (`e_zero`) and the models' other
+details follow the structure that has them: NVIDIA's for a fused sum joined
+inside, TR-FDPA's (products overflowing at 2^128) joined separate, GTR-FDPA's
+for even-odd groups joined separate, E-FDPA's for an exact sum, IEEE
+arithmetic's for a tree or chain.  :data:`catalog.CATALOG` places every `compile.DESIGNS`
 entry here; at those points :func:`build` computes as its model does, bit for
 bit (`tests/test_generator.py`).
 """
@@ -35,7 +40,6 @@ from typing import Any, Literal
 
 from models import amd, nv
 from models.utils import (
-    dpa_special_values,
     exp_floor,
     exponent,
     fused_sum,
@@ -113,34 +117,19 @@ def name(d: Design) -> str:
     return f'gen.{hashlib.sha256(key.encode()).hexdigest()[:12]}'
 
 
-def unformable(d: Design) -> str | None:
-    """Why *d* cannot be built, or `None`."""
+def invalid(d: Design) -> str | None:
+    """Why *d*'s sizes do not fit together, or `None`: every combination of
+    its stages is a design, but `k`, `L` and `G` must agree."""
     if d.L < 1 or d.k % d.L:
         return f'`k` = {d.k} is not whole instructions of `L` = {d.L}'
-    if d.products == 'rounded' and d.sum != 'tree':
-        return 'rounded products need a `tree` sum'
-    if d.join == 'separate' and d.sum != 'fused':
-        return 'a separate join needs a `fused` sum'
-    if d.groups == 'even-odd' and (d.sum, d.join) != ('fused', 'separate'):
-        return 'even-odd groups need a `fused` sum joined `separate`'
-    if d.groups == 'even-odd' and d.L % 2:
-        return 'even-odd groups need an even `L`'
-    if d.scales is not None:
-        if (d.sum, d.join, d.groups, d.ftz) != ('fused', 'inside', 'none', False):
-            return 'scales need a `fused` sum joined `inside`, no groups, no FTZ'
-        if d.k != d.L:
-            return 'a scaled design is one instruction (`k` = `L`)'
-        if d.G is not None and (d.G < 1 or d.L % d.G):
-            return f'`G` = {d.G} does not divide `L` = {d.L}'
-    elif d.G is not None:
-        return '`G` needs scales'
-    if d.sum == 'tree' and (d.L < 2 or d.L & (d.L - 1)):
-        return 'a tree sums a power of two `L` >= 2'
-    if d.sum == 'fma' and d.L != 1:
-        return 'a chain of FMAs takes `L` = 1'
-    if d.sum == 'fused' and d.join == 'separate':
-        if (z := _e_zero(d)) >= d.a.emin + d.b.emin:
-            return f'`e_zero` = {z} must read below any product'
+    if d.scales is None and d.G is not None:
+        return '`G` is a scale group\'s size: it needs scales'
+    if d.scales is not None and d.k != d.L:
+        return 'a scaled design is one instruction (`k` = `L`)'
+    if d.G is not None and (d.G < 1 or d.L % d.G):
+        return f'`G` = {d.G} does not divide `L` = {d.L}'
+    if d.groups == 'even-odd' and _terms(d) < 2:
+        return 'even-odd groups split two terms or more'
     return None
 
 
@@ -148,26 +137,38 @@ def build(d: Design) -> tuple[fp.Function, list[Any]]:
     """*d*'s function and argument types, as `compile.DESIGNS`' builders give
     them: a chain over `(A, B, c)`, or a scaled instruction over
     `(A, B, c, alpha, beta)` (lists of scales, one per group, with `G`)."""
-    if why := unformable(d):
+    if why := invalid(d):
         raise ValueError(why)
     vecs = [_L(_R(d.a), d.k), _L(_R(d.b), d.k), _R(d.c)]
     if d.scales is not None:
         scale = _R(d.scales) if d.G is None else _L(_R(d.scales), d.L // d.G)
         return (_scaled(d) if d.G is None else _group_scaled(d)), vecs + [scale, scale]
-    block = {('fused', 'inside'): _fused, ('fused', 'separate'): _even_odd if d.groups == 'even-odd'
-             else _separate, ('tree', 'inside'): _tree, ('exact', 'inside'): _exact,
-             ('fma', 'inside'): _fma}[d.sum, d.join](d)
-    return _chain(d, block), vecs
+    if (d.sum, d.join, d.groups, d.products) == ('fma', 'inside', 'none', 'exact'):
+        return _chain(d, _fma(d)), vecs
+    return _chain(d, _flat(d)), vecs
+
+
+def _terms(d: Design) -> int:
+    """How many terms an instruction sums: its products, or its groups."""
+    return d.L if d.G is None else d.L // d.G
+
+
+def _rule(d: Design) -> str:
+    """Whose special values and details *d* follows: `nv` (T-FDPA), `tr`,
+    `gtr`, `sum` (E-FDPA), or `ieee` (its arithmetic's)."""
+    if d.join == 'separate':
+        return 'gtr' if d.groups == 'even-odd' else 'tr'
+    return {'fused': 'nv', 'exact': 'sum'}.get(d.sum, 'ieee')
 
 
 def _e_zero(d: Design) -> int:
     """*d*'s `e_zero`: given, else its model's default."""
     if d.e_zero is not None:
         return d.e_zero
-    if d.scales is not None:
-        return -139 if d.G is not None else nv._default_e_zero(fp.FP32, d.F, False)
     if d.join == 'separate':
         return amd._default_e_zero_tr(d.a, d.b)
+    if d.scales is not None:
+        return -139 if d.G is not None else nv._default_e_zero(fp.FP32, d.F, False)
     return nv._default_e_zero(d.c, d.F, True)
 
 
@@ -177,19 +178,313 @@ def _keep(x, tiny):
     return x
 
 
-def _flushes(d: Design) -> tuple[fp.Function, fp.Function, float, float, float]:
-    """How *d* flushes an input and a result (:func:`_keep` without FTZ), and
-    the thresholds: the inputs' and the output's least normals.  Chosen here,
-    not branched on in FPy: a branch would give a variable two types."""
-    keep_in = amd.flush_subnormal if d.ftz else _keep
-    keep_out = amd.flush_subnormal_signed if d.ftz else _keep
-    return keep_in, keep_out, 2.0 ** d.a.emin, 2.0 ** d.b.emin, 2.0 ** d.rho.emin
+@fp.fpy(ctx=fp.REAL)
+def _same_c(c, es):
+    return c
+
+
+@fp.fpy(ctx=fp.REAL)
+def _specials_of_products(ps, terms, c):
+    """T-FDPA's: of the unscaled products, where they are special; else (a
+    finite product rounded to infinity) of the terms."""
+    if any([not fp.isfinite(x) for x in ps]) or not fp.isfinite(c):
+        return sum_special_values(ps, c)
+    return sum_special_values(terms, c)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _specials_of_terms(ps, terms, c):
+    return sum_special_values(terms, c)
+
+
+class _Parts:
+    """*d*'s pieces, each an FPy function chosen here, not branched on in FPy
+    (a branch would give a variable two types; a list of computed values
+    crosses a call only to be read)."""
+
+    def __init__(self, d: Design) -> None:
+        self.d = d
+        rho, F, rule = d.rho, d.F, _rule(d)
+        self.keep_in = amd.flush_subnormal if d.ftz else _keep
+        self.keep_out = amd.flush_subnormal_signed if d.ftz else _keep
+        self.tiny_a, self.tiny_b = 2.0 ** d.a.emin, 2.0 ** d.b.emin
+        self.tiny_c, self.tiny_o = 2.0 ** d.c.emin, 2.0 ** d.rho.emin
+        self.ex = amd.exponent0 if rule == 'gtr' else exponent
+        self.check = rule != 'ieee'
+        self.special = _specials_of_products if rule == 'nv' else _specials_of_terms
+        keep_out, tiny_o = self.keep_out, self.tiny_o
+
+        @fp.fpy(ctx=fp.REAL)
+        def rnd(x):
+            with rho:
+                z = fp.round(x)
+            return keep_out(z, tiny_o)
+
+        @fp.fpy(ctx=fp.REAL)
+        def add(x, y):
+            with rho:
+                z = fp.round(x + y)
+            return keep_out(z, tiny_o)
+
+        @fp.fpy(ctx=fp.REAL)
+        def overflowed(x):
+            return amd.overflow_inf(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def overflowed_rounded(x):
+            return rnd(amd.overflow_inf(x))
+
+        @fp.fpy(ctx=fp.REAL)
+        def exact(x):
+            return x
+
+        @fp.fpy(ctx=fp.REAL)
+        def drop_c(c, es):
+            """GTR-FDPA's: a NaN or infinite `c` read at exponent -1 is dropped
+            when the products' exponent exceeds `F`."""
+            return 0 if not fp.isfinite(c) and max(es) > F else c
+
+        self.rnd, self.add = rnd, add
+        rounded = d.products == 'rounded'
+        self.term = ({(False, False): exact, (False, True): rnd, (True, False): overflowed,
+                      (True, True): overflowed_rounded}[rule == 'tr', rounded])
+        self.pre_c = drop_c if rule == 'gtr' else _same_c
+        self.finish = _finish(self, _terms(d))
+
+
+def _finish(p: _Parts, n: int) -> fp.Function:
+    """The rest of an instruction, from its *n* terms, their alignment
+    exponents and `c`: the block sum, the groups' combining, the join, the
+    output."""
+    d = p.d
+    if d.groups == 'even-odd':
+        return _finish_even_odd(p, n)
+    F, rho, e_zero, emin_c = d.F, d.rho, _e_zero(d), d.c.emin
+    keep_out, tiny_o, add = p.keep_out, p.tiny_o, p.add
+    if (d.sum, d.join) == ('fused', 'inside'):
+        @fp.fpy(ctx=fp.REAL)
+        def fused_inside(xs, es, c):
+            e_c = e_zero if c == 0 else exponent(c, emin_c)
+            e_max = max(max(es), e_c)
+            s = fused_sum(join(xs, [c]), e_max - F - 1, fp.RM.RTZ)
+            return keep_out(nv.fdpa_round(s, rho), tiny_o)
+        return fused_inside
+    if (d.sum, d.join) == ('exact', 'inside'):
+        @fp.fpy(ctx=fp.REAL)
+        def exact_inside(xs, es, c):
+            s = sum(join(xs, [c]))
+            if s == 0:
+                # an exact zero is +0, even of negative zeros
+                s = 0
+            with rho:
+                r = fp.round(s)
+            return keep_out(r, tiny_o)
+        return exact_inside
+    if (d.sum, d.join) == ('fma', 'inside'):
+        N = n
+
+        @fp.fpy(ctx=fp.REAL)
+        def chain_inside(xs, es, c):
+            acc = c
+            for i in range(N):
+                acc = add(acc, xs[i])
+            return acc
+        return chain_inside
+    tsum, jn = _sum(p, n), _join(p)
+
+    @fp.fpy(ctx=fp.REAL)
+    def flat_finish(xs, es, c):
+        return jn(tsum(xs, es), max(es), c)
+    return flat_finish
+
+
+def _finish_even_odd(p: _Parts, n: int) -> fp.Function:
+    """Even- and odd-index terms each summed, combined, then joined: a fused
+    sum's halves rounded down at `F` and joined as GTR-FDPA joins, or with `c`
+    in one fused sum joined inside; another's added as it adds."""
+    d = p.d
+    F, rho, e_zero, emin_c = d.F, d.rho, _e_zero(d), d.c.emin
+    keep_out, tiny_o, add = p.keep_out, p.tiny_o, p.add
+    N = n
+    s_even, s_odd = _sum(p, (n + 1) // 2), _sum(p, n // 2)
+
+    @fp.fpy(ctx=fp.REAL)
+    def halves_exact(xs, es):
+        return (s_even([xs[i] for i in range(0, N, 2)], [es[i] for i in range(0, N, 2)])
+                + s_odd([xs[i] for i in range(1, N, 2)], [es[i] for i in range(1, N, 2)]))
+
+    @fp.fpy(ctx=fp.REAL)
+    def halves_added(xs, es):
+        return add(s_even([xs[i] for i in range(0, N, 2)], [es[i] for i in range(0, N, 2)]),
+                   s_odd([xs[i] for i in range(1, N, 2)], [es[i] for i in range(1, N, 2)]))
+
+    if (d.sum, d.join) == ('fused', 'separate'):
+        F2 = d.F2
+
+        # GTR-FDPA's, its sums inline: a fixed-point sum passed through a
+        # call loses its format to the backend
+        @fp.fpy(ctx=fp.REAL)
+        def gtr(xs, es, c):
+            e_even = max([es[i] for i in range(0, N, 2)])
+            e_odd = max([es[i] for i in range(1, N, 2)])
+            t_even = fused_sum([xs[i] for i in range(0, N, 2)], e_even - F - 1, fp.RM.RTZ)
+            t_odd = fused_sum([xs[i] for i in range(1, N, 2)], e_odd - F - 1, fp.RM.RTZ)
+            e_dot = max(e_even, e_odd)
+            t = round_down_at(t_even, e_dot - F - 1) + round_down_at(t_odd, e_dot - F - 1)
+            e_c = exponent(c, emin_c)
+            e = max(e_dot, e_c)
+            t = round_down_at(t, e - F2 - 2)
+            cr = 0 if e_c < e - F - 1 else round_down_at(c, e - F - 1)
+            s = t + cr
+            s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
+            with rho:
+                r = fp.round(s)
+            return keep_out(r, tiny_o)
+        return gtr
+    if (d.sum, d.join) == ('fused', 'inside'):
+        @fp.fpy(ctx=fp.REAL)
+        def fused_inside(xs, es, c):
+            e_even = max([es[i] for i in range(0, N, 2)])
+            e_odd = max([es[i] for i in range(1, N, 2)])
+            t_even = s_even([xs[i] for i in range(0, N, 2)], [es[i] for i in range(0, N, 2)])
+            t_odd = s_odd([xs[i] for i in range(1, N, 2)], [es[i] for i in range(1, N, 2)])
+            e_c = e_zero if c == 0 else exponent(c, emin_c)
+            e_max = max(max(e_even, e_odd), e_c)
+            s = fused_sum([t_even, t_odd, c], e_max - F - 1, fp.RM.RTZ)
+            return keep_out(nv.fdpa_round(s, rho), tiny_o)
+        return fused_inside
+    halves = halves_exact if d.sum == 'exact' else halves_added
+    if d.join == 'separate':
+        F2 = d.F2
+
+        @fp.fpy(ctx=fp.REAL)
+        def gtr_join(t, e_dot, c):
+            e_c = exponent(c, emin_c)
+            e = max(e_dot, e_c)
+            t = round_down_at(t, e - F2 - 2)
+            cr = 0 if e_c < e - F - 1 else round_down_at(c, e - F - 1)
+            s = t + cr
+            s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
+            with rho:
+                r = fp.round(s)
+            return keep_out(r, tiny_o)
+        jn = _overflow_guard(d, gtr_join)
+    else:
+        jn = _join(p)
+
+    @fp.fpy(ctx=fp.REAL)
+    def joined(xs, es, c):
+        return jn(halves(xs, es), max(es), c)
+    return joined
+
+
+def _sum(p: _Parts, n: int) -> fp.Function:
+    """The block sum of *n* terms (no `c`), from them and their exponents."""
+    d = p.d
+    F, add, rnd = d.F, p.add, p.rnd
+    if d.sum == 'fused':
+        @fp.fpy(ctx=fp.REAL)
+        def fused(xs, es):
+            return fused_sum(xs, max(es) - F - 1, fp.RM.RTZ)
+        return fused
+    if d.sum == 'exact':
+        @fp.fpy(ctx=fp.REAL)
+        def exact(xs, es):
+            return sum(xs)
+        return exact
+    if d.sum == 'tree':
+        whole = _tree(add, 0, n)
+
+        @fp.fpy(ctx=fp.REAL)
+        def tree(xs, es):
+            return whole(xs)
+        return tree
+
+    REST = n - 1
+
+    # `range(REST)` and an offset: the backend emits no two-argument range
+    @fp.fpy(ctx=fp.REAL)
+    def chain(xs, es):
+        acc = rnd(xs[0])
+        for i in range(REST):
+            acc = add(acc, xs[i + 1])
+        return acc
+    return chain
+
+
+def _tree(add: fp.Function, off: int, n: int) -> fp.Function:
+    """A pairwise tree over *n* terms from *off*: halves at the largest power of
+    two below *n*, adjacent pairs for a power of two."""
+    if n == 1:
+        OFF = off
+
+        @fp.fpy(ctx=fp.REAL)
+        def leaf(xs):
+            return xs[OFF]
+        return leaf
+    h = 1 << ((n - 1).bit_length() - 1)
+    left, right = _tree(add, off, h), _tree(add, off + h, n - h)
+
+    @fp.fpy(ctx=fp.REAL)
+    def node(xs):
+        return add(left(xs), right(xs))
+    return node
+
+
+def _join(p: _Parts) -> fp.Function:
+    """How a block sum `t` (its terms aligned at `e_dot`) takes `c`, and the
+    output: TR-FDPA's separate join; a tree's or chain's last add; an exact
+    sum's single rounding."""
+    d = p.d
+    F, F2, rho, emin_c = d.F, d.F2, d.rho, d.c.emin
+    keep_out, tiny_o, add = p.keep_out, p.tiny_o, p.add
+    if d.join == 'separate':
+        @fp.fpy(ctx=fp.REAL)
+        def separate(t, e_dot, c):
+            e = max(e_dot, exponent(c, emin_c))
+            s = round_down_at(t, e - F2 - 2) + round_down_at(c, e - F - 1)
+            s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
+            with rho:
+                r = fp.round(s)
+            return keep_out(r, tiny_o)
+        return _overflow_guard(d, separate)
+    if d.sum == 'exact':
+        @fp.fpy(ctx=fp.REAL)
+        def exact(t, e_dot, c):
+            # E-FDPA's (an exact zero is +0), for halves' exact sums
+            s = t + c
+            if s == 0:
+                s = 0
+            with rho:
+                r = fp.round(s)
+            return keep_out(r, tiny_o)
+        return exact
+
+    @fp.fpy(ctx=fp.REAL)
+    def last_add(t, e_dot, c):
+        return add(c, t)
+    return last_add
+
+
+def _overflow_guard(d: Design, jn: fp.Function) -> fp.Function:
+    """*jn*, a separate join, but for a tree's or chain's block sum that
+    overflowed: its special value and `c`'s, with no grid to round down to.
+    A fused or exact sum cannot overflow, so has no guard."""
+    if d.sum in ('fused', 'exact'):
+        return jn
+
+    @fp.fpy(ctx=fp.REAL)
+    def guarded(t, e_dot, c):
+        if not fp.isfinite(t) or not fp.isfinite(c):
+            return sum_special_values([t], c)
+        return jn(t, e_dot, c)
+    return guarded
 
 
 def _chain(d: Design, block: fp.Function) -> fp.Function:
     """`k / L` instructions of *block*; with FTZ, `c` flushes first."""
     L, tiny_c = d.L, 2.0 ** d.c.emin
-    keep_in = _flushes(d)[0]
+    keep_in = amd.flush_subnormal if d.ftz else _keep
 
     @fp.fpy(ctx=fp.REAL)
     def chain(A, B, c):
@@ -200,222 +495,98 @@ def _chain(d: Design, block: fp.Function) -> fp.Function:
     return chain
 
 
-def _fused(d: Design) -> fp.Function:
-    """A fused sum with `c` inside, truncated at `F` (T-FDPA).  A product
-    is of flushed inputs; one not 0 has neither flushed, so its exponents read
-    the inputs."""
-    F, rho, e_zero = d.F, d.rho, _e_zero(d)
-    emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
+def _flat(d: Design) -> fp.Function:
+    """An unscaled instruction: its products, each a term aligned at its
+    inputs' exponents (a product not 0 has neither input flushed)."""
+    p = _Parts(d)
+    keep_in, tiny_a, tiny_b, term, ex = p.keep_in, p.tiny_a, p.tiny_b, p.term, p.ex
+    emin_a, emin_b, e_zero = exp_floor(d.a), exp_floor(d.b), _e_zero(d)
+    CHECK, special, pre_c, finish = p.check, p.special, p.pre_c, p.finish
 
     @fp.fpy(ctx=fp.REAL)
-    def fused(A, B, c):
-        prods = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return sum_special_values(prods, c)
-        es = [e_zero if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
-              for p, a, b in zip(prods, A, B)]
-        e_c = e_zero if c == 0 else exponent(c, emin_c)
-        e_max = max(max(es), e_c)
-        s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
-        return keep_out(nv.fdpa_round(s, rho), tiny_o)
-    return fused
+    def flat(A, B, c):
+        ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
+        terms = [term(x) for x in ps]
+        es = [e_zero if t == 0 else ex(a, emin_a) + ex(b, emin_b) for t, a, b in zip(terms, A, B)]
+        c2 = pre_c(c, es)
+        if CHECK:
+            if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c2):
+                return special(ps, terms, c2)
+        return finish(terms, es, c2)
+    return flat
 
 
 def _scaled(d: Design) -> fp.Function:
-    """A fused sum with `c` inside, its products scaled (ST-FDPA)."""
+    """An instruction scaled by one pair: each product scaled, aligned at its
+    inputs' and the scales' exponents (ST-FDPA)."""
     assert d.scales is not None
-    F, rho, e_zero = d.F, d.rho, _e_zero(d)
-    emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    emin_s = d.scales.emin
+    p = _Parts(d)
+    keep_in, tiny_a, tiny_b, term, ex = p.keep_in, p.tiny_a, p.tiny_b, p.term, p.ex
+    emin_a, emin_b, emin_s, e_zero = exp_floor(d.a), exp_floor(d.b), d.scales.emin, _e_zero(d)
+    CHECK, special, pre_c, finish = p.check, p.special, p.pre_c, p.finish
 
     @fp.fpy(ctx=fp.REAL)
     def scaled(A, B, c, alpha, beta):
         if fp.isnan(alpha) or fp.isnan(beta):
             return fp.nan()
-        prods = [a * b * alpha * beta for a, b in zip(A, B)]
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return dpa_special_values(A, B, c)
-        es = [e_zero if p == 0 else
-              exponent(a, emin_a) + exponent(b, emin_b)
-              + exponent(alpha, emin_s) + exponent(beta, emin_s)
-              for p, a, b in zip(prods, A, B)]
-        e_c = e_zero if c == 0 else exponent(c, emin_c)
-        e_max = max(max(es), e_c)
-        s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
-        return nv.fdpa_round(s, rho)
+        ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
+        terms = [term(x * alpha * beta) for x in ps]
+        es = [e_zero if t == 0 else
+              ex(a, emin_a) + ex(b, emin_b) + exponent(alpha, emin_s) + exponent(beta, emin_s)
+              for t, a, b in zip(terms, A, B)]
+        c2 = pre_c(c, es)
+        if CHECK:
+            if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c2):
+                return special(ps, terms, c2)
+        return finish(terms, es, c2)
     return scaled
 
 
 def _group_scaled(d: Design) -> fp.Function:
-    """A fused sum with `c` inside of exact group sums, each scaled and
-    aligned at its scales' exponents (GST-FDPA)."""
+    """An instruction scaled per group: each group of `G` products summed
+    exactly and scaled, aligned at its scales' exponents (GST-FDPA)."""
     assert d.scales is not None and d.G is not None
-    F, rho, e_zero, G = d.F, d.rho, _e_zero(d), d.G
-    emin_c, emin_s = d.c.emin, d.scales.emin
+    p = _Parts(d)
+    keep_in, tiny_a, tiny_b, term = p.keep_in, p.tiny_a, p.tiny_b, p.term
+    G, NG, emin_s, e_zero = d.G, _terms(d), d.scales.emin, _e_zero(d)
+    CHECK, special, pre_c, finish = p.check, p.special, p.pre_c, p.finish
 
     @fp.fpy(ctx=fp.REAL)
     def group_scaled(A, B, c, alphas, betas):
-        n_groups = len(alphas)
         if any([fp.isnan(s1) for s1 in alphas]) or any([fp.isnan(s2) for s2 in betas]):
             return fp.nan()
-        prods = [a * b for a, b in zip(A, B)]
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return dpa_special_values(A, B, c)
-        ts = fp.empty(n_groups)
-        es = fp.empty(n_groups)
-        for g in range(n_groups):
-            group = prods[g * G:(g + 1) * G]
+        ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
+        if CHECK:
+            if any([not fp.isfinite(x) for x in ps]) or not fp.isfinite(c):
+                return special(ps, ps, c)
+        ts = fp.empty(NG)
+        es = fp.empty(NG)
+        for g in range(NG):
+            group = ps[g * G:(g + 1) * G]
             scale = alphas[g] * betas[g]
-            ts[g] = sum(group) * scale
-            if all([p == 0 for p in group]) or scale == 0:
+            ts[g] = term(sum(group) * scale)
+            if all([x == 0 for x in group]) or scale == 0:
                 es[g] = e_zero
             else:
                 es[g] = exponent(alphas[g], emin_s) + exponent(betas[g], emin_s)
-        e_c = e_zero if c == 0 else exponent(c, emin_c)
-        e_max = max(max(es), e_c)
-        s = fused_sum(join(ts, [c]), e_max - F - 1, fp.RM.RTZ)
-        return nv.fdpa_round(s, rho)
+        return finish(ts, es, pre_c(c, es))
     return group_scaled
 
 
-def _separate(d: Design) -> fp.Function:
-    """A fused sum truncated at `F`, then `c` added, each rounded down
-    (TR-FDPA)."""
-    F, F2, rho, e_zero = d.F, d.F2, d.rho, _e_zero(d)
-    emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
-
-    @fp.fpy(ctx=fp.REAL)
-    def separate(A, B, c):
-        prods = [amd.overflow_inf(keep_in(a, tiny_a) * keep_in(b, tiny_b)) for a, b in zip(A, B)]
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return sum_special_values(prods, c)
-        es = [e_zero if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
-              for p, a, b in zip(prods, A, B)]
-        e_dot = max(es)
-        t = fused_sum(prods, e_dot - F - 1, fp.RM.RTZ)
-        e = max(e_dot, exponent(c, emin_c))
-        s = round_down_at(t, e - F2 - 2) + round_down_at(c, e - F - 1)
-        s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
-        with rho:
-            r = fp.round(s)
-        return keep_out(r, tiny_o)
-    return separate
-
-
-def _even_odd(d: Design) -> fp.Function:
-    """Even- and odd-index products each a truncated sum, combined and joined
-    with `c` rounded down (GTR-FDPA)."""
-    F, F2, rho, e_zero = d.F, d.F2, d.rho, _e_zero(d)
-    emin_a, emin_b, emin_c = exp_floor(d.a), exp_floor(d.b), d.c.emin
-    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
-
-    @fp.fpy(ctx=fp.REAL)
-    def even_odd(A, B, c):
-        prods = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
-        es = [e_zero if p == 0 else amd.exponent0(a, emin_a) + amd.exponent0(b, emin_b)
-              for p, a, b in zip(prods, A, B)]
-        L = len(A)
-        e_even = max([es[i] for i in range(0, L, 2)])
-        e_odd = max([es[i] for i in range(1, L, 2)])
-        if not fp.isfinite(c) and max(e_even, e_odd) > F:
-            c = 0
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return sum_special_values(prods, c)
-        t_even = fused_sum([prods[i] for i in range(0, L, 2)], e_even - F - 1, fp.RM.RTZ)
-        t_odd = fused_sum([prods[i] for i in range(1, L, 2)], e_odd - F - 1, fp.RM.RTZ)
-        e_dot = max(e_even, e_odd)
-        t = round_down_at(t_even, e_dot - F - 1) + round_down_at(t_odd, e_dot - F - 1)
-        e_c = exponent(c, emin_c)
-        e = max(e_dot, e_c)
-        t = round_down_at(t, e - F2 - 2)
-        cr = 0 if e_c < e - F - 1 else round_down_at(c, e - F - 1)
-        s = t + cr
-        s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
-        with rho:
-            r = fp.round(s)
-        return keep_out(r, tiny_o)
-    return even_odd
-
-
-def _tree(d: Design) -> fp.Function:
-    """Pairwise adds of the products, then `c`, each rounded by `rho`
-    (FTZ-AddMul, `L` = `P`): adjacent pairs, then pairs of those."""
-    rho = d.rho
-    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
-
-    @fp.fpy(ctx=fp.REAL)
-    def exact_mul(x, y):
-        return keep_in(x, tiny_a) * keep_in(y, tiny_b)
-
-    @fp.fpy(ctx=fp.REAL)
-    def rounded_mul(x, y):
-        with rho:
-            z = fp.round(keep_in(x, tiny_a) * keep_in(y, tiny_b))
-        return keep_out(z, tiny_o)
-
-    mul = rounded_mul if d.products == 'rounded' else exact_mul
-
-    @fp.fpy(ctx=fp.REAL)
-    def add(x, y):
-        with rho:
-            z = fp.round(x + y)
-        return keep_out(z, tiny_o)
-
-    @fp.fpy(ctx=fp.REAL)
-    def pair(A, B):
-        return add(mul(A[0], B[0]), mul(A[1], B[1]))
-
-    node = pair
-    for n in (1 << j for j in range(2, d.L.bit_length())):
-        node = _halves(add, node, n)
-    whole = node
-
-    @fp.fpy(ctx=fp.REAL)
-    def tree(A, B, c):
-        return add(c, whole(A, B))
-    return tree
-
-
-def _halves(add: fp.Function, half: fp.Function, n: int) -> fp.Function:
-    """A tree over *n* elements: *half* over each half, added.  Scalars only:
-    the backend holds no list of computed values across a call."""
-    H, N = n // 2, n
-
-    @fp.fpy(ctx=fp.REAL)
-    def halves(A, B):
-        return add(half(A[0:H], B[0:H]), half(A[H:N], B[H:N]))
-    return halves
-
-
-def _exact(d: Design) -> fp.Function:
-    """The products and `c` summed exactly, rounded once (E-FDPA)."""
-    rho = d.rho
-    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
-
-    @fp.fpy(ctx=fp.REAL)
-    def exact(A, B, c):
-        prods = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return sum_special_values(prods, c)
-        s = sum(join(prods, [c]))
-        if s == 0:
-            s = 0
-        with rho:
-            r = fp.round(s)
-        return keep_out(r, tiny_o)
-    return exact
-
-
 def _fma(d: Design) -> fp.Function:
-    """A fused multiply-add rounded by `rho` (`L` = 1)."""
-    rho = d.rho
-    keep_in, keep_out, tiny_a, tiny_b, tiny_o = _flushes(d)
+    """A chain of fused multiply-adds of the (flushed) inputs from `c`, each
+    rounded by `rho`: an FMA's datapath, as Triton's `tl.fma` computes it."""
+    rho, L = d.rho, d.L
+    keep_in = amd.flush_subnormal if d.ftz else _keep
+    keep_out = amd.flush_subnormal_signed if d.ftz else _keep
+    tiny_a, tiny_b, tiny_o = 2.0 ** d.a.emin, 2.0 ** d.b.emin, 2.0 ** d.rho.emin
 
     @fp.fpy(ctx=fp.REAL)
     def fma(A, B, c):
-        with rho:
-            r = fp.fma(keep_in(A[0], tiny_a), keep_in(B[0], tiny_b), c)
-        return keep_out(r, tiny_o)
+        acc = c
+        for i in range(L):
+            with rho:
+                acc = fp.fma(keep_in(A[i], tiny_a), keep_in(B[i], tiny_b), acc)
+            acc = keep_out(acc, tiny_o)
+        return acc
     return fma

@@ -2,8 +2,7 @@
 The sweep's graphs from `sweep.py`'s table alone: for each local metric, a
 panel per parameter, how each anchor's design measures as that parameter
 varies and the rest hold.  A line per anchor (its colour and marker); its own
-value ringed; a point not measured (unformable, or refused by the compiler)
-an x on the panel's floor.  A categorical parameter's points are not joined:
+value ringed; a point the compiler refused an x on the panel's floor.  A categorical parameter's points are not joined:
 its values have no order.  Writes `<results>/plots/sweep/<metric>.png`.
 
     python serve/plot_sweep.py                      # from examples/mmasim
@@ -137,7 +136,7 @@ def figure(rows: list[dict], metric: str, out: Path) -> None:
                                      [next(r['scheme'] for r in rows if r['anchor'] == a) for a in anchors])]
     handles += [plt.Line2D([], [], color=MUTED, marker='o', markersize=11, markerfacecolor='none',
                            linestyle='', label="the anchor's own value"),
-                plt.Line2D([], [], color=MUTED, marker='x', linestyle='', label='not measured')]
+                plt.Line2D([], [], color=MUTED, marker='x', linestyle='', label='refused by the compiler')]
     fig.legend(handles=handles, loc='outside upper center', ncol=min(4, len(handles)), fontsize=8,
                frameon=False)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -698,14 +698,14 @@ function and its argument types, as `compile.DESIGNS`' builders do.
 
 | stage | parameter | choices | existing designs |
 |---|---|---|---|
-| products | `products` | `exact`; `rounded`, each by `rho` | exact; rounded (CDNA2) |
+| terms | `products` | `exact`; `rounded`, each by `rho` | exact; rounded (CDNA2) |
 | | `ftz` | flush subnormal inputs to +0, results to signed 0 | on (CDNA2) |
 | | `scales`, `G` | none; a scale pair per instruction; one per group of `G`, each group's sum exact | MX; MXFP4/NVFP4 (`G` 16) |
-| groups | `groups` | `none`; `even-odd`, each half a truncated sum | even-odd (CDNA3 FP8) |
-| block sum | `sum` | `fused`, aligned and truncated past `F` bits; `tree`, pairwise adds rounded by `rho`; `exact`, rounded once; `fma` | fused (NV, CDNA3); tree (CDNA2); exact (CDNA1); fma (FP64/FP32) |
+| groups | `groups` | `none`; `even-odd`, each half summed alone, then combined | even-odd (CDNA3 FP8) |
+| block sum | `sum` | `fused`, aligned and truncated past `F` bits; `tree`, pairwise adds rounded by `rho`; `exact`; `fma`, a chain of adds each rounded by `rho` | fused (NV, CDNA3); tree (CDNA2); exact (CDNA1); fma (FP64/FP32) |
 | | `F` | fraction bits kept | 13, 23-25, 35 |
 | | `L` | elements per instruction | 1 (FMA) - 64 |
-| joining `c` | `join` (`fused` only) | `inside` the sum; `separate`, rounded down at `F2` and `F` bits and added | inside (NV); separate (CDNA3) |
+| joining `c` | `join` | `inside` (a fused sum's term, a tree's or chain's last add, in an exact sum); `separate`, the sum and `c` rounded down at `F2` and `F` bits and added | inside (NV); separate (CDNA3) |
 | | `F2` | | 31 (CDNA3) |
 | output | `rho` | precision, rounding mode: the accumulator format the next instruction's `c` is in | RZ FP32, RZ E8M13 (NV FP8), RNE FP16, RNE FP32 (AMD) |
 | per structure | `e_zero` (`None`: the model's default), special values | as the models derive them | not swept |
@@ -718,17 +718,34 @@ function and its argument types, as `compile.DESIGNS`' builders do.
 - **A catalog** (`generator/catalog.py`) maps each `compile.DESIGNS` entry
   to its `Design`.  At those points the generator agrees with the model bit
   for bit; that is what makes a remixed point a model of something.
-- **`e_zero` and special-value semantics** follow each structure's model
-  (`fused` inside: NVIDIA's `dpa_special_values` and overflow to infinity;
-  `separate` and `exact`: AMD's `sum_special_values`, with TR-FDPA's product
-  overflow; `even-odd`: GTR-FDPA's reading of NaN and infinity): carried for
-  that agreement, not swept.
-- **What is formable** (`unformable` gives the reason otherwise): rounded
-  products only in a `tree`; a `separate` join and `even-odd` groups only on
-  a `fused` sum; scales only on a `fused` sum joined `inside`, without FTZ
-  or groups, one instruction per call (`k` = `L`), `G` dividing `L`; a
-  `tree` over a power of two `L`; `fma` at `L` = 1.  Every other
-  combination builds, FTZ included on every sum.
+- **`e_zero` and special-value semantics** follow the structure whose model
+  has them (`_rule`): NVIDIA's for a fused sum joined inside; TR-FDPA's
+  (products overflowing at 2^128) joined separate; GTR-FDPA's (NaN and
+  infinity read at exponent -1) for even-odd groups joined separate;
+  E-FDPA's for an exact sum; IEEE arithmetic's for a tree or chain.  Carried
+  for that agreement, not swept.
+- **Every combination of the stages is a design** (since 2026-10-01; earlier,
+  21 were refused as "unformable").  The definitions the paper's models do
+  not give: a chain of FMAs reads no `L` (it rounds after every element); a
+  separate join takes any block sum `t`; even-odd halves are summed by the
+  block sum and combined as it adds (a fused sum's rounded down at `F`, as
+  GTR-FDPA's), joined inside in one fused sum with `c`; a tree over any `L`
+  halves at the largest power of two below it; rounded products, scales and
+  FTZ with any sum.  `invalid` refuses only sizes that disagree: `k` not
+  whole instructions, `G` without scales or not dividing `L`, a scaled
+  design longer than one instruction, even-odd groups of one term.  A tree
+  or chain joined separate that overflows returns its special value: a
+  fused or exact sum cannot.
+- **How it is written:** three block bodies, one per call signature
+  (unscaled, scaled per instruction, per group), each making the terms,
+  their alignment exponents and special values, then a `finish` chosen in
+  Python from small FPy pieces (the block sum over a list, the even-odd
+  combine, the join).  The backend constrains the shape: a computed list
+  crosses a call only to be read, a fixed-point sum loses its format across
+  a call (GTR-FDPA's finish keeps its sums inline), a closure-constant
+  branch must not give a variable two types, no loop-carried integer or
+  `**`.  The generator compiles the catalog as the models do (60 of 62, the
+  same 2 refused).
 
 #### The sweep
 
@@ -738,9 +755,8 @@ function and its argument types, as `compile.DESIGNS`' builders do.
   Blackwell FP8 (`nv.blackwell.e4m3.f32`), Hopper BF16, Ampere BF16, CDNA3
   BF16; more are identified along the way.
 - **Ranges go past existing hardware** (`L` to 64 and beyond, `F` to 35
-  under FP8, ...): what is plausible is not the question.  A point the
-  generator cannot form (`G` not dividing `L`, `L` not dividing the
-  workload's `k`) is skipped and recorded, not silently dropped.
+  under FP8, ...): what is plausible is not the question.  Every point is a
+  design; one the compiler refuses is recorded with its reason.
 - **Categorical parameters** (`block_sum`, `join`, `products`, `layout`,
   `rho`'s mode, `ftz`) sweep over their choices, plotted as categories.
 - **Input formats are not swept:** they choose the scheme, so the workload.
@@ -759,7 +775,7 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
 - **A table**, `<results>/sweep/sweep.csv`: one row per evaluated design -
   its anchor, the parameter varied and its value, every parameter, every
-  metric - and the skipped points with their reason.
+  metric - and the points the compiler refused, with its reason.
 - **Cached activations** under `<results>/cache/`.
 - **The plots** from the table alone (`serve/plot_sweep.py`), replayable,
   in `<results>/plots/sweep/`: a grid of panels, one per `(P_i, M_j)`, a
@@ -930,20 +946,22 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 
 ##### Phase 5 - The full sweep
 
-**Done** (2026-10-01; Qwen3-0.6B, 2048 tokens, `results/sweep/`).
-- **The run:** 188 points, 152 designs: 126 measured, 15 refused by the
-  compiler, 11 unformable.  Compiling 14 s (every kernel cached by the run
-  the background limit stopped, ~10 min of compiling at 8 processes); the
-  `bf16` pass 24 min (87 designs), `fp8-row` 9 min (54); run detached
-  (`nohup`), past the tool's 30-minute background limit.
+**Done** (2026-10-01; Qwen3-0.6B, 2048 tokens, `results/sweep/`; rerun after
+every combination of stages became a design).
+- **The run:** 188 points, 152 designs: 133 measured, 19 refused by the
+  compiler, none unformable.  Compiling ~2 min at 8 processes (every design
+  anew: the kernel cache's key covers the generator's source); the `bf16`
+  pass ~30 min, `fp8-row` ~10; run detached (`nohup`), past the tool's
+  30-minute background limit.
 - **Refused** (`sweep.csv`'s `reason`; the Triton backend, "What is left"):
-  - rounding to a precision below FP32's other than toward zero (8 points:
-    Hopper's E8M13 output to nearest, down or up; CDNA3's output at 7-19
-    bits to nearest): "storing tl.float64 through a tl.float32 pointer would
-    round";
-  - Hopper's tree, its adds rounding to E8M13 toward zero: no Add under that
-    context;
-  - the trees of exact products and the exact sums, as Phase 2 found.
+  - 8: rounding to a precision below FP32's other than toward zero (Hopper's
+    E8M13 output to nearest, down or up; CDNA3's output at 7-19 bits to
+    nearest);
+  - 5: an exact sum (four anchors' `sum` = `exact`, and CDNA3's);
+  - 4: exact BF16 products held in FP64 and added under FP32, which rounds
+    twice (the BF16 trees, CDNA3's chain of FMAs);
+  - 2: an Add or an Fma rounding to E8M13 toward zero (Hopper's tree and
+    chain of FMAs).
 - **What the graphs show** (`results/plots/sweep/`; normwise backward
   error, log2, unless said):
   - **`F` and `rho_bits` trade one for one until the other limits:** each
@@ -965,8 +983,12 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
     NVIDIA's inside one for the BF16 designs; for Hopper's FP8 its round-down
     at 13 bits makes its bias ten times larger (-1090 u).
   - **`F2`** (CDNA3): error falls until 28 bits, flat past.
-  - **`groups`:** even-odd only formable for CDNA3, where it changes nothing
-    under BF16.
+  - **`groups`:** even-odd groups barely move the BF16 designs or
+    Blackwell; Hopper's FP8 gains 2 bits (-12.3 to -14.3): each half
+    truncates at its own largest exponent.
+  - **`sum`:** a chain of FMAs is 2.5-4 bits worse than the fused sum (BF16
+    -19.6, Blackwell's FP8 -20.8), a rounding per element; Blackwell's tree
+    -24.4, as its fused sum -24.6.
 
 ##### After the last phase
 

@@ -1,8 +1,8 @@
 """
 The generator (`generator/`) against the paper's models: at every catalog
 point it computes as `compile.DESIGNS`' builder does, bit for bit, under the
-interpreter; a design it cannot form is refused; and two structures agree
-where they must.
+interpreter; every combination of its stages is a design, only sizes that
+disagree refused; and structures agree where they must.
 
     pytest -n 8 tests/test_generator.py
 """
@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from compile import DESIGNS, _fmt, _length, _row, _same
-from generator import Design, build, unformable
+from generator import Design, build, invalid
 from generator.catalog import CATALOG
 
 import fpy2 as fp
@@ -79,31 +79,60 @@ def test_a_fused_sum_wide_enough_is_exact() -> None:
 
 @pytest.mark.parametrize('design, why', [
     (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 12), 'whole instructions'),
-    (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 8, products='rounded'), 'rounded products'),
-    (Design(fp.BF16, fp.BF16, fp.FP32, 6, fp.FP32, 6, sum='tree'), 'power of two'),
-    (Design(fp.FP32, fp.FP32, fp.FP32, 2, fp.FP32, 4, sum='fma'), '`L` = 1'),
-    (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 8, sum='exact', join='separate'), 'separate join'),
-    (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 8, groups='even-odd'), 'even-odd'),
     (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 16, scales=fp.MX_E8M0), 'one instruction'),
     (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 8, scales=fp.MX_E8M0, G=3), 'does not divide'),
     (Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 8, G=4), 'needs scales'),
+    (Design(fp.BF16, fp.BF16, fp.FP32, 1, fp.FP32, 4, groups='even-odd'), 'two terms'),
 ])
-def test_an_unformable_design_is_refused(design: Design, why: str) -> None:
-    assert why in (unformable(design) or '')
+def test_sizes_that_disagree_are_refused(design: Design, why: str) -> None:
+    assert why in (invalid(design) or '')
     with pytest.raises(ValueError, match=why.replace('`', '.')):
         build(design)
 
 
-@pytest.mark.parametrize('remix', [
-    Design(fp.BF16, fp.BF16, fp.FP32, 16, fp.FP32, 32, join='separate', F=13),
-    Design(fp.FP16, fp.FP16, fp.FP32, 8, nv_rz := fp.IEEEContext(8, 32, fp.RM.RTZ), 16, ftz=True),
-    Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 16, sum='tree'),
-    Design(fp.BF16, fp.BF16, fp.FP32, 4, nv_rz, 8, sum='exact', ftz=True),
-])
-def test_a_remix_builds_and_runs(remix: Design) -> None:
-    """Mixes no model has (NVIDIA's chain joined as CDNA3 joins, FTZ on a
-    fused sum, a wider tree of exact products) build and run on every mix."""
-    f, types = build(remix)
+def _combinations() -> list[Design]:
+    """Every combination of the stages, unscaled (BF16) and scaled (MXFP8, per
+    instruction and per group of 16), at `L` = 32."""
+    out = []
+    for sum_ in ('fused', 'tree', 'exact', 'fma'):
+        for join_ in ('inside', 'separate'):
+            for groups in ('none', 'even-odd'):
+                for products in ('exact', 'rounded'):
+                    for ftz in (False, True):
+                        stages = {'sum': sum_, 'join': join_, 'groups': groups,
+                                  'products': products, 'ftz': ftz}
+                        out.append(Design(fp.BF16, fp.BF16, fp.FP32, 32, fp.FP32, 32, **stages))
+                        for G in (None, 16):
+                            out.append(Design(fp.MX_E4M3, fp.MX_E4M3, fp.FP32, 32, RZ, 32, F=25,
+                                              scales=fp.MX_E8M0, G=G, **stages))
+    return out
+
+
+RZ = fp.IEEEContext(8, 32, fp.RM.RTZ)
+
+
+@pytest.mark.parametrize('design', _combinations(), ids=lambda d: (
+    f'{d.sum}-{d.join}-{d.groups}-{d.products}-{"ftz" if d.ftz else "noftz"}-'
+    f'{"unscaled" if d.scales is None else "G" + str(d.G)}'))
+def test_every_combination_is_a_design(design: Design) -> None:
+    """None is refused; each builds and runs on every mix of inputs."""
+    assert invalid(design) is None
+    f, types = build(design)
     rng = random.Random(0)
     for mix in MIXES:
-        float(f(*[_draw(t, rng, mix) for t in types]))
+        for _ in range(3):
+            float(f(*[_draw(t, rng, mix) for t in types]))
+
+
+def test_a_chain_of_fmas_does_not_read_l() -> None:
+    """An FMA rounds after every element, whatever the instruction's length."""
+    one = CATALOG['fp32 (fma)']
+    (f0, types), (f1, _) = build(one), build(replace(one, L=4))
+    assert not (bad := _agree(f0, f1, types)), f'{len(bad)} differ, first: {bad[0]}'
+
+
+def test_an_exact_sum_split_even_and_odd_is_the_exact_sum() -> None:
+    """Exact sums of halves, added exactly: the same exact sum, rounded once."""
+    cdna1 = CATALOG['amd.cdna1.f16']
+    (f0, types), (f1, _) = build(cdna1), build(replace(cdna1, groups='even-odd'))
+    assert not (bad := _agree(f0, f1, types)), f'{len(bad)} differ, first: {bad[0]}'
