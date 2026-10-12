@@ -129,8 +129,9 @@ def _samples(ctx) -> list:
         B,                                          # the bound itself
         ctx.infval().as_real(),                     # certain overflow
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
-        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # between bound and infval
-        RealFloat(exp=B.exp, c=B.c + 1),            # the tie above the bound
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 1),    # below the tie
+        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # the tie: midpoint of bound and infval
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 3),    # above the tie
         RealFloat(exp=B.exp + 1, c=B.c),            # well past
         RealFloat(exp=B.exp + 40, c=B.c),
         RealFloat(exp=ctx.expmin, c=1),             # smallest subnormal
@@ -151,7 +152,9 @@ def _fixed_samples(ctx) -> list:
     points = [
         B, N, ctx.infval().as_real(), ctx.infval(s=True).as_real(),
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
-        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # just above it
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 1),    # below the tie
+        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # the tie: midpoint of bound and infval
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 3),    # above the tie
         RealFloat(exp=B.exp + 1, c=B.c),            # well past
         RealFloat(exp=B.exp + 30, c=B.c),
         RealFloat(exp=ctx.nmin, c=1),               # too fine to represent
@@ -711,18 +714,8 @@ class TestEquivalence:
         f = _quantizer(ctx)
         out = UnfoldOverflow.apply(f.ast)
         xs = _samples(ctx) + [0.1, -0.1, 65519.0, 65519.996, -65519.996, 1.0009765625]
-        xs += [65510.0, -65510.0, 65528.0, -65528.0]
         for x in xs:
             assert _same(_eval(out, f, x), f(x)), (rm, x)
-
-    def test_overflow_boundary(self):
-        """Rounding at the top of the range decides between the bound and an
-        infinity; the comparison must make the same call."""
-        f = _quantizer(fp.FP16)
-        out = UnfoldOverflow.apply(f.ast)
-        for x in (65504.0, 65515.0, 65519.0, 65519.996, 65520.0, 65536.0, 1e5, 1e10):
-            for sx in (x, -x):
-                assert _same(_eval(out, f, sx), f(sx)), sx
 
 
 # ----------------------------------------------------------------------

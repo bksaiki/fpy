@@ -2685,8 +2685,7 @@ class CppEmitter(Visitor):
                 common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
             except StorageSelectionError as err:
                 # the types do not nest, but an exact comparison only needs
-                # the values to: `double` holds an `int64_t` literal like
-                # `-2147483649`, though not every `int64_t`
+                # the values to
                 common = next((
                     t for _, t in pair
                     if all(self._value_fits(self._bound_of(a), s, t) for a, s in pair)

@@ -222,19 +222,19 @@ def _bound(
     `infval`, so probing a point on each side of the midpoint, and the
     midpoint itself, settles both the threshold and whether it is included.
     """
-    gt, ge = (CompareOp.LT, CompareOp.LE) if maxval.s else (CompareOp.GT, CompareOp.GE)
+    strict, loose = (CompareOp.LT, CompareOp.LE) if maxval.s else (CompareOp.GT, CompareOp.GE)
 
     def over(x: RealFloat) -> bool:
-        return _holds(u.round(x), gt, maxval)
+        return _holds(u.round(x), strict, maxval)
 
     mid = shift(maxval + infval, -1)
     if over(shift(maxval + mid, -1)):
-        return gt, maxval
+        return strict, maxval
     if over(mid):
-        return ge, mid
+        return loose, mid
     if over(shift(mid + infval, -1)):
-        return gt, mid
-    return ge, infval
+        return strict, mid
+    return loose, infval
 
 
 class _Prober:
@@ -504,9 +504,11 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         def assign(v: Expr) -> StmtBlock:
             return StmtBlock([Assign(target, None, v, loc)])
 
+        # the finiteness test only for an operand that can be infinite
+        finite = src.check_finite and bool(cls & (ValueClass.NAN | ValueClass.INF))
+
         def past(
             bound: tuple[CompareOp, RealFloat], over: Float, rest: StmtBlock,
-            finite: bool,
         ) -> StmtBlock:
             """`rest`, behind a branch taking the operand past `bound`."""
             op, b = bound
@@ -533,13 +535,8 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
                 assign(Integer(0, loc)), rest, loc,
             )])
         body = StmtBlock([rounding, *rest.stmts])
-
-        # an operand whose rounding would overflow, whichever side it leaves
-        # by; the finiteness test keeps an infinity from being claimed as an
-        # overflow, and an operand that cannot be one does not need it
-        g = src.check_finite and bool(cls & (ValueClass.NAN | ValueClass.INF))
-        body = past(src.neg_bound, src.over_neg, body, g)
-        body = past(src.pos_bound, src.over_pos, body, g)
+        body = past(src.neg_bound, src.over_neg, body)
+        body = past(src.pos_bound, src.over_pos, body)
 
         # a special value the checks and the rounding would not reproduce --
         # unless the operand is never that kind of value
