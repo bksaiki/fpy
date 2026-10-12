@@ -271,3 +271,23 @@ class TestComparisonOperands:
 
         with pytest.raises(CppCompileError, match='compares scalars only'):
             _compile(cc, f)
+
+    def test_types_that_do_not_nest_compare_where_the_values_do(self, cc):
+        """`double` holds no `int64_t`, but it holds this one exactly."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return 1.0 if x <= -2147483649 else 0.0
+
+        assert '(x <= static_cast<double>(-2147483649))' in _compile(cc, f)
+
+    def test_values_that_do_not_nest_are_refused(self, cc):
+        """C++ would convert `n` to `double`, rounding past ``2 ** 53``."""
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return 1.0 if x < n else 0.0
+
+        with pytest.raises(CppCompileError, match='no storage holds both'):
+            cc.compile(f, ctx=fp.FP64,
+                       arg_types=[RealType(fp.FP64), RealType(fp.SINT64)])
