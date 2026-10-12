@@ -127,8 +127,7 @@ def _lower(func, src):
     branch ``unfold_special`` states has already said what each zero rounds to.
     """
     return st.simplify(st.rescale_fixed(st.float_to_fixed(st.unfold_overflow(
-        st.unfold_special(st.monomorphize(func, args=[RealType(src)])),
-        early_check=True))))
+        st.unfold_special(st.monomorphize(func, args=[RealType(src)]))))))
 
 
 def _rounding(target: fp.Context) -> fp.Function:
@@ -240,7 +239,7 @@ class TestLoweredRoundtrip:
 
         ref = st.monomorphize(q, args=[RealType(fp.FP32)])
         low = st.rescale_fixed(st.float_to_fixed(
-            st.unfold_overflow(ref, early_check=True)))
+            st.unfold_overflow(ref)))
         cc = CppCompiler()
         mod = Module()
         mod.add(low)
@@ -317,7 +316,7 @@ def _lower_at(func, src, site):
     program.  ``simplify`` is left off: cursors do not cross it."""
     f = st.monomorphize(func, args=[RealType(src), RealType(src)])
     f = st.unfold_special(f, where=site)
-    f = st.unfold_overflow(f, where=site, early_check=True)
+    f = st.unfold_overflow(f, where=site)
     f = st.float_to_fixed(f, where=site)
     return st.rescale_fixed(f, where=site)
 

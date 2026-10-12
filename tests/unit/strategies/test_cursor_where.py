@@ -81,7 +81,7 @@ def test_a_pinned_cursor_aims_every_operator_in_the_sequence():
     site = StmtCursor(two_sites.ast, FuncBody().stmt(0))
 
     f = unfold_special(two_sites, where=site)
-    f = unfold_overflow(f, where=site, early_check=True)
+    f = unfold_overflow(f, where=site)
     f = float_to_fixed(f, where=site)
     f = rescale_fixed(f, where=site)
 
@@ -104,7 +104,7 @@ def test_a_cursor_takes_candidates_beneath_it():
     # the rounding sits inside the wrapper, not on its first line
     assert 'fp.round' not in wrapper.resolve().format().splitlines()[0]
 
-    f2 = unfold_overflow(f1, where=site, early_check=True)
+    f2 = unfold_overflow(f1, where=site)
     assert f2.edits is not None and len(f2.edits.edits) == 1
     # the edit is *inside* the wrapper, not at the top level
     assert isinstance(f2.edits.edits[0].block_path, SubBlock)

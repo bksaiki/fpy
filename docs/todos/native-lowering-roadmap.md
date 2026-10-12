@@ -94,7 +94,7 @@ Three ideas, each recorded where it was learned:
   `(2 ** -exp) * x` is in `[2^10, 2^11)` for any source, because `exp` comes from
   `logb(x)` — but the two are *correlated* and the domain describes them
   separately, so the product was inferred at `2^2108` for an `FP64` source. Two
-  facts the program already states close it: `|x| < infval` from `early_check`
+  facts the program already states close it: `|x| < infval` from the bound check
   fixes the **bound**, and `logb(x) >= emin` from the subnormal branch fixes the
   **digit position**, the half a bound alone never reaches. Both are ordinary
   path sensitivity over magnitudes (`FormatInfer._refined`), not a new domain.
@@ -148,7 +148,7 @@ leaves the other alone). Only the entry point itself is left. See
 ## Open questions
 
 - **Where should the integer width come from?** Answered for the composed path:
-  `early_check` bounds the operand by `infval`, so the rescaled integer fits
+  the bound check keeps the operand below `infval`, so the rescaled integer fits
   `pmax + 1` bits — 12 for `FP16`, checked. What remains is that the transform
   *asserts* this rather than the analysis deriving it.
 - **Is the scaled form the right final shape?** It costs two scalings per
