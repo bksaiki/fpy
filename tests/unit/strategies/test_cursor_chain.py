@@ -147,7 +147,7 @@ def test_forwarding_composes_across_two_passes():
     rewrites later."""
     untouched = StmtCursor(two_sites.ast, FuncBody().stmt(2))
     f1 = unfold_special(two_sites, where=0)
-    f2 = unfold_overflow(f1, where=0, early_check=True)
+    f2 = unfold_overflow(f1, where=0)
 
     image = f2.forward(_first(two_sites))
     assert image.func is f2.ast
@@ -211,7 +211,7 @@ def test_forwarding_to_the_same_program_is_the_identity():
 
 def test_the_chain_records_each_step():
     f1 = unfold_special(two_sites, where=0)
-    f2 = unfold_overflow(f1, where=0, early_check=True)
+    f2 = unfold_overflow(f1, where=0)
     assert f2.parent is f1
     assert f1.parent is two_sites
     assert two_sites.parent is None

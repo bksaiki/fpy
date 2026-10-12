@@ -2680,18 +2680,27 @@ class CppEmitter(Visitor):
             arg_tys.append(ty)
         clauses = []
         for i, op in enumerate(e.ops):
-            # a supremum contains both operands, so neither cast can refuse
-            # and neither needs a bound to fall back on -- where one exists
+            pair = ((e.args[i], arg_tys[i]), (e.args[i + 1], arg_tys[i + 1]))
             try:
                 common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
             except StorageSelectionError as err:
-                raise CppEmitError(
-                    f'no storage holds both operands of this comparison: '
-                    f'{arg_tys[i].format()} and {arg_tys[i + 1].format()}',
-                    at=e,
-                ) from err
-            lhs = self._maybe_cast(args[i], arg_tys[i], common)
-            rhs = self._maybe_cast(args[i + 1], arg_tys[i + 1], common)
+                # the types do not nest, but an exact comparison only needs
+                # the values to
+                fits = [
+                    t for _, t in pair
+                    if all(self._value_fits(self._bound_of(a), s, t) for a, s in pair)
+                ]
+                if not fits:
+                    raise CppEmitError(
+                        f'no storage holds both operands of this comparison: '
+                        f'{arg_tys[i].format()} and {arg_tys[i + 1].format()}',
+                        at=e,
+                    ) from err
+                common = fits[0]
+            lhs, rhs = (
+                self._maybe_cast(args[i + k], s, common, at=e, bound_of=a)
+                for k, (a, s) in enumerate(pair)
+            )
             clauses.append(f'({lhs} {op.symbol()} {rhs})')
         if len(clauses) == 1:
             return clauses[0]

@@ -3415,7 +3415,7 @@ class TestBranchRefinement:
         assert af.has_nan and af.has_pos_inf
 
     def test_a_two_sided_guard_compounds(self):
-        """The `early_check` shape: both comparisons fail in the same arm."""
+        """The `unfold_overflow` shape: both comparisons fail in the same arm."""
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
             if x >= 65536:
@@ -3628,12 +3628,12 @@ class TestBranchRefinement:
 
         ref = strat.monomorphize(q, args=[RealType(fp.FP64)])
         low = strat.rescale_fixed(strat.float_to_fixed(
-            strat.unfold_overflow(ref, early_check=True)))
+            strat.unfold_overflow(ref)))
         assert CppCompiler().compile(low)
 
     def test_it_tightens_the_lowered_scale_in(self):
         """The payoff: on an `FP64` source the scale-in was inferred at `2**2108`
-        against a true `[2**10, 2**11)`; the `early_check` guard brings it inside
+        against a true `[2**10, 2**11)`; the bound check brings it inside
         what `F64` holds."""
         import fpy2.strategies as strat
 
@@ -3645,7 +3645,7 @@ class TestBranchRefinement:
 
         ref = strat.monomorphize(q, args=[RealType(fp.FP64)])
         low = strat.rescale_fixed(strat.float_to_fixed(
-            strat.unfold_overflow(ref, early_check=True)))
+            strat.unfold_overflow(ref)))
         info = FormatInfer.analyze(low.ast)
         scale_in = next(b for d, b in info.by_def.items() if str(d.name) == '_t7')
         assert self._pos(scale_in) < 2.0 ** 64
@@ -3676,8 +3676,7 @@ class TestZeroOnlyIntersection:
             return y
 
         return strat.rescale_fixed(strat.float_to_fixed(strat.unfold_overflow(
-            strat.unfold_special(strat.monomorphize(q, args=[RealType(src)])),
-            early_check=True)))
+            strat.unfold_special(strat.monomorphize(q, args=[RealType(src)])))))
 
     def test_the_empty_overlap_reports_only_zero(self):
         info = FormatInfer.analyze(self._lower(fp.SINT32).ast)

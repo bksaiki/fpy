@@ -34,7 +34,7 @@ class TestTheLoweredScaleInStaysNarrow:
                 return fp.round(x)
 
         g = st.simplify(st.rescale_fixed(st.float_to_fixed(
-            st.unfold_overflow(st.unfold_special(f), early_check=True))))
+            st.unfold_overflow(st.unfold_special(f)))))
         out = CppCompiler().compile(g, arg_types=[RealType(fp.FP32)])
         assert re.search(r'float \w+ = std::ldexp\(x,', out), out
 
@@ -60,7 +60,7 @@ class TestScaleByPowerOfTwo:
 
         ref = st.monomorphize(q, args=[RealType(fp.FP32)])
         low = st.rescale_fixed(st.float_to_fixed(
-            st.unfold_overflow(ref, early_check=True)))
+            st.unfold_overflow(ref)))
         return CppCompiler().compile(low)
 
     def test_the_scale_needs_no_widening(self):

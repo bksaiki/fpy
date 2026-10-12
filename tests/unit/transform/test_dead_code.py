@@ -783,7 +783,7 @@ class TestDeadContext:
             return y
 
         g = st.rescale_fixed(st.float_to_fixed(
-            st.unfold_overflow(st.unfold_special(f), early_check=True)
+            st.unfold_overflow(st.unfold_special(f))
         ))
         reals = g.format().count('with fp.REAL')
 

@@ -42,6 +42,7 @@ from fpy2.number import (
 from fpy2.transform import TransformReferenceError, UnfoldOverflow
 from fpy2.transform.utils import RoundingScopes
 from fpy2.types import RealType
+from fpy2.utils import CompareOp
 
 
 # ----------------------------------------------------------------------
@@ -128,8 +129,9 @@ def _samples(ctx) -> list:
         B,                                          # the bound itself
         ctx.infval().as_real(),                     # certain overflow
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
-        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # between bound and infval
-        RealFloat(exp=B.exp, c=B.c + 1),            # the tie above the bound
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 1),    # below the tie
+        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # the tie: midpoint of bound and infval
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 3),    # above the tie
         RealFloat(exp=B.exp + 1, c=B.c),            # well past
         RealFloat(exp=B.exp + 40, c=B.c),
         RealFloat(exp=ctx.expmin, c=1),             # smallest subnormal
@@ -150,7 +152,9 @@ def _fixed_samples(ctx) -> list:
     points = [
         B, N, ctx.infval().as_real(), ctx.infval(s=True).as_real(),
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
-        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # just above it
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 1),    # below the tie
+        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # the tie: midpoint of bound and infval
+        RealFloat(exp=B.exp - 2, c=4 * B.c + 3),    # above the tie
         RealFloat(exp=B.exp + 1, c=B.c),            # well past
         RealFloat(exp=B.exp + 30, c=B.c),
         RealFloat(exp=ctx.nmin, c=1),               # too fine to represent
@@ -213,38 +217,32 @@ class TestShape:
         assert 'fp.MPSFloatContext(11, -14)' in out.format()
 
     def test_bound_becomes_a_comparison(self):
-        """One test per side, so a format need not mirror its bound."""
+        """One test per side, on the operand, so a format need not mirror its
+        bound and nothing past it is rounded."""
         f = _quantizer(fp.FP16)
         out = UnfoldOverflow.apply(f.ast)
 
-        bounds = {int(c.args[1].val) for c in _nodes(out, Compare)}  # type: ignore[attr-defined]
-        assert bounds == {65504, -65504}
+        tests = _nodes(out, Compare)
+        assert len(tests) == 2
+        assert all(c.args[0].name == f.ast.args[0].name for c in tests)  # type: ignore[attr-defined]
 
-    def test_no_early_check_by_default(self):
-        f = _quantizer(fp.FP16)
-        out = UnfoldOverflow.apply(f.ast)
-        # only the two post-checks, against `maxval` rather than `infval`
-        assert len(_nodes(out, Compare)) == 2
-
-    def test_early_check_tests_the_operand(self):
-        f = _quantizer(fp.FP16)
-        out = UnfoldOverflow.apply(f.ast, early_check=True)
-
-        bounds = {int(c.args[1].val) for c in _nodes(out, Compare)}  # type: ignore[attr-defined]
-        # the guard uses `infval`, the next representable value above the bound
-        assert bounds == {65504, -65504, 65536, -65536}
-
-    def test_early_check_is_not_complete(self):
-        """FP16's tie at 65520 lies below `infval` yet rounds up and
-        overflows, so the check after the rounding has to stay."""
-        f = _quantizer(fp.FP16)
-        assert float(fp.FP16.infval()) == 65536.0
-        for out in (
-            UnfoldOverflow.apply(f.ast),
-            UnfoldOverflow.apply(f.ast, early_check=True),
-        ):
-            assert _eval(out, f, 65520.0).isinf
-            assert _same(_eval(out, f, 65510.0), f(65510.0))  # rounds back to the bound
+    @pytest.mark.parametrize('rm, op, bound', [
+        (fp.RoundingMode.RNE, CompareOp.GE, 65520),
+        (fp.RoundingMode.RNA, CompareOp.GE, 65520),
+        (fp.RoundingMode.RTP, CompareOp.GT, 65504),
+        (fp.RoundingMode.RTN, CompareOp.GE, 65536),
+        (fp.RoundingMode.RTZ, CompareOp.GE, 65536),
+        (fp.RoundingMode.RAZ, CompareOp.GT, 65504),
+        (fp.RoundingMode.RTO, CompareOp.GE, 65536),
+        (fp.RoundingMode.RTE, CompareOp.GT, 65504),
+    ])
+    def test_threshold_follows_the_mode(self, rm, op, bound):
+        """The threshold is `maxval`, `infval`, or their midpoint, and the mode
+        decides whether the threshold itself overflows: `RNE` sends the tie
+        at 65520 to the even 65536, `RTE` sends everything past 65504 there."""
+        out = UnfoldOverflow.apply(_quantizer(fp.IEEEContext(5, 16, rm)).ast)
+        pos = next(c for c in _nodes(out, Compare) if c.args[1].val > 0)  # type: ignore[attr-defined]
+        assert (pos.ops[0], int(pos.args[1].val)) == (op, bound)  # type: ignore[attr-defined]
 
     @pytest.mark.parametrize('ctx', [
         fp.FP16, fp.MX_E4M3,
@@ -397,35 +395,33 @@ class TestFixedPoint:
             with pytest.raises(ValueError):
                 _eval(out, f, x)
 
-    def test_early_check_excludes_infinities(self):
-        """An infinity is past every bound, so the guard would claim it as an
+    def test_bound_check_excludes_infinities(self):
+        """An infinity is past every bound, so the check would claim it as an
         overflow; testing finiteness first lets it reach the rounding, which
         refuses it as the source did."""
         src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
         f = _quantizer(src)
-        out = UnfoldOverflow.apply(f.ast, early_check=True)
+        out = UnfoldOverflow.apply(f.ast)
 
         assert len(_nodes(out, IsFinite)) == 2
         with pytest.raises(ValueError):
             _eval(out, f, fp.Float(isinf=True))
 
-    def test_float_early_check_needs_no_finiteness_test(self):
-        """A float counterpart represents the infinities, so its guard can
+    def test_float_needs_no_finiteness_test(self):
+        """A float counterpart represents the infinities, so its check can
         claim one without changing what the format makes of it."""
-        out = UnfoldOverflow.apply(_quantizer(fp.FP16).ast, early_check=True)
+        out = UnfoldOverflow.apply(_quantizer(fp.FP16).ast)
         assert not _nodes(out, IsFinite)
 
-    @pytest.mark.parametrize('src, early_check', [
-        (MPBFixedContext(-4, RealFloat(exp=0, c=255),
-                         overflow=fp.OverflowMode.OVERFLOW, enable_inf=True), False),
-        (MPBFixedContext(-4, RealFloat(exp=0, c=255),
-                         overflow=fp.OverflowMode.OVERFLOW, enable_inf=True), True),
-        (fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT), True),
-        (fp.SMFixedContext(-8, 16, fp.RoundingMode.RTZ, _SAT), False),
-    ], ids=['mpb_inf-plain', 'mpb_inf-early_check', 'fixed_32-early_check', 'sm_rtz-plain'])
-    def test_equivalence(self, src, early_check):
+    @pytest.mark.parametrize('src', [
+        MPBFixedContext(-4, RealFloat(exp=0, c=255),
+                        overflow=fp.OverflowMode.OVERFLOW, enable_inf=True),
+        fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT),
+        fp.SMFixedContext(-8, 16, fp.RoundingMode.RTZ, _SAT),
+    ], ids=['mpb_inf', 'fixed_32', 'sm_rtz'])
+    def test_equivalence(self, src):
         f = _quantizer(src)
-        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
+        out = UnfoldOverflow.apply(f.ast)
         assert not out.is_equiv(f.ast)
         for x in _fixed_samples(src):
             assert _same(_eval(out, f, x), f(x)), (src, x)
@@ -660,42 +656,39 @@ class TestEquivalence:
     """The rewrite must be bit-exact: it is the same rounding, with the bound
     stated rather than built in."""
 
-    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
         fp.FP16, fp.FP32, fp.FP64, fp.IEEEContext(4, 8),
     ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8'])
-    def test_formats(self, ctx, early_check):
+    def test_formats(self, ctx):
         f = _quantizer(ctx)
-        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
+        out = UnfoldOverflow.apply(f.ast)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx):
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
 
-    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
         fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
         EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
         EFloatContext(4, 8, False, EFloatNanKind.NONE, 2),
     ], ids=['ieee_saturating', 'neg_zero_nan', 'shifted_exponent'])
-    def test_edge_rules(self, ctx, early_check):
+    def test_edge_rules(self, ctx):
         """A format states its edge rule in its own terms; the rewrite asks
         rather than assumes.  A shifted exponent encoding is already accounted
         for by the precision and exponent range read off the format."""
         f = _quantizer(ctx)
-        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
+        out = UnfoldOverflow.apply(f.ast)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx) + [1e-9, -1e-9, 0.1, -0.1]:
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
 
-    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
         fp.MX_E5M2, fp.MX_E4M3, fp.MX_E3M2, fp.MX_E2M3, fp.MX_E2M1,
     ], ids=['e5m2', 'e4m3', 'e3m2', 'e2m3', 'e2m1'])
-    def test_mx_formats(self, ctx, early_check):
+    def test_mx_formats(self, ctx):
         """The MX formats differ in what overflow becomes: an infinity for
         `E5M2`, a NaN for `E4M3`, the bound for the rest."""
         f = _quantizer(ctx)
-        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
+        out = UnfoldOverflow.apply(f.ast)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx) + [0.1, -0.1, 12.5, -12.5]:
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
@@ -711,6 +704,7 @@ class TestEquivalence:
     @pytest.mark.parametrize('rm', [
         fp.RoundingMode.RNE, fp.RoundingMode.RNA, fp.RoundingMode.RTZ,
         fp.RoundingMode.RTP, fp.RoundingMode.RTN, fp.RoundingMode.RAZ,
+        fp.RoundingMode.RTO, fp.RoundingMode.RTE,
     ])
     def test_rounding_modes(self, rm):
         """The overflow *value* follows the mode as much as the bound does:
@@ -718,19 +712,10 @@ class TestEquivalence:
         infinity."""
         ctx = fp.IEEEContext(5, 16, rm)
         f = _quantizer(ctx)
-        out = UnfoldOverflow.apply(f.ast, early_check=True)
+        out = UnfoldOverflow.apply(f.ast)
         xs = _samples(ctx) + [0.1, -0.1, 65519.0, 65519.996, -65519.996, 1.0009765625]
         for x in xs:
             assert _same(_eval(out, f, x), f(x)), (rm, x)
-
-    def test_overflow_boundary(self):
-        """Rounding at the top of the range decides between the bound and an
-        infinity; the comparison must make the same call."""
-        f = _quantizer(fp.FP16)
-        out = UnfoldOverflow.apply(f.ast, early_check=True)
-        for x in (65504.0, 65515.0, 65519.0, 65519.996, 65520.0, 65536.0, 1e5, 1e10):
-            for sx in (x, -x):
-                assert _same(_eval(out, f, sx), f(sx)), sx
 
 
 # ----------------------------------------------------------------------
@@ -740,7 +725,7 @@ class TestEquivalence:
 class TestBranchesTheOperandCannotTake:
     """Two of the rewrite's emitted tests exist only for a special operand.
 
-    The finiteness test in front of the early check keeps an infinity from being
+    The finiteness test in front of the bound check keeps an infinity from being
     claimed as an overflow, and a specials branch assigns what the format makes
     of a NaN or an infinity.  Neither is needed where the operand can be
     neither, which :class:`fpy2.analysis.ValueClassInfer` reads off a concrete
@@ -748,7 +733,7 @@ class TestBranchesTheOperandCannotTake:
     """
 
     # a bounded fixed-point format: its unbounded counterpart refuses an
-    # infinity, so the early check needs the finiteness test in front
+    # infinity, so the bound check needs the finiteness test in front
     _SATURATING = MPBFixedContext(
         -4, RealFloat(exp=0, c=100), overflow=fp.OverflowMode.SATURATE)
     # substitutes a finite value for an infinity, which needs its own branch
@@ -758,7 +743,7 @@ class TestBranchesTheOperandCannotTake:
 
     def _apply(self, ctx, arg_ctx):
         mono = st.monomorphize(_quantizer(ctx), args=[RealType(arg_ctx)])
-        return mono, UnfoldOverflow.apply(mono.ast, early_check=True)
+        return mono, UnfoldOverflow.apply(mono.ast)
 
     def test_the_finiteness_test_goes_for_an_integer_operand(self):
         _, kept = self._apply(self._SATURATING, fp.FP64)

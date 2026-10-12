@@ -116,7 +116,7 @@ class TestRounding:
             return y
 
         mono = st.monomorphize(f, args=[RealType(fp.FP32)])
-        assert _kinds(st.unfold_overflow(mono, early_check=True)) == [
+        assert _kinds(st.unfold_overflow(mono)) == [
             UnfoldKind.FLOAT_ROUND,
         ]
 
@@ -162,9 +162,7 @@ class TestTheLadder:
 
         # `float_to_fixed` trades the float row for the fixed one: the digits
         # land away from position zero, which is `rescale_fixed`'s job.
-        fixed = st.float_to_fixed(st.unfold_overflow(
-            st.unfold_special(mono), early_check=True,
-        ))
+        fixed = st.float_to_fixed(st.unfold_overflow(st.unfold_special(mono)))
         assert _kinds(fixed) == [UnfoldKind.FIXED_ROUND]
 
         low = st.simplify(st.rescale_fixed(fixed))

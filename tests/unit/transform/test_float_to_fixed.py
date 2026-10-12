@@ -334,14 +334,15 @@ class TestAfterUnfoldOverflow:
         assert 'min(' in FloatToFixed.apply(f.ast).format()
         assert 'min(' not in FloatToFixed.apply(UnfoldOverflow.apply(f.ast)).format()
 
-    def test_early_check_bounds_what_is_rounded(self):
-        """Only ``|x| < infval`` reaches the rounding, which bounds the
-        integer the rescaled round produces -- the clamp's job."""
+    def test_the_check_bounds_what_is_rounded(self):
+        """Only an operand within the overflow threshold reaches the rounding,
+        which bounds the integer the rescaled round produces -- the clamp's
+        job."""
         f = _quantizer(fp.FP16)
         out = RescaleFixed.apply(FloatToFixed.apply(
-            UnfoldOverflow.apply(f.ast, early_check=True)
+            UnfoldOverflow.apply(f.ast)
         ))
-        assert str(int(fp.FP16.infval())) in out.format()
+        assert '65520' in out.format()
         for x in _samples(fp.FP16):
             assert _same(_eval(out, f, x), f(x)), x
 

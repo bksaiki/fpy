@@ -249,7 +249,7 @@ def unfold_arith(func: FuncDef, target: UnfoldTarget) -> FuncDef:
 
 _LADDER: tuple[Callable[[FuncDef, Cursor], EditLog], ...] = (
     lambda f, w: UnfoldSpecial.apply_with_edits(f, where=w),
-    lambda f, w: UnfoldOverflow.apply_with_edits(f, where=w, early_check=True),
+    lambda f, w: UnfoldOverflow.apply_with_edits(f, where=w),
     lambda f, w: FloatToFixed.apply_with_edits(f, where=w),
     lambda f, w: RescaleFixed.apply_with_edits(f, where=w),
 )

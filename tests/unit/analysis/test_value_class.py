@@ -1191,7 +1191,7 @@ class TestTheLoweredRounding:
 
         ref = st.monomorphize(q, args=[_F32])
         ast = st.rescale_fixed(st.float_to_fixed(
-            st.unfold_overflow(ref, early_check=True))).ast
+            st.unfold_overflow(ref))).ast
         info = ValueClassInfer.analyze(ast)
         for text in (
             '(16777216 * x)',       # asserted finite before rounding
@@ -1200,7 +1200,7 @@ class TestTheLoweredRounding:
             'exp',
         ):
             assert all(info.is_finite(e) for e in _find_all(ast, text)), text
-        assert not info.is_finite(_find(ast, 'x >= 65536'))
+        assert not info.is_finite(_find(ast, 'x >= 65520'))
 
 
 @fp.fpy(ctx=fp.REAL)

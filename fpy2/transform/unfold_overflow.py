@@ -16,8 +16,8 @@ finite ``x``,
        \\mathrm{round}_U(x) & \\text{otherwise}
      \\end{cases}
 
-This transform makes that structural: the block rounds under ``U``, and the
-bound becomes a comparison.
+This transform makes that structural: the bound becomes a comparison on the
+operand, and an operand within it is rounded under ``U``.
 
 .. code-block:: python
 
@@ -27,34 +27,22 @@ bound becomes a comparison.
 
    # After
    with fp.REAL:
-       with fp.MPSFloatContext(11, -14):
-           t = fp.round(x)
-       if t > 65504:
+       if x >= 65520:
            y = fp.inf()
-       elif t < -65504:
+       elif x <= -65520:
            y = -fp.inf()
        else:
+           with fp.MPSFloatContext(11, -14):
+               t = fp.round(x)
            y = t
 
-With `early_check`, a check on the operand comes first, so nothing past the
-bound reaches the rounding at all:
-
-.. code-block:: python
-
-   if x >= 65536:
-       y = fp.inf()
-   elif x <= -65536:
-       y = -fp.inf()
-   else:
-       ...
-
-Its threshold is :meth:`fpy2.Context.infval`, the next value above ``maxval``
-in the unbounded format — *not* ``maxval`` itself.  Under ``RNE``, ``FP16``
-maps ``65510`` to ``65504``, so exceeding the bound does not imply overflow;
-reaching ``infval`` does, for any monotone rounding, since
-``round_U(x) >= round_U(infval) = infval > maxval``.  The check is sound but
-not complete — ``FP16``'s tie at ``65520`` lies below ``infval`` yet rounds up
-to ``65536`` — so the comparison after the rounding stays either way.
+The comparison is exact.  Rounding is monotone, so ``round_U(x) > maxval``
+holds for exactly the operands past some threshold between ``maxval`` and
+``infval``, its neighbor in ``U``: one of the two, or their midpoint.  Which
+one, and whether the threshold itself overflows, is up to the rounding mode —
+under ``RNE``, ``FP16`` maps ``65519`` to ``65504`` but its tie at ``65520``
+to the even ``65536``, so the test is ``x >= 65520``.  Both are found by
+asking ``U`` what it makes of the points in between.
 
 What overflow produces, and what the format makes of NaN and the infinities,
 are asked of the source context rather than assumed.  A special value gets a
@@ -66,7 +54,7 @@ A bounded *fixed-point* format unfolds the same way, its counterpart being
 state what it does with NaN, an infinity and a negative zero, so it inherits all
 three from the source and the checks have nothing to say about them.  What it
 cannot state is a refusal, and a fixed-point format commonly refuses NaN and the
-infinities outright — hence the finiteness test in front of the early
+infinities outright — hence the finiteness test in front of the bound
 check, which would otherwise claim an infinity as an overflow.
 
 That test, and each special's branch, is emitted only where the operand can be
@@ -162,14 +150,10 @@ class _Source:
 
     unbounded: _Unbounded
     """the same format with no bound, which the block rounds under instead"""
-    maxval: RealFloat
-    """largest representable value; above it a rounding has overflowed"""
-    neg_maxval: RealFloat
-    """its negative counterpart, which a format need not mirror"""
-    infval: RealFloat
-    """smallest value that certainly overflows, for `early_check`"""
-    neg_infval: RealFloat
-    """its negative counterpart"""
+    pos_bound: tuple[CompareOp, RealFloat]
+    """the test an operand passes exactly when its rounding overflows above"""
+    neg_bound: tuple[CompareOp, RealFloat]
+    """its counterpart below, which a format need not mirror"""
     over_pos: Float
     """what an overflow above the bound produces"""
     over_neg: Float
@@ -184,7 +168,7 @@ class _Source:
     """
     check_finite: bool
     """
-    whether the early check has to exclude the infinities.
+    whether the bound check has to exclude the infinities.
 
     An infinity is past every bound, so the check would claim it as an overflow
     — but a fixed-point format rejects it outright, and the rewrite has no way
@@ -226,6 +210,33 @@ def _holds(x: Float, op: CompareOp, b: RealFloat) -> bool:
             raise RuntimeError(f'unexpected comparison {op}')
 
 
+def _bound(
+    u: _Unbounded, maxval: RealFloat, infval: RealFloat
+) -> tuple[CompareOp, RealFloat]:
+    """
+    The test on an operand `x` equivalent to `round_U(x)` passing `maxval`,
+    on the side of zero `maxval` is on.
+
+    `infval` is the neighbor of `maxval` in `U`.  Between the two, a monotone
+    rounding switches from one to the other at `maxval`, their midpoint, or
+    `infval`, so probing a point on each side of the midpoint, and the
+    midpoint itself, settles both the threshold and whether it is included.
+    """
+    strict, loose = (CompareOp.LT, CompareOp.LE) if maxval.s else (CompareOp.GT, CompareOp.GE)
+
+    def over(x: RealFloat) -> bool:
+        return _holds(u.round(x), strict, maxval)
+
+    mid = shift(maxval + infval, -1)
+    if over(shift(maxval + mid, -1)):
+        return strict, maxval
+    if over(mid):
+        return loose, mid
+    if over(shift(mid + infval, -1)):
+        return strict, mid
+    return loose, infval
+
+
 class _Prober:
     """
     What a bounded context does at its edges, and whether a rounding under its
@@ -234,12 +245,10 @@ class _Prober:
 
     ctx: _BoundedCtx
     unbounded: _Unbounded
-    early_check: bool
 
-    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded, early_check: bool):
+    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded):
         self.ctx = ctx
         self.unbounded = unbounded
-        self.early_check = early_check
 
     def describe(self) -> _Source | Declined:
         """`ctx` as a lowerable bounded format, or why it is not one."""
@@ -266,7 +275,9 @@ class _Prober:
 
         zero = Float(c=0, s=True)
         src = _Source(
-            self.unbounded, maxval, neg_maxval, infval, neg_infval,
+            self.unbounded,
+            _bound(self.unbounded, maxval, infval),
+            _bound(self.unbounded, neg_maxval, neg_infval),
             over_pos, over_neg,
             drop_neg_zero=self.unbounded.round(zero).s and not ctx.round(zero).s,
             check_finite=try_round(self.unbounded, _POS_INF) is None,
@@ -331,19 +342,15 @@ class _Prober:
         What the generated code yields for `x`, special branches aside;
         `None` where the rounding rejects it, as the source may too.
         """
-        if self.early_check and not (src.check_finite and x.is_nar()):
-            if _holds(x, CompareOp.GE, src.infval):
+        if not (src.check_finite and x.is_nar()):
+            if _holds(x, *src.pos_bound):
                 return src.over_pos
-            if _holds(x, CompareOp.LE, src.neg_infval):
+            if _holds(x, *src.neg_bound):
                 return src.over_neg
 
         t = try_round(self.unbounded, x)
         if t is None:
             return None
-        if _holds(t, CompareOp.GT, src.maxval):
-            return src.over_pos
-        if _holds(t, CompareOp.LT, src.neg_maxval):
-            return src.over_neg
         if src.drop_neg_zero and not t.is_nar() and t.is_zero():
             return Float(c=0)
         return t
@@ -432,7 +439,6 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
     class_info: ValueClassAnalysis
     gensym: Gensym
     where: int | Cursor | None
-    early_check: bool
     alias: str | None
     used_alias: bool
     site_idx: int
@@ -440,14 +446,13 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis,
-        where: int | Cursor | None = None, early_check: bool = False,
+        where: int | Cursor | None = None,
     ):
         self.func = func
         self.scopes = scopes
         self.class_info = class_info
         self.gensym = Gensym(scopes.def_use.names())
         self.where = where
-        self.early_check = early_check
         # the name the program calls `fpy2` by, which the emitted context is
         # written with; without one it falls back to the context value itself
         self.alias = fpy_alias(func.env)
@@ -483,10 +488,10 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         unbounded = _unbounded(ctx)
         if unbounded is None:
             return Declined('no unbounded counterpart of the format can be built')
-        return _Prober(ctx, unbounded, self.early_check).describe()
+        return _Prober(ctx, unbounded).describe()
 
     def _ladder(self, e: Expr, target: NamedId, out: list, src: _Source) -> None:
-        """`target = round(v)` as an unbounded rounding plus a bound check."""
+        """`target = round(v)` as a bound check plus an unbounded rounding."""
         assert isinstance(e, Round)
         loc = e.loc
         # the operand as written: a name the bind may mint has no class
@@ -499,14 +504,17 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         def assign(v: Expr) -> StmtBlock:
             return StmtBlock([Assign(target, None, v, loc)])
 
+        # the finiteness test only for an operand that can be infinite
+        finite = src.check_finite and bool(cls & (ValueClass.NAN | ValueClass.INF))
+
         def past(
-            operand: Expr, op: CompareOp, bound: RealFloat, over: Float,
-            rest: StmtBlock, finite: bool = False,
+            bound: tuple[CompareOp, RealFloat], over: Float, rest: StmtBlock,
         ) -> StmtBlock:
-            """`rest`, behind a branch taking `operand` past `bound`."""
-            cond: Expr = Compare([op], [operand, number_literal(bound, loc)], loc)
+            """`rest`, behind a branch taking the operand past `bound`."""
+            op, b = bound
+            cond: Expr = Compare([op], [arg(), number_literal(b, loc)], loc)
             if finite:
-                cond = And([IsFinite(None, operand, loc), cond], loc)
+                cond = And([IsFinite(None, arg(), loc), cond], loc)
             return StmtBlock([IfStmt(cond, assign(value_literal(over, loc)), rest, loc)])
 
         # the rounding, under the format the bound came out of: with nothing
@@ -518,7 +526,6 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
             StmtBlock([Assign(t, None, Round(None, arg(), loc), loc)]), loc,
         )
 
-        # a result past the bound overflowed, whichever side it left by
         rest: StmtBlock = assign(Var(t, loc))
         if src.drop_neg_zero:
             # the format spends that encoding elsewhere, so a value rounding
@@ -527,20 +534,11 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
                 Compare([CompareOp.EQ], [Var(t, loc), Integer(0, loc)], loc),
                 assign(Integer(0, loc)), rest, loc,
             )])
-        rest = past(Var(t, loc), CompareOp.LT, src.neg_maxval, src.over_neg, rest)
-        rest = past(Var(t, loc), CompareOp.GT, src.maxval, src.over_pos, rest)
-
         body = StmtBlock([rounding, *rest.stmts])
+        body = past(src.neg_bound, src.over_neg, body)
+        body = past(src.pos_bound, src.over_pos, body)
 
-        # an operand already past the bound needs no rounding to know it
-        if self.early_check:
-            # the finiteness test keeps an infinity from being claimed as an
-            # overflow; an operand that cannot be one does not need it
-            g = src.check_finite and bool(cls & (ValueClass.NAN | ValueClass.INF))
-            body = past(arg(), CompareOp.LE, src.neg_infval, src.over_neg, body, g)
-            body = past(arg(), CompareOp.GE, src.infval, src.over_pos, body, g)
-
-        # a special value the rounding and the checks would not reproduce --
+        # a special value the checks and the rounding would not reproduce --
         # unless the operand is never that kind of value
         atoms = (ValueClass.NAN, ValueClass.INF)
         for atom, test, want in zip(atoms, (IsNan, IsInf), src.specials):
@@ -592,7 +590,6 @@ class UnfoldOverflow:
     def apply(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        early_check: bool = False,
         class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
         """
@@ -601,14 +598,10 @@ class UnfoldOverflow:
         `where` selects one rounding by index (see
         :class:`.utils.ScopedRoundingRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
-
-        With `early_check`, a check on the operand precedes the rounding, so
-        nothing certain to overflow is rounded at all.
         """
         return UnfoldOverflow.apply_with_edits(
             func,
             where=where,
-            early_check=early_check,
             class_info=class_info,
         ).result
 
@@ -616,7 +609,6 @@ class UnfoldOverflow:
     def apply_with_edits(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        early_check: bool = False,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
@@ -628,7 +620,7 @@ class UnfoldOverflow:
             class_info = ValueClassInfer.analyze(func)
 
         vtor = _UnfoldOverflowInstance(
-            func, RoundingScopes(func), class_info, where, early_check,
+            func, RoundingScopes(func), class_info, where,
         )
         out = vtor.apply()
         vtor.check_site('a candidate rounding')

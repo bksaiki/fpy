@@ -105,9 +105,8 @@ class TestUnfoldOverflow:
         # the FP64 accumulation is untouched: it is arithmetic, not a round
         assert fp.FP64 in _block_ctxs(out.ast)
 
-    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
-    def test_preserves_results(self, early_check):
-        out = unfold_overflow(_quantized_sum, early_check=early_check)
+    def test_preserves_results(self):
+        out = unfold_overflow(_quantized_sum)
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
 
     def test_idempotent(self):
@@ -173,11 +172,10 @@ class TestPipeline:
     is the full lowering: a float rounding becomes an integer one, with the
     bound stated as program text rather than carried by a format."""
 
-    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
-    def test_preserves_results(self, ctx, early_check):
+    def test_preserves_results(self, ctx):
         q = _quantizer(ctx)
-        out = rescale_fixed(float_to_fixed(unfold_overflow(q, early_check=early_check)))
+        out = rescale_fixed(float_to_fixed(unfold_overflow(q)))
         for x in _samples(ctx):
             assert _same(out(x), q(x)), (ctx, x)
 
