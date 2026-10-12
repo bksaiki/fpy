@@ -174,5 +174,7 @@ jobs:
           python-version: "3.11"
       - name: Install
         run: uv sync --locked
+      - name: Install local dependencies
+        run: uv pip install -r exploration/fused_dp/requirements.txt
       - name: Sweep (fused_dp)
         run: uv run python -m exploration.fused_dp.sweep --threads 2 1_000
