@@ -2686,16 +2686,17 @@ class CppEmitter(Visitor):
             except StorageSelectionError as err:
                 # the types do not nest, but an exact comparison only needs
                 # the values to
-                common = next((
+                fits = [
                     t for _, t in pair
                     if all(self._value_fits(self._bound_of(a), s, t) for a, s in pair)
-                ), None)
-                if common is None:
+                ]
+                if not fits:
                     raise CppEmitError(
                         f'no storage holds both operands of this comparison: '
                         f'{arg_tys[i].format()} and {arg_tys[i + 1].format()}',
                         at=e,
                     ) from err
+                common = fits[0]
             lhs, rhs = (
                 self._maybe_cast(args[i + k], s, common, at=e, bound_of=a)
                 for k, (a, s) in enumerate(pair)
