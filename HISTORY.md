@@ -1,5 +1,65 @@
 # Version History
 
+## 0.2.4 - 2026-10-12
+
+### Features:
+ - Analysis:
+   - add digit bound analysis: bounds the precision of a value rounded to fixed point
+   - add hoistability analysis: where a statement may be hoisted
+   - value class:
+     - track lists and tuples precisely, accounting for aliasing
+     - propagate through function calls
+     - support `min`/`max`, `amin`/`amax`, `sum`, `any`/`all`
+   - format inference:
+     - resolve partial contexts where possible
+     - refine from conditions of the form `abs(x) < c`
+     - precise bounds for `min`/`max` and `range`
+   - array size:
+     - constant loop trip counts
+     - symbolic sizes and scaled affine indexing
+ - Backend:
+   - Triton: add prototype compiler and kernel launcher
+   - C++:
+     - non-RTZ rounding from floating point into integers
+     - wrapping overflow for any supported rounding mode
+     - add `enable_fenv` option to control use of `<cfenv>`
+ - Strategies:
+   - add assertion elimination strategy
+   - add single-exit strategy
+   - add if simplification strategy
+   - add loop-invariant hoisting strategy
+   - add scale hoisting strategy
+   - split loop: add `MASK` option and `use_fmod` option
+   - unroll loop: add `use_fmod` option
+   - unfold overflow: one exact bound check before rounding; remove `early_check`
+ - Transforms:
+   - add assertion elimination transformation
+   - add single-exit transformation
+   - add context unnesting transformation
+   - add loop-invariant hoisting transformation
+   - add scale hoisting transformation
+   - simplify if: add `strict` mode
+   - constant folding: fold `len`, `dim`, and `size` using array sizes
+   - specialization: run to a fixpoint, drop unused parameters, refine with value classes
+
+### Fixes:
+ - Backend:
+   - C++:
+     - undefined behavior in overflowing integer conversions
+     - emitting casts
+     - comparisons between storage types that do not nest
+ - Frontend:
+   - record free variables on Python 3.12+ (PEP 709)
+ - Analysis:
+   - format inference: `logb` of a one-signed format, `sum`, and `min`/`max` with infinite operands
+ - Transforms:
+   - comprehension to loop: evaluate a later clause's iterable once per element
+   - hoisting: preserve evaluation order
+   - bundling: non-deterministic output
+   - gensym: `refresh` mutated the identifier it was given
+ - Install:
+   - fix macOS installs (`titanfp`) and Python 3.14 builds (`gmpy2`)
+
 ## 0.2.3 - 2026-09-02
 ### Features:
  - Analysis:
