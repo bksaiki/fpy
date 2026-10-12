@@ -27,7 +27,7 @@ jobs:
       - name: Build package
         run: uv build
       - name: Install fpy2
-        run: uv sync
+        run: uv sync --locked
 
   build-pip:
     name: "Build (pip)"
@@ -60,7 +60,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Check
         run: uv run mypy fpy2
 
@@ -74,7 +74,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Lint
         run: uv run ruff check fpy2/
 
@@ -93,7 +93,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Unit Tests
         run: uv run make unittest UNITTEST_JOBS=auto
       - name: Infrastucture Tests
@@ -112,7 +112,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Unit Tests
         run: uv run make unittest UNITTEST_JOBS=auto
 
@@ -131,7 +131,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Compilation tests
         run: uv run python -m tests.infra.fpcore
 
@@ -150,7 +150,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Tests (C++)
         # `run` mode is a superset of `compile`: it compiles every corpus
         # function and additionally executes the bit-exact-eligible subset,
@@ -173,6 +173,6 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install
-        run: uv sync
+        run: uv sync --locked
       - name: Sweep (fused_dp)
         run: uv run python -m exploration.fused_dp.sweep --threads 2 1_000

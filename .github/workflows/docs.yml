@@ -16,7 +16,7 @@ jobs:
           enable-cache: true
           python-version: "3.11"
       - name: Install fpy2
-        run: uv sync
+        run: uv sync --locked
       - name: "Create empty directories"
         run: mkdir docs/source/_static
       - name: "Generate documentation"
