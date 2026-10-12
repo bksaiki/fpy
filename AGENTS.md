@@ -91,7 +91,7 @@ make ruff    # Lint only
 ## Development Setup
 
 ```bash
-uv sync                       # creates .venv/ and installs fpy2 + dev deps
+uv sync                       # installs fpy2 + dev deps per uv.lock, or resets .venv/ to it
 source .venv/bin/activate     # or prefix commands with `uv run`
 ```
 

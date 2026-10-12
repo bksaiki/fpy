@@ -109,7 +109,8 @@ installation in a single step:
 uv sync
 ```
 This creates `.venv/` and installs FPy in editable mode along with the
-`dev` dependency group.  Activate the environment with
+`dev` dependency group, pinned by `uv.lock`.  Rerun it to reset `.venv/` to
+the lockfile; it removes anything installed by hand.  Activate the environment with
 ```bash
 source .venv/bin/activate
 ```
