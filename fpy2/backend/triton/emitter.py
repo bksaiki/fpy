@@ -67,9 +67,11 @@ from ...ast import (
     ContextStmt,
     Decnum,
     Digits,
+    Div,
     EffectStmt,
     Empty,
     Expr,
+    Fma,
     ForeignVal,
     ForStmt,
     FuncDef,
@@ -107,7 +109,9 @@ from ...ast import (
     ReturnStmt,
     Round,
     Signbit,
+    Sqrt,
     StmtBlock,
+    Sub,
     Sum,
     TernaryOp,
     TupleBinding,
@@ -824,6 +828,11 @@ class _Emitter(Visitor):
         bounds = [self.format_info.by_expr.get(src) for _, src in operands]
         active = self._active_ctx(e)
         target, result = self._storage(e), self.format_info.by_expr.get(e)
+
+        if active.rounding_mode() is RoundingMode.RTO and not _odd_in_range(e, bounds, active):
+            raise TritonEmitError(
+                f'`{type(e).__name__}` rounds to odd, which is exact here only '
+                'where its result is proven inside the format\'s range')
 
         for sig in sigs:
             if sig.matches(storages, active):
@@ -2801,6 +2810,28 @@ def _times(a: str, b: str) -> str:
     if a.isdigit() and b.isdigit():
         return str(int(a) * int(b))
     return b if a == '1' else a if b == '1' else f'{a} * {b}'
+
+
+def _odd_in_range(e: Expr, bounds: Sequence[FormatBound], ctx: Context) -> bool:
+    """Whether *e*'s exact result provably stays inside *ctx*'s range, where
+    the launcher's round to odd is exact.  Bounded from the operands for `+`,
+    `-`, `*` and `fma`; `sqrt` and the exact operations never leave it; `/`
+    is refused."""
+    if isinstance(e, Div):
+        return False
+    if not isinstance(e, Add | Sub | Mul | Fma):
+        return True
+    mags = [_magnitude(to_abstract(b)) for b in [*bounds, ctx.format()]]
+    if any(math.isinf(x) for x in mags):
+        return False
+    *m, limit = [Fraction(x) for x in mags]
+    if isinstance(e, Mul):
+        exact = m[0] * m[1]
+    elif isinstance(e, Fma):
+        exact = m[0] * m[1] + m[2]
+    else:
+        exact = m[0] + m[1]
+    return exact <= limit
 
 
 def _products_are_exact(func: FuncDef, emitter: _Emitter) -> bool:

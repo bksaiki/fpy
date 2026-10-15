@@ -33,6 +33,12 @@ _TABLE = make_op_table()
 _FP16 = fp.IEEEContext(5, 16, fp.RM.RNE)
 _FP32 = fp.IEEEContext(8, 32, fp.RM.RNE)
 _SUFFIX = {fp.RM.RTZ: 'rz', fp.RM.RTN: 'rd', fp.RM.RTP: 'ru'}
+
+
+def _spelling(op: str, rn: str, rm: fp.RM) -> str:
+    if rm is fp.RM.RNE:
+        return rn
+    return f'_fpy_{op}_ro' if rm is fp.RM.RTO else f'libdevice.{op}_{_SUFFIX[rm]}'
 _FP64 = fp.IEEEContext(11, 64, fp.RM.RNE)
 
 
@@ -60,20 +66,20 @@ class TestDivision:
             assert ctx not in _ctxs(_TABLE.binary, Div)
 
     def test_divide_uses_the_correctly_rounded_spelling(self):
-        """Triton's `/` is `fdiv`, the fast variant; `tl.div_rn` is IEEE, and
-        libdevice's `div_rz` and the rest its directed modes."""
+        """Triton's `/` is `fdiv`, the fast variant; `tl.div_rn` is IEEE,
+        libdevice's `div_rz` and the rest its directed modes, and the
+        launcher's `_fpy_div_ro` round to odd."""
         for sig in _TABLE.binary[Div]:
-            assert sig.name == ('tl.div_rn' if sig.out_ctx.rm is fp.RM.RNE
-                                else f'libdevice.div_{_SUFFIX[sig.out_ctx.rm]}')
+            assert sig.name == _spelling('div', 'tl.div_rn', sig.out_ctx.rm)
 
 
 class TestSquareRoot:
     def test_uses_the_correctly_rounded_spelling(self):
-        """`tl.sqrt` is the fast variant; `tl.sqrt_rn` is IEEE, and
-        libdevice's `sqrt_rz` and the rest its directed modes."""
+        """`tl.sqrt` is the fast variant; `tl.sqrt_rn` is IEEE,
+        libdevice's `sqrt_rz` and the rest its directed modes, and the
+        launcher's `_fpy_sqrt_ro` round to odd."""
         for sig in _TABLE.unary[Sqrt]:
-            assert sig.name == ('tl.sqrt_rn' if sig.out_ctx.rm is fp.RM.RNE
-                                else f'libdevice.sqrt_{_SUFFIX[sig.out_ctx.rm]}')
+            assert sig.name == _spelling('sqrt', 'tl.sqrt_rn', sig.out_ctx.rm)
 
 
 class TestNoTranscendentals:
@@ -96,7 +102,7 @@ class TestDirectedArithmetic:
     """libdevice's directed `add_rz` and the rest, at FP32 and FP64 only."""
 
     _DIRECTED = tuple(fp.IEEEContext(es, nbits, rm) for es, nbits in ((8, 32), (11, 64))
-                      for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP))
+                      for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP, fp.RM.RTO))
 
     @pytest.mark.parametrize('op', [Add, Sub, Mul, Div])
     def test_binary_present(self, op):
@@ -108,7 +114,7 @@ class TestDirectedArithmetic:
 
     def test_not_at_fp16(self):
         """libdevice has no directed half arithmetic."""
-        for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP):
+        for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP, fp.RM.RTO):
             assert fp.IEEEContext(5, 16, rm) not in _ctxs(_TABLE.binary, Add)
 
     def test_spellings(self):
@@ -118,6 +124,14 @@ class TestDirectedArithmetic:
         assert add.in_tys == (T.F32, T.F32)
         assert add.format('a', 'b') == 'libdevice.add_rz(a, b)'
         assert sub.format('a', 'b') == 'libdevice.add_rz(a, -(b))'
+
+    def test_odd_spellings(self):
+        """Round to odd is the launcher's helper, from rounding down and up."""
+        ro = fp.IEEEContext(11, 64, fp.RM.RTO)
+        add = next(s for s in _TABLE.binary[Add] if s.out_ctx == ro)
+        sub = next(s for s in _TABLE.binary[Sub] if s.out_ctx == ro)
+        assert add.format('a', 'b') == '_fpy_add_ro(a, b)'
+        assert sub.format('a', 'b') == '_fpy_add_ro(a, -(b))'
 
 
 class TestNativeContexts:

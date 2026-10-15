@@ -41,8 +41,27 @@ MODULE_PREAMBLE = (
     'import triton.language as tl\n'
     # for the exact operations only libdevice spells, such as `ldexp`
     'from triton.language.extra import libdevice\n\n\n'
+    # round to odd, which libdevice lacks, from rounding down and up: toward
+    # zero is whichever is nearer zero, its last bit set where they differ.
+    # Exact only inside the range (the emitter proves it): past the largest
+    # finite, rounding down and up cannot tell where FPy's overflows
+    '@triton.jit\n'
+    'def _fpy_odd(lo, hi):\n'
+    '    t = tl.where(hi > 0, lo, hi)\n'
+    '    if lo.dtype == tl.float64:\n'
+    '        return (t.to(tl.int64, bitcast=True) | (lo != hi).to(tl.int64)).to(tl.float64, bitcast=True)\n'
+    '    else:\n'
+    '        return (t.to(tl.int32, bitcast=True) | (lo != hi).to(tl.int32)).to(tl.float32, bitcast=True)\n'
+    '\n\n'
+    + ''.join(
+        f'@triton.jit\n'
+        f'def _fpy_{op}_ro({args}):\n'
+        f'    return _fpy_odd(libdevice.{op}_rd({args}), libdevice.{op}_ru({args}))\n\n\n'
+        for op, args in (('add', 'a, b'), ('mul', 'a, b'), ('div', 'a, b'),
+                         ('fma', 'a, b, c'), ('sqrt', 'a'))
+    )
 )
-"""The imports an emitted kernel's module needs."""
+"""The imports and helpers an emitted kernel's module needs."""
 
 _LOADED: dict[str, Any] = {}
 """Kernels already written and imported, keyed by source.

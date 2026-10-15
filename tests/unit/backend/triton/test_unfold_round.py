@@ -222,27 +222,27 @@ def test_operands_held_wider_are_a_site():
     reason=_GPU_WHY or '')
 @pytest.mark.parametrize('target', [RZ_FP32, fp.FP32], ids=['rz', 'rne'])
 def test_operands_held_wider_match_the_interpreter(target):
-    """Toward zero composes through FP64 for every operand; to nearest does
-    not (`2 ** -150 + 2 ** -266` lands on a tie), so it stays refused."""
+    """Toward zero composes through FP64 toward zero; to nearest, through FP64
+    to nearest, would not (`2 ** -150 + 2 ** -266` lands on a tie), so it
+    goes through FP64 to odd."""
     import torch
 
     k = _wide_kernel(target)
     with pytest.raises(TritonEmitError, match='narrow'):
         TritonCompiler(drop_asserts=True, unfold=UnfoldMode.ROUNDINGS).compile(
             k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
-    double = TritonCompiler(drop_asserts=True, unfold=UnfoldMode.DOUBLE_ROUND)
-    if target is fp.FP32:
-        with pytest.raises(TritonEmitError, match='narrow'):
-            double.compile(k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
-        return
-    src = double.compile(k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
+    src = TritonCompiler(drop_asserts=True, unfold=UnfoldMode.DOUBLE_ROUND).compile(
+        k, ctx=fp.REAL, arg_types=_WIDE_TYPES)
+    assert ('_fpy_add_ro' in src.source) == (target is fp.FP32)
 
     hard = [0.0, -0.0, 2.0 ** -133, -(2.0 ** -133), 2.0 ** -126, 3.0 * 2.0 ** -120,
-            3.3895313892515355e38, -1.5, 1.0, math.inf, math.nan]
+            2.0 ** -75, -(2.0 ** -75), 3.3895313892515355e38, -1.5, 1.0, math.inf, math.nan]
     torch.manual_seed(0)
     vals = [float(fp.BF16.round(v)) for v in (torch.randn(512) * 8).tolist()]
     xs = [hard[i % len(hard)] if i % 2 else v for i, v in enumerate(vals)]
     ys = [hard[(i * 7) % len(hard)] if i % 3 else v for i, v in enumerate(reversed(vals))]
+    # `x * y + x * x` = `+/-2 ** -150 + 2 ** -266`: a tie only through FP64
+    xs[:2], ys[:2] = [2.0 ** -133, -(2.0 ** -133)], [2.0 ** -17, 2.0 ** -17]
     dtypes = {i: _torch_dtype(t) for i, t in src.dtypes}
     xt, yt = (torch.tensor(v, dtype=dtypes[i]).cuda() for i, v in enumerate((xs, ys)))
     ot = torch.zeros(len(xs), dtype=dtypes[2]).cuda()

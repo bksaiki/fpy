@@ -22,6 +22,7 @@ from fpy2.backend.backend import CompileError
 from fpy2.backend.triton import (
     KernelSource,
     TritonCompiler,
+    TritonEmitError,
     emit_kernel,
     launch,
     tile_loops,
@@ -405,6 +406,45 @@ def test_directed_arithmetic_agrees_bit_for_bit(op, shape, rm):
     assert 'libdevice.' in src.source
     tensors = [torch.tensor(v, dtype=dtype).cuda() for v in (xs, ys, zs)]
     _agree(src, f, [*tensors, torch.zeros(n, dtype=dtype).cuda()], block=64)
+
+
+@pytest.mark.parametrize('shape, src', [((8, 32), fp.IEEEContext(6, 30)),
+                                        ((11, 64), fp.IEEEContext(9, 62))], ids=['f32', 'f64'])
+@pytest.mark.parametrize('op', ['add', 'sub', 'mul', 'fma', 'sqrt'])
+def test_round_to_odd_agrees_bit_for_bit(op, shape, src):
+    """The launcher's round to odd is the context's where the result stays
+    in range: operands at its precision but a narrower range, on the edges
+    (zeros, subnormals, the largest finite, the specials, of both signs) and
+    random values, exact and inexact."""
+    rctx = fp.IEEEContext(*shape, fp.RM.RTO)
+    f = _directed_op(op, rctx)
+    dtype = torch.float32 if shape == (8, 32) else torch.float64
+    edges = [float(src.round(v)) for v in (
+        0.0, -0.0, 1.0, -1.0, 1 / 3, -3.0, float(src.min_normal()), -float(src.min_normal()),
+        float(src.min_subnormal()), float(src.maxval()), -float(src.maxval()),
+        float(src.maxval()) / 3, math.inf, -math.inf, math.nan)]
+    g = torch.Generator().manual_seed(0)
+    rand = [float(src.round(v)) for v in (torch.randn(48, generator=g, dtype=torch.float64) * 8).tolist()]
+    xs, ys, zs = (edges * len(edges) + rand,
+                  [y for y in edges for _ in edges] + rand[::-1],
+                  [edges[(i * 7) % len(edges)] for i in range(len(edges) ** 2)] + rand)
+    n = len(xs)
+    lst = ListType(RealType(src), n)
+    k = _compile(f, [lst, lst, lst, ListType(RealType(rctx), n), INT])
+    assert '_fpy_' in k.source
+    tensors = [torch.tensor(v, dtype=dtype).cuda() for v in (xs, ys, zs)]
+    _agree(k, f, [*tensors, torch.zeros(n, dtype=dtype).cuda()], block=64)
+
+
+def test_round_to_odd_needs_a_result_in_range():
+    """Past the largest finite, rounding down and up cannot tell where round
+    to odd overflows: an operand of the full range, or a quotient, is refused."""
+    rctx = fp.IEEEContext(11, 64, fp.RM.RTO)
+    n = 4
+    for op, src in (('add', rctx), ('div', fp.FP32)):
+        lst = ListType(RealType(src), n)
+        with pytest.raises(TritonEmitError, match='rounds to odd'):
+            _compile(_directed_op(op, rctx), [lst, lst, lst, ListType(RealType(rctx), n), INT])
 
 
 @fp.fpy(ctx=fp.REAL)

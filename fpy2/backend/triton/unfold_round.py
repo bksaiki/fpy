@@ -19,6 +19,7 @@ from .target import (
     _DIV_SHAPES,
     _directed_ctxs,
     _fp_ctxs,
+    _odd_ctxs,
     _ty_of,
     castable,
     is_native_ctx,
@@ -93,16 +94,18 @@ def _drop_proven_bounds(func: FuncDef) -> FuncDef:
 
 _TABLE = make_op_table()
 
-_DIRECTED_CTXS = frozenset(_directed_ctxs())
+_DIRECTED_CTXS = frozenset([*_directed_ctxs(), *_odd_ctxs()])
 
 _TARGET = UnfoldTarget(
     native=lambda c: is_native_ctx(c) or c in _DIRECTED_CTXS,
     rounds=lambda c: is_native_ctx(c) or castable(c) or _integral_round(c) is not None,
     ops=frozenset({*_TABLE.unary, *_TABLE.binary, *_TABLE.ternary}),
-    # FP32, then FP64, each to nearest, then directed (libdevice's: no
-    # signature for every operation, so the emitter may still refuse)
-    intermediates=tuple(c for shape in _DIV_SHAPES
-                        for c in [*_fp_ctxs((shape,)), *_directed_ctxs((shape,))]),
+    # FP32, then FP64, each to nearest, then directed; odd last, being two
+    # operations (no signature for every operation, so the emitter may still
+    # refuse)
+    intermediates=(*(c for shape in _DIV_SHAPES
+                     for c in [*_fp_ctxs((shape,)), *_directed_ctxs((shape,))]),
+                   *_odd_ctxs()),
     post=_drop_proven_bounds,
     holds=lambda c, fmt: bound_fits_in_scalar(fmt, _ty_of(c)),
 )
