@@ -947,26 +947,25 @@ Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
 ##### Phase 5 - The full sweep
 
 **Done** (2026-10-01; Qwen3-0.6B, 2048 tokens, `results/sweep/`; rerun after
-every combination of stages became a design, and 2026-10-02 after the
-sub-FP32 roundings compiled).
-- **The run:** 188 points, 152 designs: 141 measured, 11 refused by the
-  compiler, none unformable (before the second rerun: 133 and 19).  Compiling ~2 min at 8 processes (every design
+every combination of stages became a design, and twice 2026-10-02: after
+the sub-FP32 roundings compiled, and after double rounding).
+- **The run:** 188 points, 152 designs: 145 measured, 7 refused by the
+  compiler, none unformable (before the reruns: 133 and 19, then 141 and
+  11).  Compiling ~2 min at 8 processes (every design
   anew: the kernel cache's key covers the generator's source); the `bf16`
   pass ~30 min, `fp8-row` ~10; run detached (`nohup`), past the tool's
   30-minute background limit.
 - **Refused** (`sweep.csv`'s `reason`; the Triton backend, "What is left"):
   - 5: an exact sum (every anchor's `sum` = `exact`); not planned, as it
     needs error-free transformations;
-  - 4: exact BF16 products held in FP64 and added under FP32, which rounds
-    twice (the BF16 trees, CDNA3's chain of FMAs);
-  - 2: an Add or an Fma rounding to E8M13 toward zero (Hopper's tree and
-    chain of FMAs).
-- **Since closed by double rounding** (`compile_triton` now compiles with
-  `DOUBLE_ROUND`; not yet rerun): the 2 E8M13 ones, through FP32 toward zero,
-  and Hopper's and Ampere's BF16 trees, through FP64 toward zero
-  (`UnfoldKind.WIDE`).  CDNA3's two, to nearest, stay refused: no rule
-  admits FP64 to nearest for them (Triton backend, "What a generated design
-  still hits").
+  - 2: exact BF16 products held in FP64 and added under FP32 to nearest
+    (CDNA3's tree and chain of FMAs): no rule admits FP64 to nearest for
+    them (Triton backend, "What a generated design still hits").
+- **Since closed by double rounding** (`compile_triton` compiles with
+  `DOUBLE_ROUND`): an Add or an Fma rounding to E8M13 toward zero
+  (Hopper's tree and chain of FMAs), through FP32 toward zero, and
+  Hopper's and Ampere's BF16 trees, through FP64 toward zero
+  (`UnfoldKind.WIDE`).
 - **Since closed:** 8 refusals of a rounding below FP32's precision other
   than toward zero (Hopper's E8M13 output to nearest, down or up; CDNA3's
   output at 7-19 bits to nearest).  `unfold_round`'s normal arm
@@ -1003,8 +1002,13 @@ sub-FP32 roundings compiled).
     Blackwell; Hopper's FP8 gains 2 bits (-12.3 to -14.3): each half
     truncates at its own largest exponent.
   - **`sum`:** a chain of FMAs is 2.5-4 bits worse than the fused sum (BF16
-    -19.6, Blackwell's FP8 -20.8), a rounding per element; Blackwell's tree
-    -24.4, as its fused sum -24.6.
+    -19.6, Blackwell's FP8 -20.8), a rounding per element; Hopper's FP8
+    3.5 bits worse (-8.9 against -12.3), each FMA truncated to E8M13, its
+    bias 130x the fused sum's.  A tree is within 0.6 bits of the fused sum
+    (Blackwell's FP8 -24.4 against -24.6, the BF16 ones -22.5 and -21.6
+    against -22.7 and -22.2); Hopper's FP8 tree is 0.7 bits *better*
+    (-13.1), its pairwise adds keeping 13 bits each where the fused sum
+    truncates its terms to 13 bits below the largest.
 
 ##### After the last phase
 
