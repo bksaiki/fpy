@@ -134,27 +134,6 @@ class DigitBoundAnalysis:
     assume_at: Callable[[Expr], frozenset[int]] = lambda _e: frozenset()
     """The guard literals that hold wherever an expression is evaluated."""
 
-    def escapes(self, e: Expr, exp: int | None, mag: int | None) -> bool:
-        """Can *e* sit below digit position *exp*, or reach past ``2 ** (mag
-        + 1)``?  ``None`` for either asks nothing of it.
-
-        The question to ask before :meth:`bounds` is worth asking: a format
-        contains what the store says only if the store's grid is no finer
-        and its magnitude no larger, so a `True` here settles that nothing
-        will be used -- in one satisfiability question where `bounds` costs
-        three optimisations.
-        """
-        terms = self.by_expr.get(e)
-        if terms is None or terms.msb is None or terms.lsb is None:
-            return False
-        # magnitude first: `reaches` stops at the first question that settles it
-        asks: list[tuple[Term, int]] = []
-        if mag is not None:
-            asks.append((terms.msb, mag + 1))
-        if exp is not None:
-            asks.append((-terms.lsb, 1 - exp))
-        return self.store.reaches(asks, self.assume_at(e))
-
     def bounds(self, e: Expr) -> Bounds | None:
         """*e*'s precision, digit position and magnitude.
 

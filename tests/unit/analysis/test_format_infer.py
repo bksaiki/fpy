@@ -2800,6 +2800,41 @@ class TestRescaledRounding:
         assert AbstractFormat.from_format(bound).prec <= 24
 
 
+class TestUnfoldedOverflowBound:
+    """A bounded rounding lowered as the backends lower it: one exact test on
+    the operand, then `x` rounded by the ladder `FloatToFixed` and
+    `RescaleFixed` leave.  Its result stays at the format's largest value --
+    a strict test stops a step short of the threshold, and the ladder is one
+    rounding of `x`, so it is bounded by the rounding of `x`'s bound."""
+
+    @pytest.mark.parametrize('ctx, src', [
+        (fp.IEEEContext(8, 22, fp.RM.RNE), fp.FP64),
+        (fp.IEEEContext(8, 22, fp.RM.RTZ), fp.FP64),
+        (fp.FP16, fp.FP32),
+    ], ids=['e8m13-rne', 'e8m13-rtz', 'fp16'])
+    def test_the_bound_survives_the_lowering(self, ctx, src):
+        from fpy2.transform import (
+            FloatToFixed, Monomorphize, RescaleFixed, UnfoldOverflow, UnfoldSpecial,
+        )
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+
+        func = Monomorphize.apply(f.ast, fp.REAL, [RealType(src)])
+        for step in (UnfoldSpecial, UnfoldOverflow, FloatToFixed, RescaleFixed):
+            func = step.apply(func)
+        info = FormatInfer.analyze(func, use_digit_bounds=True)
+        finite = [AbstractFormat.from_format(b) for d, b in info.by_def.items()
+                  if d.name.base == 'y' and not isinstance(b, SetFormat)]
+        assert finite
+        for af in finite:
+            assert af.pos_bound <= ctx.maxval().as_real()
+            assert af.neg_bound >= ctx.maxval(s=True).as_real()
+
+
 class TestBoundsThroughAMax:
     """Operators whose upper bound goes through a `max`."""
 
@@ -3347,8 +3382,9 @@ class TestMagnitudeRefinement:
             return y
 
         af = self._af(self._defs(f)['y'])
-        assert float(af.pos_bound) == 64.0
-        assert float(af.neg_bound) == -64.0
+        # strict, so a step short on `x`'s grid
+        assert float(af.pos_bound) == 64 - 2 ** -18
+        assert float(af.neg_bound) == -(64 - 2 ** -18)
 
     def test_a_lower_test_pins_the_finest_digit(self):
         """``abs(x) >= 2 ** -14`` with 24 bits of precision leaves no digit
@@ -3405,6 +3441,27 @@ class TestMagnitudeRefinement:
             assert float(self._af(defs[v]).neg_bound) == -14.0, v
         assert float(self._af(defs['e']).neg_bound) == -149.0
 
+    def test_a_strict_test_stops_a_step_short(self):
+        """``x < 1024`` with 24 bits leaves ``x <= 1024 - 2 ** -14``, the step
+        below; ``x > -1024`` the same below zero; ``x <= 1024`` only 1024."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x < 1024:
+                with fp.REAL:
+                    a = x * 1
+            if x > -1024:
+                with fp.REAL:
+                    b = x * 1
+            if x <= 1024:
+                with fp.REAL:
+                    c = x * 1
+            return x
+
+        defs = self._defs(f)
+        assert float(self._af(defs['a']).pos_bound) == 1024 - 2 ** -14
+        assert float(self._af(defs['b']).neg_bound) == -(1024 - 2 ** -14)
+        assert float(self._af(defs['c']).pos_bound) == 1024
+
     def test_a_non_dyadic_literal_refines_nothing(self):
         """A rounded bound could be tighter than the truth."""
         @fp.fpy(ctx=fp.REAL)
@@ -3450,7 +3507,8 @@ class TestBranchRefinement:
             return y
 
         y = self._defs(f)['y']
-        assert self._pos(y) == 65536.0
+        # strict, so a step short on `x`'s grid
+        assert self._pos(y) == 65536 - 2 ** -37
         # a NaN fails every ordering, so it reaches this arm too
         af = AbstractFormat.from_format(y)
         assert af.has_nan and af.has_pos_inf
@@ -3469,8 +3527,8 @@ class TestBranchRefinement:
             return y
 
         af = AbstractFormat.from_format(self._defs(f)['y'])
-        assert float(af.pos_bound) == 65536.0
-        assert float(af.neg_bound) == -65536.0
+        assert float(af.pos_bound) == 65536 - 2 ** -37
+        assert float(af.neg_bound) == -(65536 - 2 ** -37)
 
     def test_a_named_condition_refines_as_its_definition(self):
         """`SimplifyIf` binds every condition to a name, so reading only a
@@ -3486,8 +3544,8 @@ class TestBranchRefinement:
             return y
 
         af = AbstractFormat.from_format(self._defs(f)['y'])
-        assert float(af.pos_bound) == 65536.0
-        assert float(af.neg_bound) == -65536.0
+        assert float(af.pos_bound) == 65536 - 2 ** -37
+        assert float(af.neg_bound) == -(65536 - 2 ** -37)
 
     def test_a_named_condition_negates(self):
         @fp.fpy(ctx=fp.REAL)
@@ -3500,7 +3558,7 @@ class TestBranchRefinement:
                 y = 0
             return y
 
-        assert self._pos(self._defs(f)['y']) == 65536.0
+        assert self._pos(self._defs(f)['y']) == 65536 - 2 ** -37
 
     def test_a_named_condition_does_not_refine_a_reassigned_operand(self):
         """The fact is about the `x` the condition read, not the one after."""
@@ -3587,9 +3645,9 @@ class TestBranchRefinement:
         assert float(pinned) == float(c)
         assert isinstance(free, float)      # this domain's spelling of unbounded
 
-    def test_a_non_dyadic_literal_is_declined(self):
-        """``x < 1/3`` cannot be stated exactly, and a rounded bound could be
-        *tighter* than the truth."""
+    def test_a_non_dyadic_literal_stops_on_the_operands_grid(self):
+        """``x < 1/3`` cannot be stated exactly, but `x` is on a grid, and the
+        step below ``1/3`` on it is exact."""
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
             if x >= fp.rational(1, 3):
@@ -3599,7 +3657,8 @@ class TestBranchRefinement:
                     y = x * 1
             return y
 
-        assert self._pos(self._defs(f)['y']) > 1e300
+        below = fp.IEEEContext(11, 64, fp.RM.RTN).round(Fraction(1, 3))
+        assert self._pos(self._defs(f)['y']) == float(below)
 
     def test_a_lower_bound_on_logb_raises_the_operands_finest_digit(self):
         """The backward rule.  ``logb(x) >= -14`` gives ``|x| >= 2 ** -14``, and
