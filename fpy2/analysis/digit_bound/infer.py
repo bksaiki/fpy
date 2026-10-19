@@ -609,10 +609,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._gathered.add(e)
                 terms.msb, terms.lsb, terms.value = inst.msb, inst.lsb, inst.value
                 return
-            case ListComp():
+            case ListComp() if len(e.targets) == 1:
                 src = self.out.by_expr.get(e.elt)
-                for k in range(len(e.targets)):
-                    self.store.spaces.unify(self._elements(e), self._binder(e, k))
+                self.store.spaces.unify(self._elements(e), self._binder(e))
             case _:
                 src = None
         if src is not None:
@@ -620,6 +619,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return
 
         logb, grid = self._fresh_interval(terms, e, f'e{len(self.out.by_expr)}')
+        if isinstance(e, ListComp):
+            # several clauses: element `k` is built at a point of all of them,
+            # which is no clause's index
+            self._join_at(e, terms, self.out.by_expr.get(e.elt),
+                          [self._binder(e, k) for k in range(len(e.targets))])
+            return
         self._emit_logb(e, self._active(e, logb, grid))
         self._emit_grid(e, grid)
 
@@ -900,7 +905,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         store.le(m, t)
                 return m
             case ListComp():
-                return self.value_of(e.elt)
+                return self.value_of(e.elt) if len(e.targets) == 1 else None
             case Var():
                 # a list built by a loop has no defining expression at all
                 return self._def_value(self.def_use.find_def_from_use(e))
@@ -1571,6 +1576,40 @@ class _DigitBoundInferInstance(DefaultVisitor):
         binders = (*self._binders, self._binder(stmt), self._elements(phi))
         return [self._copy(s, inner, ('witness', id(phi)), binders) for s in srcs]
 
+    def _join_at(self, e: ListComp, terms: Terms, src: Terms | None, over: list[Key]) -> None:
+        """Bound the list *e*'s element by *src* at a witness over the binders
+        *over*, varying with *e*'s elements."""
+        if src is None:
+            return
+        w = self._copy(src, over, ('witness', id(e)), (*self._binders, self._elements(e)))
+        if terms.msb is not None and w.msb is not None:
+            self.store.le(terms.msb, w.msb)
+        if terms.lsb is not None and (lsb := self._elt_lsb(e, w)) is not None:
+            self._grid_ge(terms.lsb, lsb)
+
+    def _gather_binder(self, idx: Expr) -> Key | None:
+        """The gather's binder, where *idx* counts its iterations: a phi of its
+        loop entering at 0 and stepping by 1."""
+        if self._gather is None or not isinstance(idx, Var):
+            return None
+        loop = self._gather[1].site
+        d = self.def_use.find_def_from_use(idx)
+        if not isinstance(loop, ForStmt) or d not in self.def_use.phis.get(loop, ()):
+            return None
+        assert isinstance(d, PhiDef)
+        # the step, through any names it is copied by
+        step = self.def_use.defs[d.rhs].site
+        while isinstance(step, Assign) and isinstance(step.expr, Var):
+            step = self.def_use.find_def_from_use(step.expr).site
+        if (self.view.int_value(self.def_use.defs[d.lhs]) != 0
+                or not isinstance(step, Assign) or not isinstance(step.expr, Add)
+                or not any(isinstance(a, Var) and self.def_use.find_def_from_use(a) is d
+                           and self.view.int_value(b) == 1
+                           for a, b in ((step.expr.first, step.expr.second),
+                                        (step.expr.second, step.expr.first)))):
+            return None
+        return self._binder(loop)
+
     def _carried(self, d: Definition) -> list[Terms] | None:
         """What bounds an arbitrary element of the list *d*, if anything does.
 
@@ -1775,31 +1814,39 @@ class _DigitBoundInferInstance(DefaultVisitor):
         src = self.out.by_expr.get(stmt.expr)
         length = _size(self.array_size.by_def.get(d_in))
         covers = len(stmt.indices) == 1 and self._covers(stmt.indices[0], length)
-        # A gather covers too: every element it writes is an element of the
-        # source at an index in the loop's range, and one it never writes is
-        # uninitialized, so no bound has to reach it.
-        gathers = stmt.expr in self._gathered and self._carried(d_in) == []
-        if not covers and not gathers:
+        # The binder whose index the write is at: a covering index's, or a
+        # gather's where it writes element `k` at its `k`-th iteration (an
+        # element it never writes is uninitialized, so no bound need reach it).
+        at = (self._index_binder.get(self.def_use.find_def_from_use(stmt.indices[0]))
+              if covers and isinstance(stmt.indices[0], Var) else None)
+        if at is None and stmt.expr in self._gathered and self._carried(d_in) == []:
+            at = self._gather_binder(stmt.indices[0])
+        if at is None or at not in self._binders:
             prior = self._carried(d_in)
             self._partial[d] = None if src is None or prior is None else [*prior, src]
             return
-        # each iteration writes an element, so the loop's index is the list's
-        if self._binders:
-            self.store.spaces.unify(self._binders[-1], self._elements(d))
-        self._indexed_at(d, stmt.indices[0])
+        self.store.spaces.unify(at, self._elements(d))
+        # each element is what the binders inside `at` last left: a copy over them
+        i = self._binders.index(at) + 1
+        inner, outer = self._binders[i:], self._binders[:i]
+
+        def last(t: Terms | None) -> Terms | None:
+            return t if t is None or not inner else self._copy(t, inner, ('witness', id(stmt)), outer)
+
+        # A list of exponents needs its element's *value*, not its `logb`: that
+        # is what a rounding position built from it cancels against.
+        val = self.value_of(stmt.expr)
         if src is not None:
+            src = last(Terms(src.msb, src.lsb, val))
+            assert src is not None
+            val = src.value
             self._share(d, src)
         self._covered_write.add(d)
         self._elt_expr[d] = stmt.expr
         if isinstance(stmt.expr, TupleExpr):
             # A list of tuples has no element term of its own, so the fields
             # are kept beside it for whatever destructures them.
-            self._fields[d] = tuple(
-                self.out.by_expr.get(el) for el in stmt.expr.elts
-            )
-        # A list of exponents needs its element's *value*, not its `logb`: that
-        # is what a rounding position built from it cancels against.
-        val = self.value_of(stmt.expr)
+            self._fields[d] = tuple(last(self.out.by_expr.get(el)) for el in stmt.expr.elts)
         if val is not None:
             self.out.by_def.setdefault(d, Terms()).value = val
 

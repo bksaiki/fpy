@@ -365,6 +365,73 @@ def _branch(xs):
     return out
 
 
+@fp.fpy(ctx=fp.REAL)
+def _inner_write_paired(xs, ys):
+    out = fp.empty(4)
+    for i in range(4):
+        for j in range(4):
+            out[i] = xs[j] * ys[i]
+    rs = fp.empty(4)
+    for i in range(4):
+        rs[i] = out[i] + ys[i] + xs[i]
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _gather_counter(xs):
+    out = fp.empty(3)
+    k = 0
+    for t in range(1, 4):
+        out[k] = xs[t]
+        with fp.INTEGER:
+            k = k + 1
+    rs = fp.empty(3)
+    for i in range(3):
+        rs[i] = out[i] + xs[i + 1]
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _gather_counter_copied(xs):
+    out = fp.empty(3)
+    k = 0
+    for t in range(1, 4):
+        out[k] = xs[t]
+        with fp.INTEGER:
+            k1 = k + 1
+        k = k1                  # the step through a name, as the C++ pipeline leaves it
+    rs = fp.empty(3)
+    for i in range(3):
+        rs[i] = out[i] + xs[i + 1]
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _gather_one_index(xs):
+    out = fp.empty(3)
+    for t in range(1, 4):
+        out[0] = xs[t]          # out[0] is xs[3]; the rest never written
+    rs = fp.empty(3)
+    for i in range(3):
+        rs[i] = out[0] + xs[i + 1]
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _gather_inner(xs):
+    out = fp.empty(3)
+    k = 0
+    for t in range(1, 4):
+        for _ in range(2):
+            out[k] = xs[t]
+        with fp.INTEGER:
+            k = k + 1
+    rs = fp.empty(3)
+    for i in range(3):
+        rs[i] = out[i] + xs[i + 1]
+    return rs
+
+
 SHAPES = {
     'paired-sums': (_paired_sums, [ListType(RealType(fp.FP32), 2)]),
     'carried': (_carried, _L4),
@@ -378,12 +445,14 @@ SHAPES = {
     'nested-inner-index': (_nested_inner_index, _L4),
     'carried-list': (_carried_list, _L4),
     'branch': (_branch, _L4),
+    'inner-write-paired': (_inner_write_paired, _L4x2),
+    'gather-counter': (_gather_counter, _L4),
+    'gather-counter-copied': (_gather_counter_copied, _L4),
+    'gather-one-index': (_gather_one_index, _L4),
+    'gather-inner': (_gather_inner, _L4),
 }
 
-KNOWN = {
-    'inner-write': 'Phase 10: a covering write under an inner loop shares its value',
-    'product': 'Phase 10: a product comprehension unifies its result with each clause',
-}
+KNOWN: dict[str, str] = {}
 """The shapes the store is known wrong on, and the phase that fixes each."""
 
 

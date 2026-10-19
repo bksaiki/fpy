@@ -18,9 +18,9 @@ Relational bounds on the precision of a value rounded at a run-time position
 to C++.  Two soundness bugs present since v0.2.4 are fixed: an upper bound on
 an aggregate stated on a list's summary (Phase 4), and a loop's carried value
 and a partial write's elements joined pointwise (Phase 5); see
-[The soundness bugs fixed](#the-soundness-bugs-fixed).  Known unsound, also
-since v0.2.4: a covering write under an inner loop, in the store only (Part
-IV, "After Phase 7"; Phases 8-11).
+[The soundness bugs fixed](#the-soundness-bugs-fixed).  A covering write
+under an inner loop and a comprehension of several clauses, unsound in the
+store since v0.2.4, are fixed too (Phase 10).
 
 ## Part I: semantics and soundness
 
@@ -89,10 +89,22 @@ iterations in the same way: it stands for any iteration.
 #### Layer 2: pointwise relations
 
 An **index space** is an equivalence class of binders (a loop, a comprehension
-clause) and lists, under **correspondence**: a binder that iterates a list, or
-reads or writes it at its own index in order (`_covers`), corresponds with it,
-and so does a list it builds.  `es = [logb(x) for x in xs]` puts `xs`, `es`
-and the comprehension in one space.
+clause) and lists, under **correspondence**.  A binder `b` corresponds with a
+list `xs` when, at every iteration of `b`, the element of `xs` in hand is the one
+at `b`'s index -- an *equation* between two indices.  The program states it in
+exactly these ways:
+
+- `b` iterates `xs` (`for x in xs`), or reads `xs[i]` with `i` its own target;
+- `b` writes `out[i] = v` with `i` its own target, **once per iteration**: no
+  binder opened inside `b` encloses the write;
+- `b` is the **only** clause of a comprehension, which builds the list.
+
+`es = [logb(x) for x in xs]` puts `xs`, `es` and the comprehension in one space.
+Two lists share a space only through binders, so two lists one loop covers do:
+it reads both at the same index.  Unifying is not a safe over-approximation, as
+renaming is: it asserts an equation, and a pointwise fact read through a false
+one is false.  `[x * y for x in xs for y in ys]` builds element `k` from
+`xs[k // m]` and `ys[k % m]`, so its result corresponds with neither clause.
 
 A constraint naming summaries of one index space holds **pointwise**: for every
 index, the elements at that index.  Correspondence is the whole premise, so it
@@ -182,6 +194,38 @@ and an expanded copy anywhere else: a constant `k`, an affine `a + s * k`, a
 part `range(a, b, s)`.  Two reads at one point share a copy, which keeps them
 paired.
 
+#### Sharing
+
+Two entities may **share** a variable -- name the same one, rather than be
+related by a constraint -- only where they are **equal at every point of its
+signature**.  It is the strongest claim the store makes: each takes part in
+every constraint the other does, and no copy separates them.
+
+| construct | shares | premise |
+|---|---|---|
+| a parameter, a call's result | the argument's, the callee's return's terms | the same value |
+| `for x in xs`; `xs[i]`, `i` a binder's target | `x`, the read, with `xs`'s element | the binder corresponds with `xs` |
+| a use of a definition | the definition's terms | the use is at the definition's point (not past a loop its terms vary with) |
+| a covering write `out[i] = v` | `out`'s element with `v` | the write corresponds: each element written once, by the iteration at its index |
+| a loop's phi of a list an `empty` or a covering write fills | the body's terms | as the write; zero trips leave no element to describe |
+
+An assignment `y = e` does not share: it states `msb(y) <= msb(e)` and
+`lsb(y) >= lsb(e)`, since `y`'s seed is narrowed to the path it sits on and
+`e`'s terms are every use's.
+
+#### Writes
+
+- A **covering write** shares, as above.
+- **Any other write** -- at an index not the binder's own target, under a binder
+  opened inside the indexing loop, at a gathered index other than the gather's
+  target -- leaves an element as whichever iteration last wrote it.  The
+  element joins with the written value at a witness over every binder the
+  write consumes, varying with the element: those inside the indexing loop for
+  a write under them, the loop and every binder inside it for a partial write.
+- **A comprehension of several clauses** builds each element at a point of all
+  its clauses, so the element joins with the built value at a witness over
+  them, varying with the result's elements.
+
 #### Control
 
 - **Branches** guard the facts their arms state by the arm's literal; a
@@ -191,9 +235,10 @@ paired.
   one iteration states.  Its phi joins the pre-loop value with the body's at
   an expanded copy, the iteration before: a witness that varies with the
   loop's index, since which iteration it is depends on `j`.
-- **A partial write** leaves each element as whichever iteration wrote it, so
-  an element joins with the written value at a witness over the loop and every
-  binder inside it, varying with the element.
+- **After a loop**, a value the loop carries is its last iteration's, or the
+  pre-loop value where the loop never runs: a witness of the last iteration,
+  which does not vary with the loop.  The phi's own terms are the iteration
+  start's, which do.
 - **Calls** instantiate the callee at the call site: callee variables get the
   call site's signature plus the callee's own binders, and arguments share
   the caller's terms.
@@ -1124,6 +1169,27 @@ Where it is still weaker than Part I, or reads it loosely:
 - **A loop's phi is also its value after the loop**, read there as varying with
   the loop (an open item).
 
+### The rules and the code that applies them
+
+Each rule of Part I, section 4, where `infer.py` applies it, and whether its
+premise holds there.  An audit reads the premises off this table.
+
+| rule | code | premise |
+|---|---|---|
+| pointwise facts (operators, rounding, `logb`, `2 ** n`) | `_emit_logb`, `_emit_grid`, `_value_uncached`, `_active`, `_rounding` | holds |
+| seeds | `_fresh_interval` | holds |
+| aggregate upper bounds | `_emit_logb`'s `Sum`, `AMax`/`AMin`, on `_witness` | holds (Phase 4) |
+| envelopes | `_value_uncached`'s `AMax`/`AMin` | holds |
+| element reads at a binder's target | `_visit_expr`'s covering `ListRef`, `_visit_assign`, `_unpack_elt`; `_indexed_at` | holds |
+| element reads elsewhere | `_at_index`, `_at_index_set`, `_instance`, `_copy`, `_replay` | holds |
+| correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`) | holds (Phase 10) |
+| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: a use past a loop reads the phi's terms (Phase 11) |
+| writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | holds (Phase 10) |
+| branches | `_visit_branches`, `_merge_arms`, `_untaken`, guards | holds |
+| loops | `_visit_for`'s joins, `_before` | holds (Phase 5); a `while` states nothing |
+| calls | `_visit_call`, `analyze` | holds |
+| returns | `_merge_returns` | holds |
+
 ### The soundness bugs fixed
 
 Both were present since v0.2.4, both were found by reading the rules against
@@ -1250,9 +1316,8 @@ designs to C++):
 
 ### What is left
 
-- **Part I does not cover writes, sharing or correspondence**, and a covering
-  write under an inner loop is unsound in the store (Part IV, "After Phase 7").
-  Phases 8-11.
+- **A loop's value after it** reads the phi's terms, which vary with the loop
+  (Phase 11).
 - **CDNA3's chain of FMAs** stays refused: its exit needs `e_max + 4`, and
   per-add rules give `e_max + 30`.  An open item.
 - **Replay cost.**  A copy replays every constraint naming a moving variable,
@@ -1515,8 +1580,8 @@ section 4: the exact assignment satisfies it at every point of its signature):
 | rule | premise | found |
 |---|---|---|
 | a parameter, a call's result, `for x in xs`, a covering read `xs[i]` | the same value at the same point | holds |
-| a covering write `out[i] = v` (`_share`, and `_binders[-1]` unified with `E(out)`) | each element written once, at its own index | **unsound** under an inner loop: `for i: for j: out[i] = xs[j]` makes `out` and `xs` one variable, claiming `out[i] = xs[i]` where it is `xs[3]`; the same on `main` |
-| a comprehension of several clauses | the result's index is each clause's | **unsound** in the store: `[x * y for x in xs for y in ys]` puts `xs`, `ys` and the result in one space, and the store puts `zs[1] = xs[0] * ys[1]` within `2**16` of `xs[1]` (Phase 8's checker; a hand probe through names missed it) |
+| a covering write `out[i] = v` (`_share`, and `_binders[-1]` unified with `E(out)`) | each element written once, at its own index | **unsound** under an inner loop: `for i: for j: out[i] = xs[j]` makes `out` and `xs` one variable, claiming `out[i] = xs[i]` where it is `xs[3]`; the same on `main`.  Fixed in Phase 10 |
+| a comprehension of several clauses | the result's index is each clause's | **unsound** in the store: `[x * y for x in xs for y in ys]` puts `xs`, `ys` and the result in one space, and the store puts `zs[1] = xs[0] * ys[1]` within `2**16` of `xs[1]` (Phase 8's checker; a hand probe through names missed it).  Fixed in Phase 10 |
 | a gather write | the write lands at the gathered index | not checked; both probes sound |
 | a loop's phi, read after the loop | varies with the loop | the open item below; no exploit found |
 | variable creation, which signatures rest on | every path records its spaces | holds: `_var`, `_copy`, and the store's replay |
@@ -1565,39 +1630,51 @@ the product fail it, strict xfails for Phase 10.
 
 #### Phase 9 - Part I: writes, sharing and correspondence
 
-- Part I, section 4 gains the missing rules, each with its premise:
-  - **sharing**: two entities may name one variable only where they are equal
-    at every point of its signature;
-  - **correspondence**: a binder's index *is* a list's where it iterates the
-    list, reads or writes it at its own target once per iteration with no
-    binder in between, or builds it with one clause; unifying is an equation,
-    so a false one is unsound, unlike renaming more;
-  - **writes**: a covering write shares; anything else -- a partial write, a
-    write under an inner binder, a product -- joins with a witness over what
-    it consumes.
-- A table in Part III mapping each rule to the code that applies it, so the
-  next audit reads the premises off the page.
-
-Separate because it is the contract the fixes are checked against; no code.
+**Done.**  Part I, section 3's Layer 2 defines correspondence as an equation
+and lists the three ways a program states it; section 4 gains **Sharing** (a
+table of every share and its premise) and **Writes** (covering, any other,
+several clauses), and Control states the value after a loop.  Part III gains
+[The rules and the code that applies them](#the-rules-and-the-code-that-applies-them),
+four rows of which depart: Phases 10 and 11.
 
 #### Phase 10 - Correspondence only where the indices are equal
 
-- `_visit_indexed_assign`: a covering write shares only where the written value
-  varies over no binder opened inside the index's loop; otherwise the element
-  joins with a copy over those binders (the value as the last inner iteration
-  left it), as `_written` does.  The `_binders[-1]` unify goes; `_indexed_at`
-  records the write's correspondence.
-- `_visit_expr`'s `ListComp`: a comprehension of one clause unifies its result
-  with the clause; one of several does not, its element a witness over the
-  clauses.
-- A gather write shares only at the gather binder's own target.
+**Done.**
 
-Tests: the Phase 8 xfails pass (markers removed); the checker over the
-generator; the corpus at 60/62, all 138 outputs compared with Phase 7's.
+- `_visit_indexed_assign` finds the binder the write's index is the index of:
+  a covering index's (`_index_binder`), or a gather's where the index counts
+  its iterations (`_gather_binder`: a phi of the gather loop entering at 0 and
+  stepping by 1, through any names the step is copied by -- the form
+  `CompToLoop` lowers a range comprehension to, and the C++ pipeline's
+  `_t = k + 1; k = _t` after it).
+  Without one the write is partial.  The binder alone is unified with the
+  list -- the `_binders[-1]` unify is gone -- and under binders opened inside
+  it the written terms, value and fields are a copy over those, at
+  `('witness', id(stmt))`: the value the last inner iteration left, still
+  paired with the outer index.
+- `_visit_expr`'s `ListComp` unifies and shares only for one clause; for
+  several, the element is fresh and bounded by a copy of the built value over
+  the clauses, varying with the result's elements (`_join_at`), and has no
+  `value`.
+- **Diverged from the plan:** a gather shares where its index *counts* the
+  gather loop's iterations, not at the loop's own target -- `CompToLoop`
+  writes `ys[t6] = xs[t]` through a counter, so the planned rule would have
+  made every lowered gather partial.  A product comprehension lowered by
+  `CompToLoop` writes through a counter over two loops, which is partial and
+  already sound; only the direct `ListComp` rule was wrong.
 
-    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
-    cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
-    cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py
+Measured: both Phase 8 xfails pass (markers removed), and five new shapes pass
+-- `inner-write-paired` (fails on Phase 8's code), and a gather through a
+counter, through a copied counter, at one index, and under an inner loop
+(sound before, now pinned).  The checker's 17 shapes 3.7 s; the digit-bound
+and format-inference tests pass.  The corpus hash caught what the shapes did
+not: the first cut recognized only `k = k + 1`, so CDNA3's three FP8 designs,
+whose even and odd gathers the C++ pipeline steps through a copy, went
+partial and refused to compile; following copies restored them.  With it,
+all 141 outputs (138 and Phase 7's three remixes) are byte for byte Phase 7's,
+the same 6 refused.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
 
 #### Phase 11 - A loop's value after it
 
