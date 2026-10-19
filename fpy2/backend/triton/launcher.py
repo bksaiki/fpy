@@ -57,8 +57,7 @@ MODULE_PREAMBLE = (
         f'@triton.jit\n'
         f'def _fpy_{op}_ro({args}):\n'
         f'    return _fpy_odd(libdevice.{op}_rd({args}), libdevice.{op}_ru({args}))\n\n\n'
-        for op, args in (('add', 'a, b'), ('mul', 'a, b'), ('div', 'a, b'),
-                         ('fma', 'a, b, c'), ('sqrt', 'a'))
+        for op, args in (('add', 'a, b'), ('mul', 'a, b'), ('fma', 'a, b, c'), ('sqrt', 'a'))
     )
 )
 """The imports and helpers an emitted kernel's module needs."""

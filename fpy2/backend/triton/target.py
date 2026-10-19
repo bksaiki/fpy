@@ -158,30 +158,30 @@ def _directed_ctxs(shapes: tuple[tuple[int, int], ...] = _DIV_SHAPES) -> list[IE
     return [IEEEContext(es, nbits, rm) for (es, nbits) in shapes for rm in _DIRECTED]
 
 
+def _spelled(f: str, template: str | None) -> tuple[str, TritonOpStyle]:
+    """A call to *f*, or *template* (``{f}`` the function) where given."""
+    return (template.replace('{f}', f), TritonOpStyle.TEMPLATE) if template else (f, TritonOpStyle.CALL)
+
+
 def _directed(op: str, arity: int, template: str | None = None) -> list[TritonOp]:
     """libdevice's ``<op>_<rz|rd|ru>`` over FP32 and FP64, each the context it
-    rounds in; spelled by *template* (``{f}`` the function), if given."""
+    rounds in; see :func:`_spelled`."""
     out = []
     for c in _directed_ctxs():
-        f = f'libdevice.{op}_{_DIRECTED[c.rm]}'
-        name, style = ((template.replace('{f}', f), TritonOpStyle.TEMPLATE) if template
-                       else (f, TritonOpStyle.CALL))
+        name, style = _spelled(f'libdevice.{op}_{_DIRECTED[c.rm]}', template)
         out.append(TritonOp(name, (_ty_of(c),) * arity, c, style=style))
     return out
 
 
-def _odd_ctxs(shapes: tuple[tuple[int, int], ...] = _DIV_SHAPES) -> list[IEEEContext]:
+def _odd_ctxs() -> list[IEEEContext]:
     """FP32 and FP64 rounding to odd: no libdevice mode, but the launcher's
     `_fpy_<op>_ro` helpers spell it from rounding down and up."""
-    return [IEEEContext(es, nbits, RM.RTO) for (es, nbits) in shapes]
+    return [IEEEContext(es, nbits, RM.RTO) for (es, nbits) in _DIV_SHAPES]
 
 
 def _odd(op: str, arity: int, template: str | None = None) -> list[TritonOp]:
-    """The launcher's ``_fpy_<op>_ro`` over FP32 and FP64; spelled by
-    *template* (``{f}`` the function), if given."""
-    f = f'_fpy_{op}_ro'
-    name, style = ((template.replace('{f}', f), TritonOpStyle.TEMPLATE) if template
-                   else (f, TritonOpStyle.CALL))
+    """The launcher's ``_fpy_<op>_ro`` over FP32 and FP64; see :func:`_spelled`."""
+    name, style = _spelled(f'_fpy_{op}_ro', template)
     return [TritonOp(name, (_ty_of(c),) * arity, c, style=style) for c in _odd_ctxs()]
 
 
@@ -280,8 +280,8 @@ def _make_binary_table() -> OpTable:
     }
     # float division only, and only where a correctly-rounded one exists.
     # integer `//` floors where FPy truncates, so it is absent entirely.
-    table[Div] = (_same('tl.div_rn', _fp_ctxs(_DIV_SHAPES), 2) + _directed('div', 2)
-                  + _odd('div', 2))
+    # no round to odd: the emitter cannot bound a quotient's range
+    table[Div] = _same('tl.div_rn', _fp_ctxs(_DIV_SHAPES), 2) + _directed('div', 2)
     return table
 
 

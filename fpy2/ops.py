@@ -144,6 +144,7 @@ def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, 
                     result._real._flags._set_divzero(True)
         return result
 
+
 def _rational(x: Float | Fraction) -> Fraction:
     return x if isinstance(x, Fraction) else x.as_rational()
 

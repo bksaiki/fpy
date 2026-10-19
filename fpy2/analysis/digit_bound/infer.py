@@ -704,7 +704,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     store.le(t, elt + math.ceil(math.log2(n)))
             case Round() | Cast():
                 src, found = self._msb_of(e.args[0]), self._rounding(e)
-                ctx = self._active_ctx(e)
                 if src is not None and found is not None:
                     pos, rm = found
                     if _round_will_carry(rm):
@@ -714,7 +713,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         store.le_max(t, [src + 1, pos + 1])
                     else:
                         store.le(t, src)
-                elif src is not None and isinstance(ctx, _FLOAT_CTXS):
+                elif src is not None and isinstance(ctx := self._active_ctx(e), _FLOAT_CTXS):
                     # a float format keeps the binade, or carries out of it; an
                     # overflow is an infinity, or the bound, which is smaller
                     rm = None if ctx.is_stochastic() else ctx.rm

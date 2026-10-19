@@ -854,6 +854,19 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
     else:
         return _setformat_to_abstract(f)
 
+
+def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> 'FormatBound':
+    """*fmt*, abstractly *af*, met with *cons*: *fmt* itself where that buys
+    nothing (the round trip loses the class: `FP32` comes back an
+    `MPBFloatFormat`) or no `Format` materializes the meet."""
+    met = af & cons
+    if met == af:
+        return fmt
+    try:
+        return met.format()
+    except (ValueError, OverflowError):
+        return fmt
+
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
 def _set_as_fraction(v: SetValue) -> Fraction:
@@ -1114,13 +1127,15 @@ def exact_binop(
     af_b = _to_abstract(rhs)
     if af_a is None or af_b is None:
         return None
-    return _clip_to_constant(op(af_a, af_b), (lhs, af_a), (rhs, af_b), op)
+    return _clip_to_constant(op(af_a, af_b), lhs, rhs, af_a, af_b, op)
 
 
 def _clip_to_constant(
     out: 'AbstractFormat',
-    lhs: tuple['FormatBound', 'AbstractFormat'],
-    rhs: tuple['FormatBound', 'AbstractFormat'],
+    lhs: 'FormatBound',
+    rhs: 'FormatBound',
+    af_a: 'AbstractFormat',
+    af_b: 'AbstractFormat',
     op: Callable[[Any, Any], Any],
 ) -> 'AbstractFormat':
     """*out*, the abstract ``lhs op rhs``, with its bounds clipped to the
@@ -1129,7 +1144,7 @@ def _clip_to_constant(
     ``x``'s upper bound."""
     if op not in (operator.add, operator.sub):
         return out
-    for (s, _), (f, af), first in ((rhs, lhs, False), (lhs, rhs, True)):
+    for s, f, af, first in ((rhs, lhs, af_a, False), (lhs, rhs, af_b, True)):
         if not isinstance(s, SetFormat) or isinstance(f, SetFormat):
             continue
         # a special's result is a special; a zero of either sign adds 0
@@ -1993,18 +2008,7 @@ class _FormatInferInstance(Visitor):
         cons = self._refine.get(d)
         if cons is None or not isinstance(fmt, AbstractableFormat):
             return fmt
-        af = AbstractFormat.from_format(fmt)
-        met = af & cons
-        if met == af:
-            # The round trip preserves the *values* but not the class: `FP32`
-            # comes back an `MPBFloatFormat`, losing the encoding an
-            # `IEEEFormat` carries.  So keep the original where the constraint
-            # bought nothing.
-            return fmt
-        try:
-            return met.format()
-        except (ValueError, OverflowError):
-            return fmt      # no `Format` materializes it; unrefined is sound
+        return _narrowed(fmt, AbstractFormat.from_format(fmt), cons)
 
     @contextmanager
     def _refined(self, cond: Expr, truth: bool) -> Iterator[None]:
@@ -2537,15 +2541,8 @@ class _FormatInferInstance(Visitor):
             return alt.format()
         if cur is None or isinstance(fmt, SetFormat):
             return fmt      # a set of values is exact already
-        # both are sound, so their meet is too, and tighter than either: the
-        # store's magnitude is a binade, so a tighter `cur` need not contain it
-        met = alt & cur
-        if met == cur:
-            return fmt      # keep the class, as `_bound_of_def` does
-        try:
-            return met.format()
-        except (ValueError, OverflowError):
-            return fmt      # no `Format` materializes it; unrefined is sound
+        # the store's magnitude is a binade, so a tighter `cur` need not contain it
+        return _narrowed(fmt, cur, alt)
 
     def _callee_digit_bound(self, e: Call) -> 'DigitBoundAnalysis | None':
         """Digit-bound inference's sub-result for *e*'s callee, if a pass ran."""
@@ -2863,10 +2860,7 @@ class _FormatInferInstance(Visitor):
                 if fitted is not None:
                     cons = self._rescaled_rounding(e)
                     if cons is not None and isinstance(fitted, AbstractableFormat):
-                        try:
-                            return (AbstractFormat.from_format(fitted) & cons).format()
-                        except (ValueError, OverflowError):
-                            pass    # no `Format` materializes it; unrefined is sound
+                        return _narrowed(fitted, AbstractFormat.from_format(fitted), cons)
                     return fitted
             case Pow() if _is_two_set(lhs):
                 # `2 ** n` is a power of two.  Only base two: a general power

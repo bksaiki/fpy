@@ -67,8 +67,7 @@ class TestDivision:
 
     def test_divide_uses_the_correctly_rounded_spelling(self):
         """Triton's `/` is `fdiv`, the fast variant; `tl.div_rn` is IEEE,
-        libdevice's `div_rz` and the rest its directed modes, and the
-        launcher's `_fpy_div_ro` round to odd."""
+        libdevice's `div_rz` and the rest its directed modes."""
         for sig in _TABLE.binary[Div]:
             assert sig.name == _spelling('div', 'tl.div_rn', sig.out_ctx.rm)
 
@@ -104,9 +103,15 @@ class TestDirectedArithmetic:
     _DIRECTED = tuple(fp.IEEEContext(es, nbits, rm) for es, nbits in ((8, 32), (11, 64))
                       for rm in (fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP, fp.RM.RTO))
 
-    @pytest.mark.parametrize('op', [Add, Sub, Mul, Div])
+    @pytest.mark.parametrize('op', [Add, Sub, Mul])
     def test_binary_present(self, op):
         assert set(self._DIRECTED) <= set(_ctxs(_TABLE.binary, op))
+
+    def test_divide_not_to_odd(self):
+        """The emitter cannot bound a quotient's range, so no round to odd."""
+        div = set(_ctxs(_TABLE.binary, Div))
+        assert {c for c in self._DIRECTED if c.rm is not fp.RM.RTO} <= div
+        assert not any(c.rm is fp.RM.RTO for c in div)
 
     def test_fma_and_sqrt_present(self):
         assert set(self._DIRECTED) <= set(_ctxs(_TABLE.ternary, Fma))

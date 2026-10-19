@@ -131,15 +131,21 @@ class _Scopes:
     read, inferred on first use: this runs *before* the rewrites that tighten
     them, so a format may be missing, and its operation is then no site."""
 
+    func: FuncDef
+    def_use: DefineUse
+    ctx_use: ContextUse
+    wide: bool
+    _formats: dict[Expr, FormatBound] | None
+
     def __init__(self, func: FuncDef, wide: bool):
         self.func = func
         self.def_use = DefineUse.analyze(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
         self.wide = wide
-        self._formats: dict[Expr, FormatBound] | None = None
+        self._formats = None
 
     def formats(self, e: Expr) -> list[FormatBound]:
-        """The inferred formats of *e*'s operands, inferred on first use."""
+        """The inferred formats of *e*'s operands."""
         if self._formats is None:
             self._formats = FormatInfer.analyze(
                 self.func, def_use=self.def_use, ctx_use=self.ctx_use).by_expr
