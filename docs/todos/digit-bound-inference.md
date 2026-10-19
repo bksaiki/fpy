@@ -1765,28 +1765,43 @@ by hand, which a generator of small programs would do without them.
 
 #### Phase 12 - The checker, hardened, and every known bug pinned
 
-- `test_digit_bound_oracle.py`:
-  - pairs an outer value with an inner one (its binders a prefix, points
-    matched by prefix), not only values in one body;
-  - checks every point, not only where a difference peaks: points grouped
-    by the literals true there, each group queried once;
-  - inputs with zeros and negatives beside the extremes;
-  - drops the check of `G` against `maximum(lsb)`;
-  - keys literals by binder identity, not counts alone;
-  - leaves sites under a `while` out of the pairs (or counts its iterations;
-    see the open item).
-- Every reproduction above as a shape, a strict xfail naming its phase.
-- A seeded generator of small programs over one or two lists: nested loops,
-  reads at a target, a constant or an affine index, covering, partial and
-  gather writes, carried scalars and lists, comprehensions of one and two
-  clauses, a call.  A fixed set of seeds runs in the unit test; more behind an
-  environment variable.  Whatever it finds beyond the classes above is
-  recorded here and pinned.
+**Done.**  The checker moved to `tests/unit/analysis/digit_bound_oracle.py`
+beside a program generator; `test_digit_bound_oracle.py` holds the shapes, the
+pinned bugs and the generated programs, 64 tests in 8.4 s at `-n 8`.
 
-Separate because it is test code, and the phases after it are checked by it.
-Budget: the file under 10 s at `-n 8`.
+- **Hardened:**
+  - pairs an outer value with an inner one, matching points by prefix;
+  - checks every point, grouped by the literals true there;
+  - inputs with a zero at every position and a negated run;
+  - no check of `G` from above;
+  - literals keyed by binder identity;
+  - sites under a `while` out of the pairs (settling the open item
+    provisionally, as planned).
+- **Cheaper:** a claim is asked as a decision (`store.reaches`) rather than a
+  maximum, and once per term and literal set however many sites share the
+  variables -- one program went from 15 s to 4 s.  At most three literal sets
+  per term are asked, those observing the most first (`_GROUPS`): a bound on
+  the cost, at the price of a violation only a stronger set with a smaller
+  observation would show.
+- **Pinned:** the fourteen reproductions of the review as `KNOWN`, each a strict
+  xfail naming its phase (13, 14 or 15).
+- **The generator** (`generate(seed)`) writes a module with `f(xs, ys)` of two
+  or three blocks drawn from fifteen shapes -- comprehensions of one and two
+  clauses, covering, reversed, nested and gather writes, a carried value with a
+  rounding at its iteration's `logb`, roundings at a position, nested ones,
+  aggregates, parts, a list paired with a scalar, and a call.  Three to five
+  blocks made one program take over a minute (a thousand solver calls at 39 ms
+  on a large store); every bug found involves one or two blocks.  32 seeds run
+  in the suite (`DIGIT_BOUND_SEEDS` for more); 13 fail, all of known classes --
+  11 of class I, one of II, one of V -- pinned in `KNOWN_SEEDS` by phase.  Of 64
+  seeds, 19 fail, all of the same classes: nothing new beyond the review.
+
+Measured: every xfail fails on its assertion; against the code before Phase 4,
+the paired sums, the carried value, the reversed write, the inner-loop write
+and the product are all still caught.
 
     .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py
+    DIGIT_BOUND_SEEDS=256 .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py
 
 #### Phase 13 - A callee's variables vary with the caller's binders
 
@@ -1906,7 +1921,7 @@ A `while` has no iterable to wrap, so its iterations share a key and values from
 different ones get paired, which reports violations that are not.  Counting
 them needs a statement at the body's head; leaving sites under a `while` out of
 the pairs loses nothing the store claims, since a `while` has no binder.
-**Provisional:** leave them out (Phase 12); count them if a bug needs it.
+**Provisional:** left out (Phase 12); count them if a bug needs it.
 
 #### How does a chain of rounded adds get the bound of a sum?
 
