@@ -1,0 +1,70 @@
+"""The design-parameter sweep (`serve/sweep.py`, `serve/plot_sweep.py`), without running it."""
+
+import importlib.util
+from pathlib import Path
+
+import generator
+import pytest
+from core import kernels
+
+_SPEC = importlib.util.spec_from_file_location(
+    'sweep', Path(__file__).resolve().parents[1] / 'sweep.py')
+assert _SPEC is not None and _SPEC.loader is not None
+sweep = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(sweep)
+
+FIELDS = {'rho_bits': {'rho'}, 'rho_mode': {'rho'}, 'L': {'L', 'k'}}
+"""The design fields a parameter moves, where not the one of its name."""
+
+ALL = sweep.points(list(sweep.ANCHORS), list(sweep.PARAMS))
+
+
+def _about(d: generator.Design) -> dict:
+    out = generator.about(d)
+    out.pop('exact')
+    return out
+
+
+@pytest.mark.parametrize('p', ALL, ids=lambda p: f'{p.anchor}-{p.param}-{p.value}')
+def test_a_point_is_its_anchor_but_for_its_parameter(p: object) -> None:
+    anchor, mine = _about(sweep.CATALOG[p.anchor]), _about(p.design)
+    moved = {k for k in anchor if anchor[k] != mine[k]}
+    assert moved <= FIELDS.get(p.param, {p.param})
+    assert sweep.PARAMS[p.param][0](p.design) == p.value
+
+
+def test_each_anchor_has_its_own_value_once_a_parameter() -> None:
+    for a in sweep.ANCHORS:
+        for param in sweep.PARAMS:
+            mine = [p for p in ALL if (p.anchor, p.param) == (a, param)]
+            if mine:
+                assert sum(p.is_anchor for p in mine) == 1, (a, param)
+
+
+def test_a_parameter_the_anchor_does_not_read_is_not_swept() -> None:
+    assert not [p for p in ALL if p.param == 'F2' and sweep.CATALOG[p.anchor].join != 'separate']
+
+
+def test_every_point_is_a_design(registry: None) -> None:
+    """None invalid; `register()` adds each, and again without a clash."""
+    assert not [p for p in ALL if generator.invalid(p.design)]
+    sweep.register()
+    assert {generator.name(p.design) for p in ALL} <= set(kernels.TILES)
+    sweep.register()
+
+
+def test_a_figure_draws_from_the_table_alone(tmp_path: Path) -> None:
+    """A numeric parameter and a categorical one, a point refused: a PNG."""
+    spec = importlib.util.spec_from_file_location(
+        'plot_sweep', Path(__file__).resolve().parents[1] / 'plot_sweep.py')
+    assert spec is not None and spec.loader is not None
+    plot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plot)
+    row = {'anchor': 'a', 'scheme': 'bf16', 'is_anchor': 'False', 'status': 'ok'}
+    rows = [{**row, 'param': 'F', 'value': str(v), 'backward_normwise': str(-v),
+             'is_anchor': str(v == 13)} for v in (8, 13, 25)]
+    rows += [{**row, 'param': 'sum', 'value': 'fused', 'backward_normwise': '-13'},
+             {**row, 'param': 'sum', 'value': 'exact', 'status': 'refused', 'backward_normwise': ''}]
+    out = tmp_path / 'f.png'
+    plot.figure(rows, 'backward_normwise', out)
+    assert out.stat().st_size > 0

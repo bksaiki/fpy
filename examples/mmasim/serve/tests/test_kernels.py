@@ -212,3 +212,36 @@ def test_a_k_the_design_cannot_take_is_refused() -> None:
         kernels.linear(x, w, design)
     with pytest.raises(ValueError, match='does not split'):
         kernels.linear(torch.zeros(1, k0).cuda(), torch.zeros(1, k0).cuda(), design, split_k=2)
+
+
+def test_generated_designs_register_and_agree(registry: None) -> None:
+    """Registered from the generator, compiled together in worker processes
+    (their builds pickle), each runs through `kernels.linear` bit for bit (any
+    NaN as one) against the generator's function; its name is its
+    parameters'."""
+    from dataclasses import replace
+
+    import generator
+    from generator.catalog import CATALOG
+
+    import fpy2 as fp
+
+    remixes = [replace(CATALOG['nv.hopper.e4m3.f32'], F=17, rho=fp.IEEEContext(8, 9 + 17, fp.RM.RTZ)),
+               replace(CATALOG['amd.cdna2.bf16_1k'], L=16, k=32)]
+    names = [kernels.register_design(d) for d in remixes]
+    for d, name in zip(remixes, names):
+        assert name == generator.name(d) and kernels.REGISTERED[name] == generator.about(d)
+    kernels.precompile(names, jobs=2)
+    rng = random.Random(0)
+    for d, name in zip(remixes, names):
+        f, arg_types = generator.build(d)
+        m, n, k = 2, 3, 2 * d.k
+        x = _draw(arg_types[0], rng, m, k)
+        w = _draw(arg_types[1], rng, n, k)
+        got = kernels.linear(x.cuda(), w.cuda(), name).cpu()
+        for i in range(m):
+            for j in range(n):
+                acc = 0.0
+                for t in range(0, k, d.k):
+                    acc = float(f(x[i, t:t + d.k].tolist(), w[j, t:t + d.k].tolist(), acc))
+                assert _bits(got[i, j].item()) == _bits(acc), (name, i, j, got[i, j].item(), acc)

@@ -131,7 +131,7 @@ def _compile(f: fp.Function, arg_types: list[Type]) -> KernelSource:
     m, n = NamedId('m'), NamedId('n')
     square = _L(_L(c, n), m)
     return TritonCompiler(
-        drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
+        drop_asserts=True, unfold=TritonCompiler.UnfoldMode.DOUBLE_ROUND,
     ).compile(
         _matmul(f, len(arg_types)), ctx=fp.REAL,
         arg_types=[_L(a, m), _L(b, n), square,

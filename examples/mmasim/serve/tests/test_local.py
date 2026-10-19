@@ -124,7 +124,13 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
     for name, s in whole.items():
         pooled = sum((g[name] for g in parts.values()), metrics.Stats())
         assert (pooled.n, pooled.rounded) == (s.n, s.rounded)
-        assert (pooled.backward_max, pooled.ulp_max) == (s.backward_max, s.ulp_max)
+        assert (pooled.log_backward_err_max, pooled.ulp_max) == (s.log_backward_err_max, s.ulp_max)
+        assert (pooled.backward_nonzero, pooled.flips) == (s.backward_nonzero, s.flips)
+        assert torch.equal(pooled.log_backward_err_hist, s.log_backward_err_hist)
+        rep = s.report(metrics.METRICS)
+        assert rep['backward'] <= rep['backward_max']
+        assert rep['backward_p50'] <= rep['backward_p90'] <= rep['backward_p99'] <= rep['backward_max'] + 1 / 16
+        assert rep['backward_normwise'] <= rep['backward_max']
         assert math.isclose(pooled.err, s.err, rel_tol=1e-9)
 
 
@@ -156,7 +162,7 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
     own, both = (sum(r['all'].values(), metrics.Stats()).report(metrics.METRICS)
                  for r in local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
                                          ['amd.cdna2.bf16'])['amd.cdna2.bf16'].values())
-    assert own.pop('quantization') == 0 and own.pop('rounded') > 0
+    assert own.pop('quantization') == 0 and own.pop('rounded') > 0 and own.pop('flips') > 0
     assert own == {m: v for m, v in both.items() if m in own}
 
 

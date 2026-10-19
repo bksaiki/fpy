@@ -11,7 +11,9 @@ arithmetic is measured.
 - **Primary evaluation: local per-layer metrics on cached activations.** A
   grid search over designs cannot afford the end-to-end evaluations, which
   take hours per design.
-- **Done:** Stage 1 of the Roadmap.  **Next:** Stage 2.
+- **Done:** Stage 1 of the Roadmap.  **Parked:** Stage 2 (local error
+  predicts the end-to-end effect, which is small at inference).  **Next:**
+  Stage 3, its plan in the Roadmap.
 - **Left:** the Roadmap, Essential gaps and Nice to have.
 
 ## Roadmap
@@ -49,73 +51,1006 @@ What is reported to show it, at every stage:
 
 ### Stage 2 -- Do local metrics predict end-to-end effects?
 
-- **Matmuls:** all 13 designs that take a scheme (5 BF16, 4 FP8, 4
-  block-scaled), on Qwen3-0.6B and Qwen3.5-0.8B.  Each gets local metrics
-  and perplexity at Stage 1's sizes (50 segments).
-  - Zero-shot (paired Δ acc with its interval, and flips) confirms
-    capability on a few designs.
-- **Pairs the design's own effect on both axes:**
-  - local error against the quantized operands' product;
-  - end-to-end effect against `<scheme>-exact`.
+Local per-layer metrics on cached
+activations are the primary evaluation because they are cheap (5-30 s a
+design); end-to-end evaluations take minutes to hours.  The claim that the
+cheap evaluation stands in for the expensive one needs evidence: that
+designs ranked by local error rank the same by their end-to-end effect.
 
-  Against R0, quantization swamps every design, so it would correlate
-  schemes, not designs.
-- **Analysis:**
-  - Spearman rank correlation with a bootstrap interval; 13 designs x 2
-    models is few points.
-  - A sensitivity-weighted predictor, `ΔKL ≈ Σ_l a_l ε_l²`, with per-layer
-    `a_l` from noise injection, once per model (HIGGS's linearity theorem).
-    Also: which local metric predicts best (normwise, backward, bias).
-- **Controls:** `<scheme>-exact` against itself is zero on both axes, and a
-  `split_k` variant of one design differs only in accumulation order.
-- **Needs:** end-to-end noise below the spread between designs, which
-  Stage 1's Phase 6 checks.
+End to end, two measures, each a different question (Record, "Two
+measures"):
 
-### Stage 3 -- Exploring hypothetical designs
+- **the device's effect, quantization held fixed:** KL(R1 || design), how
+  far the design's arithmetic moves the quantized model's output.  Its
+  scale is the scheme's **K₀**, the cost of any inexact design (a
+  perturbation of R1 flips downstream roundings to the scheme's grid),
+  estimated by KL(R1 || R1 rounded toward zero); a design adds a dose to it
+  linear in log2 of its backward error (Record, "The dose sweep");
+- **its harm:** KL(R0 || design) - KL(R0 || R1), paired over segments,
+  whether that movement makes the model worse than its exact product would.
+  It is ~0 but for FP8 truncation, because the device's effect is
+  quantization's error re-drawn, not added to (Record, "What the device's
+  effect is").
 
-`K` MMA-Sim-like designs that mix and match characteristics, through the
-same harness.
-- **Axes the builders in `models/` already expose:**
-  - instruction length `L`;
-  - fraction bits kept in the fused sum `F` (and `F2`);
-  - truncation or rounding of aligned terms;
-  - output rounding `rho`;
-  - `e_zero`;
-  - subnormal flushing;
-  - input and accumulator formats;
-  - scale group size `G`;
-  - accumulation order (`split_k`, `combine`).
+**Status: parked (2026-10-01).**  Local error predicts the device's effect,
+KL(R1 || design), when it is the normwise backward error: linear in its
+log2 along both sweeps (~0.7-0.8% of K₀ a doubling), the split-k and width
+mechanisms on one line, every resolved pair within a scheme agreeing.  But
+the effect is small at inference: the best to the worst FP8 accumulator
+(~2^12 in error) moves it 10% of K₀, and its harm is ~0 (the design
+re-draws quantization's error, it does not add to it); the accumulator's
+share of NLL is 0.02-0.06% against FP8 quantization's 0.45%.  No end-to-end
+quantity here moves enough to be worth correlating further.  Unpark for
+training (where DeepSeek-V3's concern lies), free generation, or a design
+whose error lies far outside these.
 
-  Combinations across vendors (NV's truncating T-FDPA with AMD's FTZ
-  multiply, say) need one composable builder from `models/utils.py`.
-- **Per design:** compile, check against the interpreter, pick a default
-  tile, `kernels.register`.
-- **Per-design cost bounds `K`:** `K ≈ budget / (compile + evaluation)`.
-  So evaluate at several fidelity levels, by successive halving:
-  1. every design, local metrics at 512 tokens, normwise only (~1-5 s);
-  2. the top fraction, plus a diverse sample, at 2048 tokens, all metrics,
-     both workloads;
-  3. a handful, reduced end to end.
+The drivers and analysis this record names (`serve/stage2/`: `run.sh`, `after.sh`, `sweep.sh`, `splitk.sh`, `k0.sh`, `sweep.py`, `analyze.py`, `plot.py`) and their results were removed after commit `4809280`, which holds them.  Its changes to `serve/core` stay: the `<scheme>-exact-rtz` and `-exact-rand` runs (`swap.py`), references in host memory (`scoring.py`), and the local metrics (`metrics.py`).
 
-  Each level is valid only if it ranks designs as the next one up does,
-  which Stage 2 measures between local and end to end.
-- **Cheaper levels:**
-  - The exact FP64 reference and `|x|ᵀ|w|` depend on the scheme, not the
-    design.  Stage 1's Phase 7 shares them across the designs of one pass,
-    a block at a time, leaving each design only its kernel.
-  - A sample of layers may rank designs as all do, since local error is flat
-    with depth.
-- **Phase 1 of the plan is a calibration,** as Stage 1's Phase 6 is: the
-  compile time of a synthetic design, which may dominate the cheap level;
-  each level's cost; and each level's rank agreement with the next.  `K` and
-  the halving fractions then follow from the budget.
-- **Analysis:** a factorial or Latin-hypercube sample over the axes, and
-  log2 error (and end-to-end KL where measured) regressed on the
-  characteristics: which characteristics matter, not only a ranking.
-- **Risks:**
-  - FPy compile time (`backend-triton.md`);
-  - slow kernels, which is why end to end runs on a subset;
-  - combinations the compiler refuses, which the screen skips.
+#### Decisions
+
+The Roadmap left these open; each is closed here with its reason, and says
+what would reopen it.
+
+##### Which designs, under which scheme, with which weights?
+
+All 13 designs that take a scheme, each under the scheme it was built for:
+
+| scheme | designs |
+|---|---|
+| `bf16` | nv.ampere.bf16.f32, nv.hopper.bf16.f32, amd.cdna2.bf16, amd.cdna2.bf16_1k, amd.cdna3.bf16 |
+| `fp8-row` | nv.ada.e4m3.f32, nv.hopper.e4m3.f32, nv.blackwell.e4m3.f32 |
+| `fp8-row:fnuz` | amd.cdna3.fp8 |
+| `mxfp8` | nv.blackwell.mx.e4m3 |
+| `mxfp4` | nv.blackwell.mx.e2m1, nv.blackwell.mxfp4 |
+| `nvfp4` | nv.blackwell.nvfp4 |
+
+- **`fp8-row`, not `fp8-block`, for the E4M3 designs:** one chain over all
+  of `k` is where their accumulators differ most (Ada's truncation); a
+  promotion every 128 shortens it, shrinking the spread Stage 2 needs.
+  It is also Stage 1's scheme, so the two stages pair.
+- **RTN weights from the BF16 master for every scheme,** not the
+  checkpoints: one weight source across schemes, and a known master for the
+  pre-quantization reference.  Checkpoints differ in more than arithmetic
+  (their own quantizers and calibration).  Reopen for a
+  checkpoint-specific claim.
+
+##### Against which reference?
+
+Local error against the quantized operands' exact product; end to end,
+both references (revised after the first results):
+
+- **R1** (`<scheme>-exact`) for the device's effect: it holds quantization
+  fixed, so KL(R1 || design) is the design's arithmetic alone.
+- **R0** (`fp32`) for harm, as a difference paired with R1:
+  KL(R0 || design) - KL(R0 || R1) per segment.  Quantization's cost is in
+  both terms and cancels; what is left is whether the design moves the
+  model toward or away from R0.  KL(R0 || design) alone would rank schemes.
+
+##### Pooled over schemes, or within each?
+
+Revised twice; the Record has the history.
+
+- **The device's effect: within each scheme only.**  Its scale is the
+  scheme's: any perturbation of R1, even under an ulp, costs about the
+  scheme's K₀.  Pooled, raw KL ranks the schemes' sensitivity (Spearman
+  0.22).  Pooling over KL / K₀ was tried and withdrawn: it assumes the
+  dose's slope is the same under every scheme, measured so far only under
+  `fp8-row`.  The test is the pairs of designs within a model and scheme,
+  each resolved or not by its paired difference over segments; each
+  scheme's K₀ and the designs above it are reported as they are.
+- **Harm: pooled** over schemes and models.  It is in the same units under
+  every scheme (KL from R0 the design adds), so it pools; pairs within a
+  scheme as well.
+
+##### Which local metric, which end-to-end metric?
+
+- **Local (x):** every metric `local.py` computes against the
+  post-quantization reference: normwise relative error, componentwise
+  backward error (the mean of its log2 per element, over the elements not
+  exact, with the share exact), ULP bits (mean), correct-rounding rate, bias,
+  magnitude bias.  Which predicts best is a result, not a choice; backward
+  error is reported first (forward error is about it times the condition
+  number, the problem's, not the design's).  `ulp` is bits of error, the
+  mean of `log2(1 + |e| / ulp)`, not a count of ulps.
+- **End-to-end (y):** per token, mean over segments: KL(R1 || design) for
+  the device's effect (Stage 1's most sensitive, 2-39 segments for 80% power
+  on the widest pairs), with top-1 disagreement and Δ NLL against R1 as
+  secondary; KL(R0 || design) - KL(R0 || R1) for harm; `rho`, the share of
+  quantization's error a design keeps.  Every design's point is in
+  `analyze.py`'s `points.csv` (`plot.py` draws it).
+
+##### Sizes
+
+Stage 1's: local metrics on WikiText-2's first 2048 tokens; perplexity on
+50 seeded segments of 2048 tokens.  Stage 1 measured those sufficient to
+separate the widest pairs; smaller spreads may not separate, which the
+intervals show.
+
+##### Models
+
+Qwen3-0.6B, then Qwen3.5-0.8B (another architecture: DeltaNet layers).
+Stage 1 found Qwen3.5's end-to-end KL flat across designs (2.7-2.9e-5 on
+segment 0) — worth knowing whether local error is flat too, or KL just
+insensitive.  **Phi-4-mini** (`swap.MODELS`) is the second family the
+Essential gaps ask for, but at 3.8B parameters its perplexity runs ~6x as
+long: next, not in this run's 6-hour budget.
+
+##### Analysis
+
+- For each measure, the pairs of designs within a model and scheme: resolved
+  where the paired per-segment difference is past 2 standard errors, and
+  then whether the one with more local error has more of it.
+- For harm, Spearman ρ between each local metric (log2) and it, pooled; a
+  bootstrap over designs (10,000 resamples) for its interval.
+- **Deferred:** the sensitivity-weighted predictor `ΔKL ≈ Σ_l a_l ε_l²`
+  needs per-layer sensitivities `a_l` from noise injection, which is new
+  code (a run that adds relative noise at one layer type).  It is worth
+  building if the plain correlation leaves room: per layer type (7 in
+  Qwen3), on 10 segments, is ~70 FP32 passes.
+- **Deferred:** standard errors on local metrics clustered by sequence
+  (needs per-token metrics, which `local.py` pools).
+
+##### Controls
+
+- `<scheme>-exact` against itself is zero on both axes by construction;
+  not run.
+- **An accumulation-order-only change:** `nv.ada.e4m3.f32` at `split_k =
+  4` under `fp8-row`, on Qwen3-0.6B: the same design with shorter chains.
+  It should move along the same line.
+- **A dose sweep** (`serve/stage2/sweep.py`, `sweep.sh`): within one scheme
+  the designs' local errors cluster (2^-19 to 2^-24, and Ada / Hopper at
+  2^-9), too few and too far apart for a trend.  Hopper's E4M3 chain with
+  its fused-sum width `F` stepped 13, 15, ..., 25 (rounded toward zero to
+  `min(F, 23)` bits) runs from Hopper (`F` 13) to Blackwell (25): one
+  hardware parameter, local error ~2.4 bits a step.  Both models, 50
+  segments; the endpoints are Hopper's and Blackwell's own runs.
+
+##### Zero-shot
+
+Not in this run.  Stage 1 ranked it below perplexity; it confirms
+capability on a few designs afterwards (the widest pairs, `--items 500`).
+
+#### Budget
+
+6 GPU-hours.  Stage 1 measured 4-17 s per perplexity segment per design
+(BF16 slowest), so a model is ~1.5-2 h of perplexity; local metrics are
+minutes.  The driver runs Qwen3-0.6B first, logging each script's time;
+Qwen3.5-0.8B follows.
+
+#### Record
+
+##### Qwen3-0.6B (2026-09-29)
+
+Local metrics 4 min for the six schemes; perplexity 85 min (`bf16` 35,
+`fp8-row` 13, `fp8-row:fnuz` 8, `mxfp8` 6, `mxfp4` 15, `nvfp4` 9).
+
+| scheme | design | normwise (log2) | KL vs R1 | top-1 disagreement |
+|---|---|---|---|---|
+| `bf16` | amd.cdna2.bf16_1k | -21.52 | 6.650e-05 | 0.45% |
+| `bf16` | amd.cdna3.bf16 | -21.91 | 6.685e-05 | 0.46% |
+| `bf16` | amd.cdna2.bf16 | -21.27 | 6.726e-05 | 0.45% |
+| `bf16` | nv.hopper.bf16.f32 | -18.97 | 6.746e-05 | 0.48% |
+| `bf16` | nv.ampere.bf16.f32 | -18.52 | 6.761e-05 | 0.47% |
+| `mxfp4` | nv.blackwell.mx.e2m1 | -25.55 | 9.82e-03 | 1.17% |
+| `mxfp4` | nv.blackwell.mxfp4 | -25.97 | 9.82e-03 | 1.17% |
+| `fp8-row:fnuz` | amd.cdna3.fp8 | -23.54 | 1.245e-02 | 6.04% |
+| `fp8-row` | nv.blackwell.e4m3.f32 | -21.09 | 1.261e-02 | 6.05% |
+| `mxfp8` | nv.blackwell.mx.e4m3 | -21.04 | 1.314e-02 | 6.18% |
+| `fp8-row` | nv.ada.e4m3.f32 | -8.80 | 1.373e-02 | 6.29% |
+| `fp8-row` | nv.hopper.e4m3.f32 | -8.80 | 1.378e-02 | 6.28% |
+| `nvfp4` | nv.blackwell.nvfp4 | -23.18 | 1.692e-01 | 20.56% |
+
+- **Within a scheme, local error predicts the ranking.**  Of 14 pairs of
+  designs sharing a scheme, the 4 that 50 segments resolve (the paired
+  per-segment KL difference past 2 standard errors) all agree with every
+  local metric; none disagrees.  Every unresolved pair's KL difference has
+  the sign its local difference predicts, but for two near-ties
+  (`cdna2.bf16_1k` / `cdna3.bf16`, 0.38 apart in log2; Ada / Hopper, equal).
+  The resolution grows with the local gap: 12.3 in log2 (Ada or Hopper
+  against Blackwell) is 12-14 standard errors, 2.3-3.4 (NV against AMD under
+  `bf16`) is 0.6-2.8.
+- **Pooled over schemes it does not** (Spearman 0.21 for normwise, 95% CI
+  [-0.36, 0.76]).  KL against R1 has a scale per scheme (K₀), far above what
+  the designs' errors separate: `bf16` 6.7e-5, `mxfp4` 9.8e-3, FP8 1.2-1.4e-2,
+  `nvfp4` 0.17.  The MXFP4 designs err ~2^-25.5 locally, essentially exact,
+  yet sit at 9.8e-3: under a quantizing scheme any difference from R1 flips
+  some downstream activation's rounding to a neighbouring FP4/FP8 value, so
+  the end-to-end divergence measures the scheme's sensitivity more than the
+  design's error.  This is the pooling decision's reopen condition.
+- **Next, K₀ per scheme:** R1 rounded toward zero instead of to nearest
+  (under an ulp from R1), its KL against R1 an estimate of any inexact
+  design's cost; a design's effect is its KL above it.
+
+##### K₀, Qwen3.5-0.8B, the control (2026-09-29)
+
+Qwen3.5's perplexity 3.3 h (`bf16` 48 min; the rest 12-22 min each, their
+references in host memory after the first attempt ran out of GPU memory);
+Qwen3-0.6B's K₀ runs 4 min a scheme, the control 7 min.
+
+| scheme | K₀, Qwen3-0.6B | K₀, Qwen3.5-0.8B | KL / K₀, Qwen3.5 |
+|---|---|---|---|
+| `bf16` | 6.66e-05 | 4.85e-05 | 1.01-1.02 |
+| `fp8-row` | 1.261e-02 | 9.18e-03 | Blackwell 1.02, Hopper 1.10, Ada 1.11 |
+| `fp8-row:fnuz` | 1.254e-02 | 9.25e-03 | 1.00 |
+| `mxfp8` | 1.314e-02 | 9.66e-03 | 1.01 |
+| `mxfp4` | ~0 | ~0 | none |
+| `nvfp4` | 1.708e-01 | 1.113e-01 | 1.00 |
+
+- **K₀ is most of every design's KL.**  A 1-ulp perturbation of R1
+  costs what the best designs cost; the worst (Ada, Hopper under FP8, 12-13
+  bits more local error) add 9-11% to it.  The scheme sets KL's scale,
+  the design a few percent on top.
+- **(Withdrawn; see "Two measures".)**  Pooled over schemes and models on
+  KL / K₀, Spearman was 0.80 for normwise ([0.51, 0.91]), 0.89 for
+  backward error, log-log Pearson 0.96-0.97; but the four Ada / Hopper
+  points carried most of it (without them, 18 designs: Spearman 0.65
+  [0.20, 0.86], Pearson 0.69), and the ratio assumes a scaling the control
+  contradicts.
+- **Within a scheme, 12 pairs resolve over both models; every local metric
+  but `backward_max` agrees on all 12**, none disagrees (`backward_max`: 8
+  and 4).  Qwen3.5 resolves NV against AMD under `bf16` (z 2.0-4.3, 2.1-2.9
+  bits apart) that Qwen3-0.6B did not.  The 16 unresolved are near-ties in
+  local error (under 0.6 bits) or the two MXFP4 designs.
+- **MXFP4 is exact, up to rare events.**  Its designs err 2^-25.5 (Qwen3)
+  and 2^-36.8 (Qwen3.5) locally, exact on 100.0000% and 99.9997% of
+  elements (so their backward error, a mean over the rest, is left out of
+  `plot.py`): E2M1 products and power-of-2 scales are
+  exact in FP32, so rounding toward zero almost never changes R1 (its
+  K₀, ~1e-11, is refused as zero).  On Qwen3.5 KL is 1e-11, no top-1
+  disagreement.  On Qwen3-0.6B, 47 of 50 segments match R1 and three carry
+  the mean (KL 0.28, 0.17, 0.045), both designs alike: where they do
+  differ, a flipped FP4 rounding downstream cascades.  Such a scheme needs
+  a rate of divergent segments, not a mean.
+- **The control agrees in sign and is resolved:** Ada at `split_k = 4`
+  errs 2.3 bits less (-11.08 against -8.80), its KL drops 1.373e-02 to
+  1.352e-02 (paired z 2.8).  Its KL above K₀ falls 19% for 4.9x less
+  normwise error: well short of `ε²`, the scaling a sensitivity model
+  `ΔKL ≈ Σ a_l ε_l²` assumes.
+
+##### Two measures (2026-09-29)
+
+KL against R1 answers what the design's arithmetic does to the quantized
+model; it does not say whether that is worse.  Harm, KL(R0 || design) -
+KL(R0 || R1) paired over segments, does; it needs no new runs (each design
+was already paired with R0).
+
+| model | scheme | design | harm vs R0 | z |
+|---|---|---|---|---|
+| Qwen3-0.6B | `fp8-row` | nv.hopper.e4m3.f32 | +4.3e-04 | +3.9 |
+| Qwen3-0.6B | `fp8-row` | nv.ada.e4m3.f32 | +3.4e-04 | +3.1 |
+| Qwen3-0.6B | `mxfp8` | nv.blackwell.mx.e4m3 | +2.7e-04 | +2.7 |
+| Qwen3.5-0.8B | `fp8-row` | nv.ada.e4m3.f32 | +1.1e-04 | +1.5 |
+| Qwen3.5-0.8B | `fp8-row` | nv.hopper.e4m3.f32 | +8.9e-05 | +1.3 |
+| every other design | | | | \|z\| ≤ 1.9 |
+
+Against quantization's own cost, KL(R0 || R1): `bf16` 4.5e-05 and 3.1e-05,
+`fp8-row` 1.8e-02 and 1.2e-02, `nvfp4` 0.32 and 0.19 (Qwen3-0.6B, Qwen3.5).
+
+- **Harm is below resolution for all but FP8 truncation.**  3 of 26
+  designs resolve, all on Qwen3-0.6B; the largest, Hopper under `fp8-row`,
+  is 2% of the scheme's quantization cost.  Under `bf16` every design's
+  harm is within ±4e-07 (under 1% of 4.5e-05), none resolved, and bounded
+  at 2.5% of that cost (2 standard errors).  Pooled over
+  schemes and models, Spearman with normwise is 0.30 ([-0.14, 0.70]): no
+  correlation, for want of a quantity that varies past its noise.
+- **Pairs on harm:** 3 of 28 resolve (Ada and Hopper against Blackwell on
+  Qwen3-0.6B, z 2.2 and 3.0; Ampere against Hopper under `bf16` on Qwen3.5,
+  z 2.0), all agreeing with local error.
+- **The device's effect: the scheme's K₀, then a dose** (the dose sweep,
+  below, measures it: linear in log2 backward error, not a threshold).
+  Within a scheme local error ranks it (12 of 12 resolved pairs); across
+  schemes K₀, not the design, sets its size.  K₀ is the scheme's and the
+  model's: Qwen3.5's are 0.65-0.73x
+  Qwen3-0.6B's under every scheme, the order of schemes the same.
+- **What Stage 2 answers** (with the dose sweep's result).  Local error
+  predicts the device's effect within a scheme, on both models: its ranking
+  (12 of 12 resolved pairs) and, under `fp8-row`, its size (linear in log2
+  backward error).  It cannot be checked against harm, which, but for FP8
+  truncation, 50 segments do not resolve: for inference quality,
+  quantization dominates and designs that are not grossly worse do not
+  measurably matter.  The device's effect remains real as divergence (6% of
+  top-1 tokens change under FP8 against R1, 0.45% under `bf16`), which
+  matters where outputs must agree across hardware.
+
+##### The dose sweep (2026-09-29)
+
+`sweep.sh`: local metrics 80 s a model; perplexity of the five middle
+widths 23 min (Qwen3-0.6B), 28 min (Qwen3.5).  `sweep.f13` and `sweep.f25`
+reproduce Hopper's and Blackwell's local metrics exactly, and R1 agrees
+between the sweep's runs and the scheme's (the same segments), so the
+endpoints are theirs.
+
+| `F` | normwise, Qwen3-0.6B | ULP bits | KL / K₀ | harm z | normwise, Qwen3.5 | ULP bits | KL / K₀ | harm z |
+|---|---|---|---|---|---|---|---|---|
+| 13 (Hopper) | -8.80 | 12.47 | 1.093 | +3.9 | -10.10 | 12.40 | 1.103 | +1.3 |
+| 15 | -10.90 | 9.85 | 1.065 | +0.9 | -12.68 | 9.78 | 1.087 | +0.6 |
+| 17 | -13.27 | 7.20 | 1.045 | +0.6 | -15.37 | 7.12 | 1.058 | +1.6 |
+| 19 | -15.72 | 4.63 | 1.014 | +0.8 | -18.13 | 4.52 | 1.044 | +0.2 |
+| 21 | -18.07 | 2.34 | 0.997 | +0.9 | -20.91 | 2.17 | 1.028 | +0.7 |
+| 23 | -20.82 | 0.88 | 0.988 | +0.1 | -23.57 | 0.75 | 1.011 | -0.2 |
+| 25 (Blackwell) | -21.09 | 1.08 | 1.001 | +1.1 | -22.92 | 0.90 | 1.016 | +1.7 |
+
+- **The device's effect falls with local error at every step**: each step
+  from 13 to 21 (Qwen3-0.6B) or 23 (Qwen3.5) is resolved on its own
+  (paired z 3.0-6.0); Spearman 0.89-0.96 (Qwen3-0.6B) and 1.00 (Qwen3.5)
+  for every local metric.
+- **It is linear in the backward error** (the mean of its log2 per element,
+  as backward error is read throughout), the same slope on both models:
+  KL / K₀ = 1.205 + 0.0075 x backward (R² 0.96, Qwen3-0.6B) and 1.205 +
+  0.0066 x backward (R² 0.99, Qwen3.5).  Each doubling of backward error
+  adds ~0.7% of K₀: the scheme's flips, for any design that is not exact,
+  and a dose on top logarithmic in the error, not `ε²`.  Against ULP bits,
+  also a mean of log2, R² 0.98 and 0.99.  (First measured with the log2 of
+  the arithmetic mean, which large errors dominate: the fits were the same
+  to 0.0002 in slope, every mean of log2 0.9-1.6 bits below it.)  K₀ is not a bound: a design whose
+  error is under R1-rounded-toward-zero's sits just below it (0.988 at `F`
+  23).
+- **Harm resolves only at `F` 13, on Qwen3-0.6B** (z 3.9), and falls to
+  noise one step later (the step's paired z 3.8); from `F` 15 to 25 it is
+  flat and unresolved on both models, and nowhere resolved on Qwen3.5.  Of
+  the local metrics |bias| grows most over that step (4.2 to 13.8 u,
+  against ULP bits 9.9 to 12.5): harm may follow one-sided truncation error past
+  a threshold, which one resolved step cannot settle.
+
+##### What the device's effect is (2026-09-30)
+
+Harm ~0 while the device's effect is as large as quantization's own cost
+(`fp8-row`, Qwen3-0.6B: 1.3e-02 against 1.8e-02) needs explaining.  Taking
+KL as half a squared distance (small perturbations), a design displaced
+from R1 at right angles to R1's offset from R0 would be as far from R0 as
+both costs added (3.1e-02), harm ~1.3e-02; measured, ~1e-04.  What fits:
+
+- **Every design is as far from R0 as R1 is**: KL(R0 || design) =
+  KL(R0 || R1) to 1-2%, every design and scheme, both models.
+- **So the design re-draws part of quantization's error.**  That error has
+  a fixed part (the weights' rounding, and roundings every run makes alike)
+  and a chaotic part: activations near a grid boundary, which round either
+  way.  Any difference in arithmetic flips some of those roundings and
+  draws that part afresh: another realization, no larger.  The share kept
+  is `rho`, the correlation of R1's and the design's offsets from R0 (the
+  law of cosines on the three KLs; `analyze.py`'s `rho`).
+
+| scheme | `rho`, Qwen3-0.6B | `rho`, Qwen3.5 | re-drawn, ~1 - `rho` |
+|---|---|---|---|
+| `bf16` | 0.25-0.26 | 0.21-0.22 | 75-80% |
+| `fp8-row`, `fp8-row:fnuz` | 0.63-0.68 | 0.58-0.62 | 35-40% |
+| `mxfp8` | 0.70 | 0.66 | 30-35% |
+| `nvfp4` | 0.74 | 0.71 | 26-29% |
+| `mxfp4` | 0.99 | 1.00 | ~0 (its designs are exact) |
+
+- **`rho` is the scheme's**, the same across its designs (`bf16`
+  0.254-0.263), and orders the schemes as the explanation predicts: least
+  kept under `bf16`, whose weights are the BF16 master's exactly (all its
+  error is activations'), most under the FP4 schemes, whose weights' error
+  is fixed.  Its order is the same on both models.
+- **It explains the device's effect's bands by scheme**: KL(R1 || design) ≈
+  2 (1 - `rho`) KL(R0 || R1), both factors the scheme's.  (Plotted, with
+  the device's effect against quantization's cost, a design's accuracy
+  barely showed: Hopper's 12.9-13.3 bits more backward error than
+  Blackwell's moved its point 0.04 decades.  `plot.py` draws instead the
+  device's effect against backward error, in a band per scheme, and KL /
+  K₀ within `fp8-row` and `bf16`.)
+- **And harm**: a re-draw is as far from R0 as what it replaces, so harm
+  is ~0; a design shows it only where it adds error of its own besides.
+  Ada and Hopper keep a little less (0.63 against Blackwell's 0.66, Qwen3-0.6B).
+- **Caveats.**  KL as half a squared distance is an approximation.  `bf16`'s
+  `rho` is not 0: some activations round alike in every run, presumably the
+  first layer's input, the same in all of them.
+
+##### K₀'s second estimate (2026-09-30)
+
+Is K₀ an artefact of rounding toward zero, one-sided and changing about half
+the outputs?  `<scheme>-exact-rand` moves every element of R1 an ulp up or
+down at random, without bias (`serve/stage2/k0.sh`, Qwen3-0.6B, 50 segments,
+~4 min a scheme):
+
+| scheme | K₀, toward zero | K₀, random sign | ratio | paired z | top-1, toward zero | top-1, random |
+|---|---|---|---|---|---|---|
+| `bf16` | 6.663e-05 | 6.614e-05 | 0.993 | -1.3 | 0.45% | 0.45% |
+| `fp8-row` | 1.261e-02 | 1.253e-02 | 0.994 | -1.1 | 6.07% | 5.99% |
+| `fp8-row:fnuz` | 1.254e-02 | 1.243e-02 | 0.991 | -1.6 | 5.87% | 5.96% |
+| `mxfp8` | 1.314e-02 | 1.319e-02 | 1.004 | +0.6 | 6.26% | 6.17% |
+| `mxfp4` | ~0 | 0.408 | | | 0.00% | 31.81% |
+| `nvfp4` | 0.1708 | 0.1721 | 1.008 | +1.4 | 20.68% | 20.61% |
+
+- **K₀ is the perturbation's, not its form's:** within 1% for every scheme
+  but `mxfp4`, none resolved, though one estimate is biased and moves half
+  the outputs and the other unbiased and moves all of them.  It measures
+  that R1 was perturbed at all.
+- **`mxfp4` has a K₀, and a large one** (0.41, 32% of top-1 tokens):
+  rounding toward zero almost never changes its R1 (E2M1 products and
+  power-of-2 scales, exact in FP32), so that estimate read ~0.  Its designs
+  sit near 0 because they are exact, not because the scheme is insensitive;
+  where they are not (three of Qwen3-0.6B's segments), they diverge as far.
+  The analysis keeps rounding toward zero's estimate (the one both models
+  have), so `mxfp4` stays without a K₀ there.
+
+##### More from the data on disk, and the split-k sweep (2026-09-30)
+
+- **First top-1 disagreement with R1** (`paired`'s `median`, the token
+  position where teacher-forced top-1 first differs), a proxy for free
+  generation: `bf16` 80-128 tokens, `fp8-row` 4.5-15, `nvfp4` 2-2.5, on
+  both models.  Greedy decoding would leave R1's path within ~10 tokens
+  under FP8, whatever the accumulator; within `fp8-row` the less accurate
+  designs diverge sooner (Qwen3-0.6B: Hopper, Ada 5.5-7 against Blackwell
+  13), their intervals overlapping.
+- **The re-draw holds per segment:** across the 50 segments, KL(R1 ||
+  design) tracks KL(R0 || R1) (Spearman 0.81-0.88 in five of six scheme and
+  model pairs, 0.63 for `nvfp4` on Qwen3.5), their ratio tight per scheme
+  (IQR ±3%: `bf16` 1.49 and 1.57, `fp8-row` 0.68 and 0.78, `nvfp4` 0.52
+  and 0.59).
+- **The split-k sweep** (`splitk.sh`): nv.ada.e4m3.f32 with `k` split into
+  1-64 slices (64: one instruction per slice at `k` 1024), Qwen3-0.6B, 50
+  segments, ~7 min a split.  Another mechanism for less error: shorter
+  chains, the same accumulator.
+
+| `split_k` | backward | KL / K₀ | width sweep's line | off, SE |
+|---|---|---|---|---|
+| 1 | -15.80 | 1.089 | 1.086 | +0.2 |
+| 2 | -16.30 | 1.074 | 1.082 | -0.4 |
+| 4 | -16.85 | 1.072 | 1.078 | -0.3 |
+| 8 | -17.48 | 1.050 | 1.073 | -1.2 |
+| 16 | -18.17 | 1.053 | 1.068 | -0.9 |
+| 32 | -18.90 | 1.048 | 1.063 | -0.8 |
+| 64 | -19.47 | 1.044 | 1.058 | -0.8 |
+
+- **Backward error ranks the splits** (KL / K₀ falls 1.089 to 1.044 as they
+  shorten, 8 and 16 a near-tie), **but splits and widths do not share one
+  line.**  Paired over segments against a width design of about the same
+  backward error, a split has less KL: split 8 against `F` 15 (1 bit apart,
+  the split worse) -0.015 of K₀, z -2.4; split 16 against `F` 15 (0.3 bit)
+  -0.011, z -2.0; split 64 matches `F` 17 (z -0.2) with 1.7 bits more
+  backward error.  Along the splits KL falls ~1.2% of K₀ a bit, along the
+  widths 0.75%.
+- **Not bias:** at a given backward error the splits have more of it
+  (magnitude bias, split 16 35u against `F` 15's 21u), yet less KL.
+- So backward error ranks designs within a mechanism but is not quite
+  sufficient across mechanisms: at equal backward error, shorter chains cost
+  ~1-1.5% of K₀ less than a narrower accumulator.  Marginal (z ~ -2, several
+  comparisons), one model.  Untested guess: the error's structure, a long
+  truncated chain's errors correlated along an output row, split partials'
+  less so.
+
+##### Which local statistic the dose follows (2026-09-30)
+
+Two local metrics added (`metrics.py`): **`flips`**, the share of outputs
+whose code on the scheme's activation grid differs between the design's and
+`fl(y)`, each quantized as a next layer's input would be (a first version
+compared dequantized values, so a scale an ulp apart counted every element:
+~100% under FP8; codes, not values); and **percentiles of log2 backward
+error** (p50, p90, p99, from 1/8-bit histograms that pool exactly).  Every
+local run redone (~15 min).
+
+- **Flip rates:** Hopper and Ada 2.1% (Qwen3-0.6B, `fp8-row`), the width
+  sweep 4.0e-03 (`F` 15) to 2.4e-06 (`F` 23), Blackwell 3.7e-06; `bf16`
+  1.4e-04 to 8.2e-04; `nvfp4` 1.4e-07.  A few flipped codes per million
+  outputs already cost K₀: any flip starts the cascade.  Along the sweep KL
+  / K₀ follows log2 of the flip rate as it does backward error (Spearman
+  the same, log-log Pearson 0.98, 0.99).
+- **The split-k offset follows the weighting of large errors.**  The splits'
+  mean distance from the width sweep's line, drawn in each metric (KL / K₀):
+
+| local metric | weights | split offset |
+|---|---|---|
+| backward p50 | the typical element | -0.014 |
+| backward (mean of log2) | every element alike | -0.014 |
+| log2 flips | every element alike | -0.015 |
+| backward p90 | | -0.010 |
+| backward p99 | the tail | -0.008 |
+| backward max | the largest | +0.007 |
+| normwise | errors in the largest outputs | +0.002 to +0.003 (RMS 0.006) |
+
+  Normwise relative error puts both mechanisms on one line, within noise;
+  the per-element statistics leave the offset whether they count errors
+  (flips) or size them (backward, its percentiles).  So the dose follows
+  errors in the large outputs, which splitting shrinks less than the
+  typical element's.
+- **Normwise backward error does the same** (`backward_normwise`,
+  `||ŷ - y||_F / |||x|ᵀ|w|||_F`, log2): split offset +0.003 (RMS 0.006),
+  the width sweep's R² 0.93, 12 of 12 resolved pairs.  Within a scheme and
+  model it is normwise error less a constant (3.54 bits under `fp8-row`,
+  Qwen3-0.6B: `|||x|ᵀ|w||| / ||y||`, the problem's, not the design's), so
+  the two rank and fit alike.  What matters is normwise against
+  componentwise, not forward against backward: the dose follows the error's
+  size against the whole output, which its largest elements set.
+- **So `plot.py` and the fits now use normwise backward error.**  The width
+  sweep: KL / K₀ = 1.181 + 0.0080 x backward_normwise (R² 0.93,
+  Qwen3-0.6B), 1.190 + 0.0068 x (R² 0.99, Qwen3.5); every split within 0.5
+  standard errors of it (+0.4 to -0.3).  `bf16`'s slopes 0.0036 and 0.0045.
+  The earlier sections' fits are in componentwise backward error, as
+  measured then.
+
+##### Error binned by `k` (2026-09-30)
+
+`local.py` pooled each design's layers by `k` in bins `[2^i, 2^(i+1))`
+(since removed: it changed no conclusion); both models have two, 1024-2047 (q, k, v, gate, up) and 2048-4095 (o, down).
+
+| bin | metric | width sweep R² | split offset (KL / K₀) |
+|---|---|---|---|
+| 1024-2047 | normwise backward | 0.968 | -0.009 |
+| 2048-4095 | normwise backward | 0.940 | +0.007 |
+| all | normwise backward | 0.943 | +0.002 |
+| either, or all | componentwise backward | 0.97 | -0.014 to -0.016 |
+
+(Qwen3-0.6B; Qwen3.5's width sweep alike, R² 0.98-0.99 in every bin.)
+
+- **Along the width sweep the bins move together** (slopes 0.007-0.008,
+  both models): a narrower accumulator scales every layer's error alike, so
+  the sweep cannot say which `k` the dose follows.
+- **No bin alone puts the splits on the line**, the short one below it and
+  the long one above: splitting improves them unequally and the dose follows
+  both, pooled normwise.
+- **The componentwise offset is not `k`'s mix:** it is the same in every
+  bin, so it is the weighting of elements, not the pooling of chains.
+- Hopper's normwise backward error is 12.8 bits above Blackwell's at short
+  `k`, 11.5-12.2 at long.  Attributing the dose to a `k` range needs designs
+  that differ in one layer group at a time.
+
+#### Open items
+
+##### Is backward error sufficient across mechanisms?
+
+(Answered for Qwen3-0.6B: "Which local statistic the dose follows".
+Normwise backward error removes the offset; the componentwise statistics
+leave it.  Reopen on a second model.)
+The split-k sweep puts shorter chains ~1-1.5% of K₀ below the width
+sweep's line at equal backward error (z ~ -2, Qwen3-0.6B).  At stake:
+whether local backward error alone predicts the device's effect, or its
+structure matters too.  Replicating on Qwen3.5 (~40 min; its `k` 3584 stops
+at 32 slices) would say whether the offset is real; not run.  If it is, a
+per-row error correlation metric in `local.py` would test the guess.
+**Provisional:** backward error ranks within a
+mechanism; across mechanisms, treat differences under ~1.5% of K₀ as
+unresolved.
+
+##### Does the dose's slope hold under other schemes?
+
+The dose sweep measured it under `fp8-row` only (~0.7% of K₀ per doubling
+of backward error, both models).  At stake: whether `K₀ x (c + a x
+log2(backward))` is a model of the device's effect or a fact about one
+scheme.  `bf16`'s five designs, over 2^-27.4 to 2^-23.9 in backward error,
+fit about half `fp8-row`'s slope (0.0034 and 0.0038 of K₀ a bit, Qwen3-0.6B
+and Qwen3.5), too narrow a span to tell it from it; a sweep there (Hopper's BF16
+chain, `F` stepped) would test it, ~1 h a model.  **Provisional:** a fact
+about `fp8-row`; the sensitivity-weighted predictor (Analysis, deferred)
+waits on it, since `ε²` is already contradicted.
+
+##### How is a scheme without a K₀ evaluated?
+
+(`mxfp4` has one, 0.41, by the random-sign estimate: "K₀'s second
+estimate".)  `mxfp4`'s designs are R1 but for rare cascades, which a mean over 50
+segments measures poorly (SE 6.5e-3 on 9.8e-3).  **Provisional:** report
+the divergent segments' count per design; the two MXFP4 designs tie on it.
+Reopen when an MXFP4 design with real accumulation error is built.
+
+##### Is 50 segments enough for the narrow pairs?
+
+Stage 1 sized it on the widest pairs.  A design pair whose KL difference is
+within its intervals is a tie for ranking, not a disagreement.
+**Provisional:** treat such pairs as ties.  Reopen if many pairs tie: then
+more segments for those.
+
+##### Is harm worth resolving?
+
+Harm's standard errors are ~2-4e-07 under `bf16` and ~5e-05-1e-04 under
+FP8.  Resolving effects of the size the table suggests (1e-07, 5e-05) takes
+~10-100x the segments: 8-80 h a model under `bf16`.  At stake: a claim that
+local error predicts harm, against the cheaper claim Stage 2 already has
+(no design but FP8 truncation harms past the table's bounds).
+**Provisional:** not resolved; harm is reported as a bound.  The dose
+sweep filled the range between Blackwell's and Hopper's local error and
+found harm flat there but at Hopper's end.  Reopen to separate |bias| from
+backward error as harm's cause (e.g. the sweep's chains with the fused sum
+and `rho` rounding to nearest, if that keeps the error's size and drops its
+bias), or for free-running generation, where one
+flipped token changes everything after it.
+
+### Stage 3 -- Sweeping hardware design parameters
+
+Implementation plan; one phase per commit.
+
+Narrowed from the Roadmap's first sketch (successive halving over fidelity
+levels, end to end on a subset): **local metrics only**, and **one parameter at a time**.
+For a design `(P_0, ..., P_i, ..., P_n)` and a local metric `M_j`, show how
+the design evaluates under `M_j` as `P_i` varies and every other parameter
+is held at an anchor design's value.  Those graphs are the deliverable.
+
+#### Context
+
+- **The hardware models** are factories in `examples/mmasim/models/`, one per
+  MMA-Sim algorithm, each taking its own parameters:
+
+| factory | designs | parameters |
+|---|---|---|
+| `utils.make_fma_dpa` | FP64/FP32 FMA chains | rounding context |
+| `amd.make_e_fdpa` | CDNA1 BF16/FP16 | `L` |
+| `amd.make_ftz_addmul` | CDNA2 BF16/FP16 | input format, `P` |
+| `amd.make_tr_fdpa` | CDNA3 TF32/BF16/FP16 | `L`, formats, `F`, `F2`, `rho`, `e_zero` |
+| `amd.make_gtr_fdpa` | CDNA3 FP8 | as TR-FDPA, even/odd groups |
+| `nv.make_t_fdpa(_chain)` | Volta-Blackwell TF32/BF16/FP16/FP8 | `L`, formats, `F`, `rho`, `e_zero`, `is_mma` |
+| `nv.make_st_fdpa` | Blackwell MX | formats, scale format, `F`, `rho` |
+| `nv.make_gst_fdpa` | Blackwell MXFP4/NVFP4 | `G`, scale format, `F`, `rho` |
+
+- `compile.DESIGNS` names each instruction as one of these, with its
+  argument types; `tests/test_nv.py` and `tests/test_amd.py` check the
+  factories against MMA-Sim's reference bit for bit; `compile_triton.py -r`
+  and `tests/test_triton.py` check their Triton kernels against the FPy
+  interpreter.
+- **The serving harness** measures local metrics per design on cached
+  activations (`serve/local.py`, `serve/core/metrics.py`); `kernels.register`
+  adds a design at runtime (Stage 2's `serve/stage2/sweep.py` registered
+  synthetic Hopper chains that way).
+- **What Stage 2 found** (above, parked): local error, as the
+  normwise backward error, predicts the end-to-end effect of a design, and
+  that effect is small at inference.  So Stage 3 measures locally only.
+
+A sweep needs every parameter to be variable while the others hold, and a
+remix (NV's fused sum with CDNA3's separate rounded join, say) needs the
+factories' stages to compose.  Today each factory fixes its own stages.
+
+#### The generator
+
+Every factory is the same pipeline with different choices per stage.  One
+parameterized builder, `examples/mmasim/generator/` (outside `models/`,
+which keeps the paper's explicit models; it imports their helpers), takes a
+`Design` (a frozen dataclass) and returns the dot-product-accumulate
+function and its argument types, as `compile.DESIGNS`' builders do.
+
+| stage | parameter | choices | existing designs |
+|---|---|---|---|
+| terms | `products` | `exact`; `rounded`, each by `rho` | exact; rounded (CDNA2) |
+| | `ftz` | flush subnormal inputs to +0, results to signed 0 | on (CDNA2) |
+| | `scales`, `G` | none; a scale pair per instruction; one per group of `G`, each group's sum exact | MX; MXFP4/NVFP4 (`G` 16) |
+| groups | `groups` | `none`; `even-odd`, each half summed alone, then combined | even-odd (CDNA3 FP8) |
+| block sum | `sum` | `fused`, aligned and truncated past `F` bits; `tree`, pairwise adds rounded by `rho`; `exact`; `fma`, a chain of adds each rounded by `rho` | fused (NV, CDNA3); tree (CDNA2); exact (CDNA1); fma (FP64/FP32) |
+| | `F` | fraction bits kept | 13, 23-25, 35 |
+| | `L` | elements per instruction | 1 (FMA) - 64 |
+| joining `c` | `join` | `inside` (a fused sum's term, a tree's or chain's last add, in an exact sum); `separate`, the sum and `c` rounded down at `F2` and `F` bits and added | inside (NV); separate (CDNA3) |
+| | `F2` | | 31 (CDNA3) |
+| output | `rho` | precision, rounding mode: the accumulator format the next instruction's `c` is in | RZ FP32, RZ E8M13 (NV FP8), RNE FP16, RNE FP32 (AMD) |
+| per structure | `e_zero` (`None`: the model's default), special values | as the models derive them | not swept |
+
+- **Hardware only.**  The kernel's loop over `k` (split-k, promotion
+  between instruction chains, the order partials combine in) is software
+  and out of scope; every design runs as one unsplit chain of its
+  instruction.  The accumulator *format* is in scope: it is the
+  instruction's output.
+- **A catalog** (`generator/catalog.py`) maps each `compile.DESIGNS` entry
+  to its `Design`.  At those points the generator agrees with the model bit
+  for bit; that is what makes a remixed point a model of something.
+- **`e_zero` and special-value semantics** follow the structure whose model
+  has them (`_rule`): NVIDIA's for a fused sum joined inside; TR-FDPA's
+  (products overflowing at 2^128) joined separate; GTR-FDPA's (NaN and
+  infinity read at exponent -1) for even-odd groups joined separate;
+  E-FDPA's for an exact sum; IEEE arithmetic's for a tree or chain.  Carried
+  for that agreement, not swept.
+- **Every combination of the stages is a design** (since 2026-10-01; earlier,
+  21 were refused as "unformable").  The definitions the paper's models do
+  not give: a chain of FMAs reads no `L` (it rounds after every element); a
+  separate join takes any block sum `t`; even-odd halves are summed by the
+  block sum and combined as it adds (a fused sum's rounded down at `F`, as
+  GTR-FDPA's), joined inside in one fused sum with `c`; a tree over any `L`
+  halves at the largest power of two below it; rounded products, scales and
+  FTZ with any sum.  `invalid` refuses only sizes that disagree: `k` not
+  whole instructions, `G` without scales or not dividing `L`, a scaled
+  design longer than one instruction, even-odd groups of one term.  A tree
+  or chain joined separate that overflows returns its special value: a
+  fused or exact sum cannot.
+- **How it is written:** three block bodies, one per call signature
+  (unscaled, scaled per instruction, per group), each making the terms,
+  their alignment exponents and special values, then a `finish` chosen in
+  Python from small FPy pieces (the block sum over a list, the even-odd
+  combine, the join).  The backend constrains the shape: a computed list
+  crosses a call only to be read, a fixed-point sum loses its format across
+  a call (GTR-FDPA's finish keeps its sums inline), a closure-constant
+  branch must not give a variable two types, no loop-carried integer or
+  `**`.  The generator compiles the catalog as the models do (60 of 62, the
+  same 2 refused).
+
+#### The sweep
+
+- **One parameter at a time, around anchors.**  An anchor is a catalog
+  design; a sweep of `P_i` holds the anchor's other parameters and steps
+  `P_i` over a range.  Starting anchors: Hopper FP8 (`nv.hopper.e4m3.f32`),
+  Blackwell FP8 (`nv.blackwell.e4m3.f32`), Hopper BF16, Ampere BF16, CDNA3
+  BF16; more are identified along the way.
+- **Ranges go past existing hardware** (`L` to 64 and beyond, `F` to 35
+  under FP8, ...): what is plausible is not the question.  Every point is a
+  design; one the compiler refuses is recorded with its reason.
+- **Categorical parameters** (`block_sum`, `join`, `products`, `layout`,
+  `rho`'s mode, `ftz`) sweep over their choices, plotted as categories.
+- **Input formats are not swept:** they choose the scheme, so the workload.
+  Each anchor runs under its scheme.
+- **Workload:** Qwen3-0.6B, WikiText-2's first 2048 tokens, activations
+  cached (`local.py --acts`); every design of one scheme in one `local.py`
+  pass, so the exact FP64 product and `|x|ᵀ|w|` are computed once.
+- **Metrics:** all of `metrics.METRICS`, normwise backward error first
+  (Stage 2's predictor of end-to-end effect), then componentwise backward
+  error, its max, bias, magnitude bias, flips.
+
+#### Outputs
+
+Under the scripts' `--results` root (`cli.RESULTS`, `results/` from
+`examples/mmasim`):
+
+- **A table**, `<results>/sweep/sweep.csv`: one row per evaluated design -
+  its anchor, the parameter varied and its value, every parameter, every
+  metric - and the points the compiler refused, with its reason.
+- **Cached activations** under `<results>/cache/`.
+- **The plots** from the table alone (`serve/plot_sweep.py`), replayable,
+  in `<results>/plots/sweep/`: a grid of panels, one per `(P_i, M_j)`, a
+  line per anchor, the anchor's own value marked.
+
+#### Phases
+
+##### Phase 1 - The generator and its catalog
+
+**Done.**
+- `generator/__init__.py`: `Design`, `unformable`, `build(design) -> (fn,
+  arg_types)`; one FPy block per structure (`fused`, its scaled and
+  group-scaled forms, `separate`, `even-odd`, `tree`, `exact`, `fma`),
+  stages chosen by closure constants, chained `k / L` times.
+  `generator/catalog.py`: `CATALOG`, all 62 designs.
+- `tests/test_generator.py` (77 tests, ~20 s at `-n 8`): every catalog
+  entry has its model's argument types and agrees with it bit for bit on
+  400 draws, four mixes of `compile.py`'s samplers (over the range and near
+  one; a quarter hard cases: zeros, extremes, specials; all hard cases;
+  subnormal-centred); the refusals; a fused sum wide enough (`F` 600) equal
+  to the exact sum rounded once; four remixes no model has build and run.
+- **Diverged from the plan:** `compile.py`'s samplers, not
+  `tests/common.py`'s (those need torch dtypes, which E2M1 and the scale
+  formats lack); no `is_mma` (it only chose `e_zero`; the catalog gives
+  `e_zero` where it differs); the tree generalized to any power of two `L`,
+  its products `exact` or `rounded`; FTZ on every sum, not CDNA2's only.
+
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_generator.py
+
+##### Phase 2 - Remixed points compile and register
+
+**Done.**
+- **The generator, for the backend.**  Two structures the interpreter took
+  but Triton did not, restructured (bit for bit still: `test_generator.py`):
+  - FTZ is chosen in Python (`_flushes`: a flush, or `_keep`), not branched
+    on in FPy: a closure-constant branch is not folded before storage
+    inference, so a reassigned list (`A = [flush(x) ...]`) had two element
+    types even with FTZ off.  Products take flushed inputs; special values
+    are decided on the products; exponents read the inputs (a product not 0
+    has neither flushed).
+  - The tree is nested halves of scalars (`_halves`): a loop-carried stride
+    became a tile, which Triton's `range` refuses; `**` has no Triton
+    signature; a list of computed values cannot cross a call.
+- **Registering:** `kernels.register_design(design, name=None)` registers
+  under `generator.name` (`gen.` and a digest of `generator.about`, the
+  parameters readably: formats as `E<e>M<m>`, `rho` with its mode, each
+  context's `repr` under `exact`), at `kernels.tile` (`(16, 64)` for a tree,
+  `(16, 1)` from `L` = 64, else `(32, 1)`: the catalog's most common), its
+  build kept so `precompile` compiles it in worker processes (the pool
+  starts by `forkserver`, so a worker sees no runtime registration; the
+  pickled build carries the design).  The kernel cache's key covers
+  `generator/`'s sources.
+- **Tests:**
+  - `tests/test_triton.py`: ten remixes, every structure (NVIDIA's FP8
+    chain joined as CDNA3 joins, and with FTZ; CDNA3's even-odd over E4M3 at
+    13 bits; MX at 13 bits; NVFP4 with groups of 32; CDNA2's tree over 16;
+    ...), agree with the interpreter at two tiles (a tile changes the
+    launch, not the result); two fuse over a static `k`.
+  - `test_a_backend_gap_is_refused` pins four refusals, each a compile-time
+    error, never a wrong result:
+
+| remix | refused because |
+|---|---|
+| an exact sum of FP8 products, E8M13 out | no storage holds the exact sum of the products and an FP32 accumulator (CDNA1, from the paper's builder too: 2 of the 62 designs) |
+| a tree of exact BF16 products | held in FP64, adding them under FP32 rounds twice |
+
+  - `serve/tests/test_kernels.py`: a registered generator design (Hopper's
+    FP8 chain at `F` 17; CDNA2's BF16 tree over 16), compiled in workers,
+    runs through `kernels.linear` bit for bit against the generator.
+- **After Phase 2** (the policy: a design the compiler refuses gets a
+  compiler fix): directed arithmetic.  The Triton target refused Add, Sub,
+  Mul, Div, Fma and Sqrt in any mode but RNE; libdevice's `add_rz` and the
+  rest are correctly rounded at FP32 and FP64, now in the op table
+  (`target.py`; Sub as an add of the negation; the exact ops under directed
+  contexts too; not FP16, which libdevice lacks).  CDNA2's tree and an FMA
+  rounding toward zero agree with the interpreter.  Its tests
+  (`test_directed_arithmetic_agrees_bit_for_bit`: six ops, three modes, FP32
+  and FP64, edges and random) found **the interpreter wrong** on an exact
+  zero sum rounding toward negative: IEEE 754 Sec. 6.3 makes `x + (-x)`,
+  `(+0) + (-0)` and an FMA's exact zero `-0` there, `+0` in every other mode;
+  FPy gave `+0` in all.  Fixed in `fpy2/ops.py` (`_zero_sum`, for add, sub,
+  fma), with `tests/unit/test_ops.py::TestExactZeroSum`; the full unit suite
+  passes on it.
+- **Calibration** (Qwen3-0.6B, 2048 tokens, `local.py --register`, 8
+  compile processes):
+
+| pass | designs | cold | warm (kernels cached) | per design, kernels | shared metrics |
+|---|---|---|---|---|---|
+| `fp8-row`, Hopper's FP8 chain remixed | 11 | 112 s | 91 s | 4.6-12 s | 17 s |
+| `bf16`, Hopper, Ampere, CDNA3, CDNA2 remixed | 10 | 159 s | 131 s | 3.5-20 s | 27 s |
+
+  - Compiling is ~2-3 s a design at 8 processes; evaluating ~8 s (FP8) to
+    ~13 s (BF16).  So ~300 designs are ~1 h, at 2048 tokens.
+  - The generator's catalog points reproduce Stage 2's numbers exactly
+    (normwise backward: Hopper FP8 -12.34, CDNA3 BF16 -25.59, CDNA2 BF16
+    `_1k` -25.21), at the default tile 10% (CDNA3) to 1.7x (CDNA2, 2 s) the
+    catalog design's time.
+
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests/test_triton.py tests/test_generator.py
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -p no:xdist serve/tests/test_kernels.py
+
+##### Phase 3 - The sweep runner and its table
+
+**Done.**
+- `serve/sweep.py`:
+  - **The spec:** `ANCHORS` (Hopper and Blackwell FP8 under `fp8-row`;
+    Hopper and Ampere BF16 and CDNA3 BF16 under `bf16`) and `PARAMS`, each
+    a way to read it off a design and its values: `L` 2-64; `F` 8-35; `F2`
+    16-35; `rho_bits`, `rho`'s fraction bits at FP32's exponents, 7-23;
+    `rho_mode` RTZ, RNE, RTN, RTP; `sum`; `join`; `groups`; `ftz`.  Changing
+    `L` keeps `k` whole instructions.
+  - **`points(anchors, params)`:** one parameter at a time, the anchor's own
+    value always among them (Ampere's `F` 24 is not in `F`'s list); a
+    parameter the anchor's structure does not read is not swept (`F2`
+    without a separate join, `F` without a fused sum).  The full sweep: 188
+    points, 152 designs.
+  - **A run:** every formable point registered (`register()`, also the
+    `--register` of each `local.py` pass), compiled in parallel by
+    `kernels.compile_designs`, which returns each refusal's error rather than
+    raising, and keeps the compiled in the kernel cache; then one `local.py`
+    pass per scheme over its compiled designs, as a subprocess; then the
+    join.
+  - **The table** `<results>/sweep/sweep.csv`: a row per point: anchor,
+    scheme, parameter, value, `is_anchor`, `status` (`ok`, `unformable`,
+    `refused`) and its reason, the design's name and every parameter
+    (`generator.about`), and its metrics against the quantized operands'
+    exact product (group `all`); `sweep.provenance.json` beside it.
+  - `--list` prints the points and their status without running.
+- `serve/tests/test_sweep.py` (191 tests, under 1 s): every point is its
+  anchor but for its parameter (`rho` moves for `rho_bits` and `rho_mode`,
+  `k` with `L`); each anchor's value appears once a parameter; an unread
+  parameter is not swept; `register()` adds every formable design, and again
+  without a clash.
+- **Small runs** (Qwen3-0.6B, 512 tokens):
+  - Hopper FP8, `F` (10 points, 47 s): normwise backward error -8.06 at
+    `F` 8, -12.41 at 13 (Hopper), and flat at -13.05 from `F` 19: with `rho`
+    held at Hopper's E8M13, a wider sum is truncated back by its output (an
+    interaction, as the open item foresaw).
+  - CDNA3 BF16, `sum`, `join`, `groups`: three unformable points recorded;
+    an inside join -23.58 against CDNA3's separate -25.59; even-odd groups
+    change nothing under BF16.
+  - Ampere BF16, `sum`: the tree of exact products and the exact sum
+    recorded as refused, with the compiler's messages (Triton backend,
+    "What is left").
+
+      cd examples/mmasim && ../../.venv/bin/python -m pytest -p no:xdist serve/tests/test_sweep.py
+
+##### Phase 4 - The plots
+
+**Done.**
+- `serve/plot_sweep.py`: from `sweep.csv` alone, one figure per metric
+  (`<results>/plots/sweep/<metric>.png`; `--metrics`, default normwise and
+  componentwise backward error, its max, magnitude bias), a panel per
+  parameter, a line per anchor.
+  - Numeric parameters on their axis (`L`'s log2, as it doubles), labels
+    thinned within a twentieth of the span (CDNA3's `F` 24 beside 25);
+    categorical ones as categories, not joined (their values have no order).
+  - An anchor's own value ringed; a point not measured an x on the panel's
+    floor, the anchors' side by side so none hides another.
+  - Colours: the dataviz reference's categorical slots 1-5, in that order,
+    each anchor also its own marker, so identity is not colour alone (the
+    palette validator needs Node, not installed here: the slots are the
+    reference's validated order).
+  - Each metric from `local.py`'s value: log2 ones as they are, `normwise`
+    to log2, biases in `u`, `flips` as a log10 share.
+- `serve/tests/test_sweep.py`: a figure draws from a hand-made table (a
+  numeric and a categorical parameter, a refused point).
+
+##### Phase 5 - The full sweep
+
+**Done** (2026-10-01; Qwen3-0.6B, 2048 tokens, `results/sweep/`; rerun after
+every combination of stages became a design, and twice 2026-10-02: after
+the sub-FP32 roundings compiled, and after double rounding).
+- **The run:** 188 points, 152 designs: 145 measured, 7 refused by the
+  compiler, none unformable (before the reruns: 133 and 19, then 141 and
+  11).  Compiling ~2 min at 8 processes (every design
+  anew: the kernel cache's key covers the generator's source); the `bf16`
+  pass ~30 min, `fp8-row` ~10; run detached (`nohup`), past the tool's
+  30-minute background limit.
+- **Refused** (`sweep.csv`'s `reason`; the Triton backend, "What is left"):
+  - 5: an exact sum (every anchor's `sum` = `exact`); not planned, as it
+    needs error-free transformations;
+  - 2: CDNA3's tree and chain of FMAs.  The FP64 add rounds through FP64
+    to odd now; what is left is bounding the separate join, which needs
+    digit-bound inference to tie the block sum to `e` (Triton backend,
+    "What a generated design still hits").  **Moved** to its own branch:
+    index spaces by identity (`digit-bound-index-spaces.md`), then
+    loop-carried values for the chain.
+- **Since closed by double rounding** (`compile_triton` compiles with
+  `DOUBLE_ROUND`): an Add or an Fma rounding to E8M13 toward zero
+  (Hopper's tree and chain of FMAs), through FP32 toward zero, and
+  Hopper's and Ampere's BF16 trees, through FP64 toward zero
+  (`UnfoldKind.WIDE`).
+- **Since closed:** 8 refusals of a rounding below FP32's precision other
+  than toward zero (Hopper's E8M13 output to nearest, down or up; CDNA3's
+  output at 7-19 bits to nearest).  `unfold_round`'s normal arm
+  (`|x| >= 2 ** emin`) bounded `logb(x)` by `x`'s finest digit, not by
+  `emin`, so the unfolded round looked finer than FP32; format inference now
+  carries the arm's least magnitude to `logb` (`test_triton.py`'s
+  `hopper-rne`, `cdna3-rne-7`).
+- **What the graphs show** (`results/plots/sweep/`; normwise backward
+  error, log2, unless said):
+  - **`F` and `rho_bits` trade one for one until the other limits:** each
+    bit of either removes about one bit of error, until the error reaches the
+    other's precision.  Hopper's FP8 (`F` 13, `rho` E8M13) plateaus at -13
+    either way; the BF16 designs plateau near -22 to -24.6 (`rho` FP32
+    toward zero), CDNA3 at -25.6 (to nearest).
+  - **`L`:** longer instructions err less, about half a bit a doubling, for
+    every anchor but Hopper's FP8, flat at -12.4: its 13 bits, not its chain,
+    set its error.  Its magnitude bias does halve a doubling (-210 u at `L`
+    2, -88 at 64): fewer instructions truncate to E8M13.
+  - **`rho_mode`:** to nearest is 2-3 bits better than toward zero and
+    removes the bias; down and up are as toward zero in size, their bias of
+    either sign.  Not for Hopper's FP8: -12.34 in every mode, its 13-bit sum
+    truncated before `rho` rounds; to nearest cuts its bias by about 3.6x
+    and leaves it negative.
+  - **`rho_bits` under CDNA3's to nearest:** one bit of error a bit, -9.5
+    at 7 to -25.6 at 23 (before, only 23 compiled).
+  - **`ftz`:** flushing subnormals costs Blackwell's FP8 6 bits (-24.6 to
+    -18.5); E4M3's subnormals carry information.  BF16's (FP32's range)
+    change nothing.
+  - **`join`:** CDNA3's separate join, rounded down, is 2 bits better than
+    NVIDIA's inside one for the BF16 designs; for Hopper's FP8 its round-down
+    at 13 bits makes its bias ten times larger (-1090 u).
+  - **`F2`** (CDNA3): error falls until 28 bits, flat past.
+  - **`groups`:** even-odd groups barely move the BF16 designs or
+    Blackwell; Hopper's FP8 gains 2 bits (-12.3 to -14.3): each half
+    truncates at its own largest exponent.
+  - **`sum`:** a chain of FMAs is 2.5-4 bits worse than the fused sum (BF16
+    -19.6, Blackwell's FP8 -20.8), a rounding per element; Hopper's FP8
+    3.5 bits worse (-8.9 against -12.3), each FMA truncated to E8M13, its
+    bias 130x the fused sum's.  A tree is within 0.6 bits of the fused sum
+    (Blackwell's FP8 -24.4 against -24.6, the BF16 ones -22.5 and -21.6
+    against -22.7 and -22.2); Hopper's FP8 tree is 0.7 bits *better*
+    (-13.1), its pairwise adds keeping 13 bits each where the fused sum
+    truncates its terms to 13 bits below the largest.
+
+##### After the last phase
+
+    .venv/bin/python -m pytest -n 8 tests/unit
+    cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests serve/tests
+    cd examples/mmasim && ../../.venv/bin/ruff check serve generator tests/test_generator.py
+
+#### Open items
+
+##### Does `compile.DESIGNS` come from the catalog?
+
+One source would keep the factories and the generator from drifting; but
+the factories are MMA-Sim's algorithms, line for line, and checked against
+its reference.  **Provisional:** keep both, the catalog test holding them
+equal.  Reopen if the two must change together often.
+
+##### Which parameters' interactions need a second axis?
+
+One at a time cannot show an interaction (`F` against `rho`'s precision,
+say: a `rho` narrower than `F` discards what `F` kept).  **Provisional:**
+one at a time, as asked; a pair whose one-at-a-time graphs disagree across
+anchors is a candidate for a two-axis grid later.
+
+##### What is the generator's interface for formats and scales?
+
+Contexts as the factories take them (`EFloatContext`, `ExpContext`), or the
+format names `quant` uses.  **Provisional:** contexts, as the factories
+(Phase 1 built it so); Phase 2's registered names and `about` need a
+readable form of each, derived from the context, not a second interface.
+
+##### How many tokens per design?
+
+2048 is Stage 2's size; the Roadmap suggested 512 for a cheap level.
+**Provisional:** 2048: Phase 2's calibration puts ~300 designs at ~1 h.
+
+##### Which anchors?
+
+**Provisional:** the five above; more as the graphs suggest (a design at a
+parameter's extreme, a vendor mix that stands out).
 
 ## Working policy
 
@@ -127,6 +1062,9 @@ same harness.
   at the end, after the last phase.
 - **Comments stay succinct**, and notes about *process* belong in this
   document, not in source comments.
+- `pytest -n 8`, never `-n auto`; `serve/tests` serially (`-p no:xdist`):
+  they load models on the GPU, and 8 workers can exhaust its 12 GB (147
+  tests, ~70 s).
 
 ## Context
 
@@ -372,8 +1310,23 @@ Options:
 - `--scheme` defaults to `bf16`; `-d` defaults to every design applicable to
   the scheme.
 - `--tokens` sets how many positions to sample.  `--layers` filters layers
-  by regex.  `-o` writes the JSON.
-- `kernels.register` adds a design, one grid point.
+  by regex.  `-o` writes the JSON; `local.py` also a table beside it
+  (`.csv`, a row per model, reference, design and group).
+- `--register FILE` (repeatable) runs the file's `register()`, which adds
+  designs with `kernels.register(name, build, block, block_m, about=...)`,
+  before anything else: they are then designs as any other (`-d`,
+  `--matmuls`, the lists).  *about* describes the design for the results.
+- `--results DIR` (default `results`): the outputs' root.  `cache/` holds
+  what runs reuse: compiled kernels (`cache/kernels`, keyed by the design,
+  its *about*, and a digest of every source a kernel depends on; a design
+  registered without *about* is not kept), captured activations
+  (`cache/acts`, keyed by their settings), the MT-Bench conversations.
+  `plots/` holds plots; a run's outputs go in a directory of their own.
+- **Every output** is written whole or not at all (`outputs.write_json`,
+  `write_csv`: to a temporary file, then renamed), and carries its
+  `provenance`: the command line, the commit and whether tracked files
+  differed from it, the `--register` files' digests, every registered
+  design's *about*.
 
 ## Layout
 
@@ -384,6 +1337,8 @@ examples/mmasim/serve/
   zeroshot.py     lm-evaluation-harness suite, paired Δ acc and flips
   decode.py       R0's greedy decode, then every matmul teacher-forced on it
   chat.py         terminal chat
+  sweep.py        hardware design parameters swept around anchors (generator/), local metrics
+  plot_sweep.py   the sweep's graphs, from its table
   core/           the library; no script imports another script
     kernels.py      compile each design (precompile in parallel); prepare, matmul, linear; register
     quant.py        schemes, torchao's RTN, Quantized with an exact FP64 dequantize
@@ -395,8 +1350,12 @@ examples/mmasim/serve/
     generate.py     greedy generation under the chat template
     cli.py          the scripts' shared options
   tests/          per module (workloads in test_local.py)
-  results/        (gitignored) run outputs, the MT-Bench cache
 ```
+
+Outputs go under the scripts' `--results` root (`cli.RESULTS`, `results/`
+from `examples/mmasim`, gitignored): `cache/` for artifacts reused across
+runs (the MT-Bench cache, `cache/mtbench/<model>.json`), `plots/` for plots,
+a run's outputs in a directory of its own.
 
 ## Results
 
@@ -744,7 +1703,9 @@ the linear layers invites "you measured the easy GEMMs".
 The claim that local metrics are "the evaluation" needs evidence on a few
 designs.  Take the widest separations (Ada vs Blackwell under `fp8-row`,
 Ampere vs CDNA3 under `bf16`) and show the end-to-end ordering matches: KL,
-perplexity, flips.  This is Stage 2 of the Roadmap.
+perplexity, flips.  This is Stage 2 of the Roadmap.  **Answered** (Stage 2,
+parked): yes, as the normwise backward error, at inference on these models;
+the effect it predicts is small.
 
 ### Uncertainty on local metrics
 

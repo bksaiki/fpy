@@ -3,20 +3,28 @@ The options the scripts share, and what they do with them alike.
 """
 
 import argparse
+import hashlib
 import json
+import runpy
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, get_args
 
 import torch
 
-from . import checkpoints, kernels, quant, swap
+from . import checkpoints, kernels, outputs, quant, swap
+
+RESULTS = Path('results')
+"""The outputs' root, from `examples/mmasim` (gitignored): `cache/` for
+artifacts reused across runs, `plots/` for plots, a run's outputs in its own
+directory."""
 
 
 def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
-    """The options every script shares: the model (and listing them), how
-    designs split `k`, and (with *seed*) the seed of its random subsets
-    (`workloads.pick`)."""
+    """The options every script shares: the model (and listing them), designs
+    to register, how designs split `k`, the outputs' root, and (with *seed*)
+    the seed of its random subsets (`workloads.pick`)."""
     ap.add_argument('--model', default=swap.MODEL,
                     help='the model, a master or a checkpoint (default: %(default)s)')
     ap.add_argument('--list-models', action='store_true',
@@ -27,6 +35,11 @@ def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
     ap.add_argument('--combine', choices=get_args(kernels.Combine), default='linear',
                     help='how the slices sum in FP32: left to right, or pairwise '
                     '(default: %(default)s)')
+    ap.add_argument('--register', type=Path, action='append', default=[], metavar='FILE',
+                    help='a Python file whose register() adds designs (kernels.register) '
+                    'before anything runs; repeatable (default: none)')
+    ap.add_argument('--results', type=Path, default=RESULTS,
+                    help='the outputs\' root: <results>/cache, <results>/plots (default: %(default)s)')
     if seed:
         ap.add_argument('--seed', type=int, default=0,
                         help='seed of the random subsets (default: %(default)s)')
@@ -55,17 +68,23 @@ def add_runs(ap: argparse.ArgumentParser) -> None:
 
 
 def parse(ap: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
-    """*argv* parsed, or what a `--list-*` option asks for printed, and exit."""
+    """*argv* parsed, its `--register` files' designs added and kernels kept
+    under the cache; or what a `--list-*` option asks for printed, and exit."""
     args = ap.parse_args(argv)
+    for path in args.register:
+        runpy.run_path(str(path))['register']()
+    kernels.CACHE = cache(args, 'kernels')
     lines: list[str] = []
     if args.list_models:
         lines = [f'{m:34} {what}' for m, what in swap.MODELS.items()]
     elif args.list_schemes:
         lines = [f'{n:16} {quant.describe(quant.scheme(n))}' for n in quant.NAMES]
     elif args.list_matmuls:
-        fp32, exact, *designs = swap.modes(args.scheme)
+        fp32, exact, rtz, rand, *designs = swap.modes(args.scheme)
         lines = [f'{fp32:24} R0, the model as trained',
                  f"{exact:24} R1, the quantized operands' exact product",
+                 f'{rtz:24} R1 rounded toward zero',
+                 f'{rand:24} R1 moved an ulp up or down at random',
                  *(f'{d:24} a design' for d in designs)]
     if lines:
         print('\n'.join(lines))
@@ -97,6 +116,20 @@ def load(args: argparse.Namespace, name: str | None = None, designs: Sequence[st
                      if isinstance(m, torch.nn.Linear) and id(m.weight) not in run.ignore})
         kernels.precompile(designs, jobs, ks)
     return model, run, about
+
+
+def provenance(args: argparse.Namespace) -> dict[str, Any]:
+    """What a result comes from: the command line, the commit, the
+    `--register` files (by digest) and every registered design's
+    description."""
+    return {'argv': sys.argv, **outputs.commit(),
+            'register': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in args.register},
+            'registered': kernels.REGISTERED}
+
+
+def cache(args: argparse.Namespace, *parts: str) -> Path:
+    """*parts* under the outputs' cache, `<results>/cache`."""
+    return args.results.joinpath('cache', *parts)
 
 
 def cached(path: Path, settings: dict[str, Any]) -> dict[str, Any] | None:

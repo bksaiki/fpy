@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# `serve`, for `core`; `examples/mmasim`, for `generator`
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2])]
 
 
 @pytest.fixture(scope='module')
@@ -26,6 +27,15 @@ def model() -> torch.nn.Module:
         for p in m.parameters():
             p.copy_(p.to(torch.bfloat16).float())
     return m
+
+
+@pytest.fixture
+def registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`kernels`' registries as they were, after the test."""
+    from core import kernels
+
+    for name in ('TILES', '_BUILDS', 'REGISTERED', '_PICKLED', '_KERNELS'):
+        monkeypatch.setattr(kernels, name, dict(getattr(kernels, name)))
 
 
 @pytest.fixture(scope='module')

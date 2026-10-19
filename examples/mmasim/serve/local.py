@@ -10,8 +10,9 @@ product of the quantized and of the unquantized operands (`metrics.local`).
 unquantized unless `bf16`) and checkpoints (`checkpoints.weights_for`).
 The designs of a run share each layer's exact products, a chunk of designs
 at a time (`_OUT_ELEMS`); the seconds reported are each design's weight
-preparation and kernels, and the metrics.  `--acts` caches the captured
-activations across runs.
+preparation and kernels, and the metrics.  The captured activations are
+cached across runs (`--acts`).  `-o` writes the JSON and, beside it, a table
+(`.csv`): a row per model, reference, design and group.
 
     python serve/local.py                               # every BF16 design
     python serve/local.py -d amd.cdna2.bf16 --tokens 512 --layers mlp -o s.json
@@ -34,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from core import checkpoints, cli, kernels, metrics, swap, workloads
+from core import checkpoints, cli, kernels, metrics, outputs, swap, workloads
 
 _OUT_ELEMS = 1 << 28
 """Design outputs (FP32 elements) held at once: past it, a layer's designs
@@ -182,6 +183,10 @@ def evaluate(
     return stats
 
 
+_SOURCES = outputs.sources(Path(__file__).resolve().parent / 'core', Path(__file__).resolve())
+"""What the activations depend on, for their cache's key."""
+
+
 def _digest(key: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -192,9 +197,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--models', nargs='*', default=None,
                     help='masters (RTN) and quantized checkpoints to evaluate (default: --model)')
     cli.add_scheme_args(ap)
-    ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES), metavar='DESIGN',
+    ap.add_argument('-d', '--designs', nargs='*', metavar='DESIGN',
                     help=f'designs the scheme applies to, of {", ".join(kernels.TILES)} '
-                    '(default: all of them)')
+                    'and any registered (default: all of them)')
     ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, metavar='METRIC',
                     default=list(metrics.METRICS),
                     help=f'metrics to compute, of {", ".join(metrics.METRICS)} (default: all)')
@@ -206,16 +211,18 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--by', choices=['role', 'category'], default=None,
                     help='split the result by this tag (MT-Bench)')
     ap.add_argument('--transcripts', type=Path, default=None,
-                    help='MT-Bench conversations cache (default: results/mtbench-<model>.json)')
+                    help='MT-Bench conversations cache (default: <results>/cache/mtbench/<model>.json)')
     ap.add_argument('--layers', default=None,
                     help='only the linear layers this regex matches (default: all)')
     ap.add_argument('--acts', type=Path, default=None,
                     help='cache captured activations here, reused for the same settings '
-                    '(default: not cached)')
+                    '(default: <results>/cache/acts)')
     ap.add_argument('-j', '--jobs', type=int, default=None,
                     help='processes compiling the designs (default: one per core)')
-    ap.add_argument('-o', '--out', default=None, help='write every layer\'s metrics as JSON here')
+    ap.add_argument('-o', '--out', type=Path, default=None, help='write every layer\'s metrics as JSON here')
     args = cli.parse(ap, argv)
+    if unknown := [d for d in args.designs or () if d not in kernels.TILES]:
+        ap.error(f'no design {", ".join(unknown)}')
     designs = args.designs or kernels.designs(args.scheme)
     if refused := [d for d in designs if not kernels.applicable(d, args.scheme)]:
         ap.error(f'{args.scheme.name} does not apply to {", ".join(refused)}')
@@ -225,7 +232,8 @@ def main(argv: list[str]) -> int:
         'scheme': args.scheme.name, 'workload': args.workload, 'tokens': args.tokens,
         'seed': args.seed,
         'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
-        'models': {}}
+        'provenance': cli.provenance(args), 'models': {}}
+    table: list[dict[str, Any]] = []
     for name in args.models or [args.model]:
         model, run, about = cli.load(args, name, designs, args.jobs)
         known = about['master'] is not None
@@ -235,13 +243,13 @@ def main(argv: list[str]) -> int:
         refs = {'quantized': names}
         if known:
             refs['unquantized'] = [m for m in names if m not in metrics.QUANTIZED_ONLY]
-        transcripts = args.transcripts or (Path(__file__).parent / 'results'
-                                           / f'mtbench-{name.replace("/", "--")}.json')
+        transcripts = args.transcripts or cli.cache(args, 'mtbench', f'{name.replace("/", "--")}.json')
         key = {'model': name, 'scheme': args.scheme.name, 'source': about['source'],
                'workload': args.workload, 'tokens': args.tokens, 'seed': args.seed,
-               'transcripts': str(transcripts) if args.workload == 'mtbench' else None}
-        cached = args.acts / f'acts-{_digest(key)}.pt' if args.acts else None
-        if cached and cached.exists():
+               'transcripts': str(transcripts) if args.workload == 'mtbench' else None,
+               'sources': _SOURCES}
+        cached = (args.acts or cli.cache(args, 'acts')) / f'acts-{_digest(key)}.pt'
+        if cached.exists():
             acts = Activations(**torch.load(cached, weights_only=True))
         else:
             if args.workload == 'wikitext':
@@ -252,9 +260,7 @@ def main(argv: list[str]) -> int:
                 seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name),
                                          transcripts)
             acts = capture(model, run, seqs, args.tokens, args.seed)
-            if cached:
-                cached.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(vars(acts), cached)
+            outputs.replace(cached, partial(torch.save, vars(acts)), binary=True)
 
         results: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
         total: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
@@ -291,11 +297,15 @@ def main(argv: list[str]) -> int:
               f'within chunks of designs: {seconds["metrics"]:.1f} s')
         out['models'][name] = {**about, 'metrics': refs, 'seconds': seconds,
                                'total': total, 'runs': results}
+        table += [{'model': name, 'reference': r, 'design': design, 'group': g, **t,
+                   'seconds': seconds[design]}
+                  for r, by_design in total.items() for design, by_group in by_design.items()
+                  for g, t in by_group.items()]
         del model, run, acts, masters
         torch.cuda.empty_cache()
     if args.out:
-        with open(args.out, 'w') as f:
-            json.dump(out, f, indent=2)
+        outputs.write_json(args.out, out)
+        outputs.write_csv(args.out.with_suffix('.csv'), table)
     return 0
 
 
