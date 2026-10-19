@@ -20,7 +20,8 @@ an aggregate stated on a list's summary (Phase 4), and a loop's carried value
 and a partial write's elements joined pointwise (Phase 5); see
 [The soundness bugs fixed](#the-soundness-bugs-fixed).  A covering write
 under an inner loop and a comprehension of several clauses, unsound in the
-store since v0.2.4, are fixed too (Phase 10).
+store since v0.2.4, are fixed too (Phase 10).  A whole-branch review found five
+more classes, two reaching a format (Part IV, "After Phase 11"; Phases 12-15).
 
 ## Part I: semantics and soundness
 
@@ -1180,9 +1181,9 @@ premise holds there.  An audit reads the premises off this table.
 | envelopes | `_value_uncached`'s `AMax`/`AMin` | holds |
 | element reads at a binder's target | `_visit_expr`'s covering `ListRef`, `_visit_assign`, `_unpack_elt`; `_indexed_at` | holds |
 | element reads elsewhere | `_at_index`, `_at_index_set`, `_instance`, `_copy`, `_replay` | holds |
-| correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`) | holds (Phase 10) |
-| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | holds; a use past a loop reads the exit terms `_visit_for` gives the phi (Phase 11) |
-| writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | holds (Phase 10) |
+| correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`) | **departs**: a second binder at one point; index sets reached without correspondence (Phase 14) |
+| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: exits on some paths only (Phase 15); a callee's variables lack the caller's binders during its walk (Phase 13) |
+| writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | **departs**: a covering write that is not the only one (Phase 15) |
 | branches | `_visit_branches`, `_merge_arms`, `_untaken`, guards | holds |
 | loops | `_visit_for`'s joins, `_before` | holds (Phase 5); a `while` states nothing |
 | calls | `_visit_call`, `analyze` | holds |
@@ -1314,6 +1315,8 @@ designs to C++):
 
 ### What is left
 
+- **Five classes of store bugs** from the whole-branch review, two reaching a
+  format (Part IV, "After Phase 11"): Phases 12-15.
 - **CDNA3's chain of FMAs** stays refused: its exit needs `e_max + 4`, and
   per-add rules give `e_max + 30`.  An open item.
 - **Replay cost.**  A copy replays every constraint naming a moving variable,
@@ -1697,6 +1700,131 @@ All 141 corpus outputs byte for byte Phase 10's, the same 6 refused.
 
     .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
 
+#### After Phase 11: why the bugs keep coming
+
+A correctness review of the whole branch, three reviewers each probing with the
+Phase 8 checker, found more, each confirmed by a run and compared with `main`:
+
+| class | bugs | origin | worst |
+|---|---|---|---|
+| **I. two binders at one point share a list's index space** | nested loops both covering `xs`; `for x in xs` inside `for i`; `[x * y for x in xs for y in xs]` | `main` | **a format excludes the value**: `round(xs[j])` at `pmax=10` |
+| **II. one index set for parts read under different binders** | two comprehensions over `range(1, 3)`; a loop and a comprehension over `range(1, 4)` | `main` | **a format excludes the value**: `p + p` below 8, the value about `2**121` |
+| **III. a covering write's premise unchecked** | another write to the list in the same iteration; an `empty` refilled by an inner loop under an outer one; tuple fields past the exit | `main`; one gather form the branch | store: `out[i]` claimed `xs[i]`, 286 apart |
+| **IV. exits incomplete** | a list's and a scalar's exit sharing one `last`; the share path, a phi read in its loop, and an unknown prior keeping iteration-start terms; `_partial` passing the body's sources past the loop | `main` | store: 20 to 277 |
+| **V. a callee's variables lack the caller's binders during its walk** | `g(xs, y)` called in `for i` | **the branch** (Phase 2) | store: a callee's round at precision 12 where 24 |
+
+And the checker misses classes: `while` iterations are not counted (false
+violations); an outer value is never paired with an inner one; each claim is
+checked only at the point its difference peaks; inputs hold no zero; one check
+(`G` above `maximum(lsb)`) is not a claim the store makes.
+
+**Why they are `main`'s.**  Of the 17 bugs found since Phase 4, 15 predate the
+branch; two are the branch's (V, and one gather form under III).  `main` was
+never checked against a semantics: it had none written down, the format-level
+tests and the corpus cannot see a store that is wrong where no format reads
+it, and three of the four store bugs before this review reached no format.
+The branch wrote the contract (Part I) and built the checker (Phase 8); every
+probe since aims them at rules `main` already had.  Finding `main`'s bugs is
+the tooling working, not the branch regressing.
+
+**Is the approach flawed?**  The semantics is not: summaries, pointwise
+relations under correspondence, and expansion at a point are the standard
+construction (Gopan et al.; Halbwachs and Peron), and every bug above breaks
+Part I rather than following from it.  The flaw is in how the implementation
+realizes it.  Points are implicit: which index a variable stands at is decided
+by sharing a variable (6 sites), unifying two keys (18 sites), and keying a copy
+by syntax (8 sites), and each site carries a premise nothing checks where the
+claim is made.  Every class above is one such premise, broken at a site:
+
+- I: a unify asserts that a list's index *is* a binder's, with no check that
+  no other binder active at the point already claims that space;
+- II: an index set is keyed by its range, so two binders reading one range
+  reach one copy without the equation that they correspond;
+- III: a share asserts a write is the element's only one, unchecked;
+- IV: the exit is patched into `by_def` on some paths, not all;
+- V: signatures are recorded after the walk that needs them.
+
+**What would change the approach.**  Three alternatives, none better:
+
+- **Full static expansion** -- every dynamic instance its own variables -- is
+  correct by construction and has no points to get wrong, but was measured at
+  51 s to 300 s for the C++ corpus and rejected.
+- **Layer 1 alone** -- summaries without pointwise relations -- is safe by
+  construction, but `fused_sum`'s `F + 2` rests on `msb(prods[i]) <= es[i] + 1`.
+- **One lookup by point** -- `terms_at(entity, point)` replacing every share,
+  unify and key -- would make points explicit.  It is the same rules,
+  centralized; the classes above become its cases.  Worth it only if local
+  invariants do not hold up.
+
+So the recommendation does not change: fix by class, and make each premise a
+check at the site that relies on it -- a unify that refuses a second active
+binder, an index set that cannot be reached without its correspondence, a
+share that requires its write to be the only one, an exit on every path.  And
+make finding bugs mechanical: the reviewers found these by aiming the checker
+by hand, which a generator of small programs would do without them.
+
+#### Phase 12 - The checker, hardened, and every known bug pinned
+
+- `test_digit_bound_oracle.py`:
+  - pairs an outer value with an inner one (its binders a prefix, points
+    matched by prefix), not only values in one body;
+  - checks every point, not only where a difference peaks: points grouped
+    by the literals true there, each group queried once;
+  - inputs with zeros and negatives beside the extremes;
+  - drops the check of `G` against `maximum(lsb)`;
+  - keys literals by binder identity, not counts alone;
+  - leaves sites under a `while` out of the pairs (or counts its iterations;
+    see the open item).
+- Every reproduction above as a shape, a strict xfail naming its phase.
+- A seeded generator of small programs over one or two lists: nested loops,
+  reads at a target, a constant or an affine index, covering, partial and
+  gather writes, carried scalars and lists, comprehensions of one and two
+  clauses, a call.  A fixed set of seeds runs in the unit test; more behind an
+  environment variable.  Whatever it finds beyond the classes above is
+  recorded here and pinned.
+
+Separate because it is test code, and the phases after it are checked by it.
+Budget: the file under 10 s at `-n 8`.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py
+
+#### Phase 13 - A callee's variables vary with the caller's binders
+
+- A callee walk starts with the caller's binders around it, so every variable
+  it mints, copies included, carries them while the callee's copies are made
+  -- not added once `analyze` has returned.
+
+Separate because it is the branch's own regression, and small.
+
+Tests: class V's shapes pass; the corpus hash against Phase 11's.
+
+#### Phase 14 - One index per space at a point
+
+- Correspondence refuses a second binder active at the same point: a binder
+  unifies with a list's space only where no enclosing binder, nor another clause
+  of its comprehension, is already in that class.  A read through it goes through
+  a copy keyed by its binder.  This refutes the open item on unification by
+  covering, for nested binders.
+- Two binders reading one index set correspond, since both enumerate it in
+  order: reaching an index set under a binder unifies that binder with the
+  set's first.  An index set cannot be reached without it.
+
+Tests: classes I and II's shapes pass; the generator's seeds; the corpus hash
+-- the phase most likely to change outputs, since the corpus's loops nest.
+
+#### Phase 15 - Writes and exits
+
+- A covering write shares only where it is the loop's only write to the list in
+  an iteration; the share path for a loop's phi only where the body's
+  definition is that loop's own covering write.  Otherwise the phi joins and
+  exits as any carried list.
+- Every phi gets exit terms: the body's where the share is valid, joined ones
+  otherwise, including a phi read in its loop and an unknown prior.  A list's
+  last-iteration copy is its own, varying with its elements; `_partial` past the
+  loop holds the exit copies; `_fields` past the loop are copied with the exit.
+
+Tests: classes III and IV's shapes pass; the generator's seeds; the corpus hash.
+
 ### After the last phase
 
     .venv/bin/pytest -q -n 8 tests/unit
@@ -1710,13 +1838,12 @@ All 141 corpus outputs byte for byte Phase 10's, the same 6 refused.
 #### Is unification by length sound for lists that are never read together?
 
 Covering is by length, so two unrelated lists of one length land in one class
-as soon as one loop covers both, and a class only grows.  This is sound for a
-different reason than the one first given: covering reads both lists at the
-same index, so the equation the class asserts is true.  "Renaming more is the
-safe direction" holds for copies only; unifying asserts an equation, and a
-false one is unsound (the product comprehension, Phase 10).
-**Provisional:** accept unification by covering; reopen if a design loses a
-bound to it.
+as soon as one loop covers both, and a class only grows.  Covering reads both lists at the same index, so the equation the class asserts
+is true -- for one binder.  "Renaming more is the safe direction" holds for
+copies only; unifying asserts an equation, and a false one is unsound (the
+product comprehension, Phase 10).  **Refuted for nested binders** (After Phase
+11, class I): two binders active at one point both covering a list put two
+indices in one space.  **Scheduled:** Phase 14.
 
 #### Should a binder key be the AST node, or the node in one callee instance?
 
@@ -1772,6 +1899,14 @@ Pairs across loops whose classes are unified (a list built in one loop, read in
 another) are what layer 2 also claims, but need the element index each read
 maps to.  **Provisional:** one body, as Phase 8 built it; across loops if a bug is
 found that one body misses.
+
+#### Does the checker count a `while` loop's iterations?
+
+A `while` has no iterable to wrap, so its iterations share a key and values from
+different ones get paired, which reports violations that are not.  Counting
+them needs a statement at the body's head; leaving sites under a `while` out of
+the pairs loses nothing the store claims, since a `while` has no binder.
+**Provisional:** leave them out (Phase 12); count them if a bug needs it.
 
 #### How does a chain of rounded adds get the bound of a sum?
 

@@ -543,7 +543,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if srcs:
             self._bracket(self._def(d), d, srcs)
 
-    def _bracket(self, terms: Terms, d: Definition, srcs: list[Terms]) -> None:
+    def _bracket(self, terms: Terms, d: Expr | Definition, srcs: list[Terms]) -> None:
         """Bound *terms*, *d*'s, by every one of *srcs*."""
         msbs = [s.msb for s in srcs if s.msb is not None]
         lsbs = [t for s in srcs if (t := self._elt_lsb(d, s)) is not None]
@@ -1572,26 +1572,28 @@ class _DigitBoundInferInstance(DefaultVisitor):
         b = self._binder(stmt)
         return self._copy(body, (b,), ('witness', id(stmt)), (*self._binders, b))
 
-    def _written(self, stmt: ForStmt, phi: PhiDef, inner: set[Key]) -> list[Terms] | None:
+    def _written(
+        self, stmt: ForStmt, phi: PhiDef, inner: set[Key], *, after: bool = False,
+    ) -> list[Terms] | None:
         """What the partial writes into the list *phi* left at an element:
         each source at whichever iteration -- of the loop *stmt* and the
-        binders *inner* to it -- wrote that element, varying with it."""
+        binders *inner* to it -- wrote that element, varying with it.  During
+        the loop the writer depends on the iteration too; *after* it, it is
+        the last writer, which does not."""
         srcs = self._partial.get(self.def_use.defs[phi.rhs])
         if srcs is None:
             return None
-        binders = (*self._binders, self._binder(stmt), self._elements(phi))
-        return [self._copy(s, inner, ('witness', id(phi)), binders) for s in srcs]
+        loop = () if after else (self._binder(stmt),)
+        key: _WitnessKey | _LastKey = ('last', id(phi)) if after else ('witness', id(phi))
+        binders = (*self._binders, *loop, self._elements(phi))
+        return [self._copy(s, inner, key, binders) for s in srcs]
 
     def _join_at(self, e: ListComp, terms: Terms, src: Terms | None, over: list[Key]) -> None:
         """Bound the list *e*'s element by *src* at a witness over the binders
         *over*, varying with *e*'s elements."""
-        if src is None:
-            return
-        w = self._copy(src, over, ('witness', id(e)), (*self._binders, self._elements(e)))
-        if terms.msb is not None and w.msb is not None:
-            self.store.le(terms.msb, w.msb)
-        if terms.lsb is not None and (lsb := self._elt_lsb(e, w)) is not None:
-            self._grid_ge(terms.lsb, lsb)
+        if src is not None:
+            w = self._copy(src, over, ('witness', id(e)), (*self._binders, self._elements(e)))
+            self._bracket(terms, e, [w])
 
     def _gather_binder(self, idx: Expr) -> Key | None:
         """The gather's binder, where *idx* counts its iterations: a phi of its
@@ -1603,18 +1605,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if not isinstance(loop, ForStmt) or d not in self.def_use.phis.get(loop, ()):
             return None
         assert isinstance(d, PhiDef)
+        if self.view.int_value(self.def_use.defs[d.lhs]) != 0:
+            return None
         # the step, through any names it is copied by
         step = self.def_use.defs[d.rhs].site
         while isinstance(step, Assign) and isinstance(step.expr, Var):
             step = self.def_use.find_def_from_use(step.expr).site
-        if (self.view.int_value(self.def_use.defs[d.lhs]) != 0
-                or not isinstance(step, Assign) or not isinstance(step.expr, Add)
-                or not any(isinstance(a, Var) and self.def_use.find_def_from_use(a) is d
-                           and self.view.int_value(b) == 1
-                           for a, b in ((step.expr.first, step.expr.second),
-                                        (step.expr.second, step.expr.first)))):
+        if not isinstance(step, Assign) or not isinstance(step.expr, Add):
             return None
-        return self._binder(loop)
+        add = step.expr
+        for a, b in ((add.first, add.second), (add.second, add.first)):
+            if (isinstance(a, Var) and self.def_use.find_def_from_use(a) is d
+                    and self.view.int_value(b) == 1):
+                return self._binder(loop)
+        return None
 
     def _carried(self, d: Definition) -> list[Terms] | None:
         """What bounds an arbitrary element of the list *d*, if anything does.
@@ -1707,7 +1711,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._binders = binders
         self._loops = loops
         self._gather, self._trip = outer
-        # what each phi is after the loop, where it is not the iteration's
+        # each joined phi's terms past the loop
         exits: list[tuple[PhiDef, list[Terms]]] = []
         for phi in self.def_use.phis[stmt]:
             body_def = self.def_use.defs[phi.rhs]
@@ -1717,10 +1721,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             pre = self.out.by_def.get(self.def_use.defs[phi.lhs])
             if body is None:
                 self._join(phi, self._written(stmt, phi, inner))
-                if (srcs := self._partial.get(body_def)) is not None:
-                    # each element as its last writer left it
-                    at = (*self._binders, self._elements(phi))
-                    exits.append((phi, [self._copy(s, inner, ('last', id(phi)), at) for s in srcs]))
+                if (srcs := self._written(stmt, phi, inner, after=True)) is not None:
+                    exits.append((phi, srcs))
             elif (_is_empty_alloc(self.def_use.defs[phi.lhs])
                   or body_def in self._covered_write):
                 # Every iteration writes the same expression, so the body's
@@ -1742,10 +1744,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._fields[phi] = self._fields[body_def]
             if body_def in self._elt_expr:
                 self._elt_expr[phi] = self._elt_expr[body_def]
-        # Past the loop a phi is its last iteration's value, or the pre-loop
-        # one if the loop never ran, and varies with the loop no longer: the
-        # uses there read terms of their own, every use inside having been
-        # walked.
+        # Past the loop a phi is its last iteration's value (or the pre-loop
+        # one), varying with the loop no longer; the uses inside are walked,
+        # so only those after read these.
         for phi, srcs in exits:
             terms = Terms()
             self._fresh_interval(terms, phi, f'x{len(self.out.by_def)}')
@@ -1853,15 +1854,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         i = self._binders.index(at) + 1
         inner, outer = self._binders[i:], self._binders[:i]
 
-        def last(t: Terms | None) -> Terms | None:
-            return t if t is None or not inner else self._copy(t, inner, ('witness', id(stmt)), outer)
+        def last(t: Terms) -> Terms:
+            return self._copy(t, inner, ('witness', id(stmt)), outer) if inner else t
 
         # A list of exponents needs its element's *value*, not its `logb`: that
         # is what a rounding position built from it cancels against.
         val = self.value_of(stmt.expr)
         if src is not None:
             src = last(Terms(src.msb, src.lsb, val))
-            assert src is not None
             val = src.value
             self._share(d, src)
         self._covered_write.add(d)
@@ -1869,7 +1869,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if isinstance(stmt.expr, TupleExpr):
             # A list of tuples has no element term of its own, so the fields
             # are kept beside it for whatever destructures them.
-            self._fields[d] = tuple(last(self.out.by_expr.get(el)) for el in stmt.expr.elts)
+            self._fields[d] = tuple(
+                None if (t := self.out.by_expr.get(el)) is None else last(t) for el in stmt.expr.elts)
         if val is not None:
             self.out.by_def.setdefault(d, Terms()).value = val
 

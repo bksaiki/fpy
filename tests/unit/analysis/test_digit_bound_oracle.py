@@ -19,8 +19,9 @@ import pytest
 import fpy2 as fp
 from fpy2.analysis import FormatInfer
 from fpy2.analysis.digit_bound import DigitBoundInfer, Term, Terms
-from fpy2.ast.fpyast import Expr, ForStmt, ListComp
+from fpy2.ast.fpyast import Expr, ForStmt, FuncDef, ListComp
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.env import ForeignEnv
 from fpy2.interpret.byte import BytecodeCompiler
 from fpy2.interpret.value import to_value
 from fpy2.number import Float
@@ -75,7 +76,7 @@ class _Counting(BytecodeCompiler):
     counts: dict[_Binder, int]
     _binders: list[_Binder]
 
-    def __init__(self, func: Any, env: Any, hook: Callable[[int, Any], Any]):
+    def __init__(self, func: FuncDef, env: ForeignEnv, hook: Callable[[int, Any], Any]):
         super().__init__(func, env, hook=hook)
         self.counts, self._binders = {}, []
         self.foreign_vals[_MARK] = lambda i, it: _counting(self.counts, self._binders[i], it)
@@ -464,14 +465,7 @@ SHAPES = {
     'after-loop': (_after_loop, _L4),
 }
 
-KNOWN: dict[str, str] = {}
-"""The shapes the store is known wrong on, and the phase that fixes each."""
-
-
-@pytest.mark.parametrize('shape', [
-    pytest.param(s, marks=pytest.mark.xfail(strict=True, reason=KNOWN[s])) if s in KNOWN else s
-    for s in SHAPES
-])
+@pytest.mark.parametrize('shape', list(SHAPES))
 def test_the_store_holds_every_run(shape: str) -> None:
     fn, arg_types = SHAPES[shape]
     assert check(fn, arg_types) == []
