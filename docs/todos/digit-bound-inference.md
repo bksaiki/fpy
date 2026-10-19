@@ -15,8 +15,10 @@ Relational bounds on the precision of a value rounded at a run-time position
   that bring the implementation to Part I, one commit each.
 
 **Status.**  `fused_sum` reaches `F + 2`, and the mmasim corpus compiles 60/62
-to C++.  Known unsound since v0.2.4: an upper bound on an aggregate stated on a
-list's summary ([Where the implementation departs](#where-the-implementation-departs)).
+to C++.  Two soundness bugs present since v0.2.4 are fixed: an upper bound on
+an aggregate stated on a list's summary (Phase 4), and a loop's carried value
+and a partial write's elements joined pointwise (Phase 5); see
+[Where the implementation departs](#where-the-implementation-departs).
 
 ## Part I: semantics and soundness
 
@@ -187,7 +189,12 @@ paired.
   iterations pointwise.
 - **Any other loop** is one generic iteration, a summary over its iterations.
   A value it carries relates iteration `j + 1` to `j`, which no constraint over
-  one iteration states; it takes only its seeds.
+  one iteration states.  Its phi joins the pre-loop value with the body's at
+  an expanded copy, the iteration before: a witness that varies with the
+  loop's index, since which iteration it is depends on `j`.
+- **A partial write** leaves each element as whichever iteration wrote it, so
+  an element joins with the written value at a witness over the loop and every
+  binder inside it, varying with the element.
 - **Calls** instantiate the callee at the call site: callee variables get the
   call site's signature plus the callee's own binders, and arguments share
   the caller's terms.
@@ -1104,6 +1111,7 @@ by asking the solver less often rather than by making it faster.
 | a loop of static count carrying a real value | unrolled | walked once; the carried value is unbounded | the FMA chain |
 | copies | keyed by point, renaming by signature | index sets keyed by range, renaming every per-element variable; constant and inline indices added this branch | as the first row |
 | envelopes | a rule shape | a store flag (`envelope`) added this branch | agrees |
+| a loop phi, an element a partial write left | joined at a witness of another iteration | joined pointwise | relates the iteration before, or an element's writer, to the index it is read at |
 
 The second row is a **soundness bug**, present since v0.2.4.  Summarizing is
 safe; reading a summary as the worst element is not.  It holds only while one
@@ -1312,6 +1320,8 @@ correspondence read off loop depth, aggregates bounded on the summary (unsound
 since v0.2.4), static loops walked once, and copies renaming every per-element
 variable.  Three strict xfails in `tests/unit/analysis/test_digit_bound.py` pin
 the first two.  The phases fix them in the order the dependencies force.
+Phase 4's audit turned up a fifth, the joins of the last row of that table,
+which Phase 5 fixes before the unrolling.
 
 **Why index spaces come before the soundness fix.**  A witness is a copy, and a
 copy made with today's renaming renames every per-element variable -- including
@@ -1428,7 +1438,47 @@ C++ corpus 44 s to 49 s.
     .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
     cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
 
-#### Phase 5 - Unroll static loops that carry a real value
+#### Phase 5 - Joins at another iteration
+
+**Done.**  A soundness phase, found by Phase 4's audit; the unrolling moves to
+Phase 6.  The pointwise reading of two joins in `_visit_for`, both present since
+v0.2.4:
+
+| join | stated as | true of |
+|---|---|---|
+| loop phi, `[pre, body]` | `msb(phi) <= max(msb(pre), msb(body))`, both varying with `j` | `phi` at `j` and `body` at `j - 1` |
+| partial write, `[*prior, src]` | `msb(out) <= max(..., msb(src))` | element `i` and whichever iteration wrote it |
+
+The first is unsound in the formats: a phi rounded at the `logb` of a value
+the same iteration computes was inferred at `pmax=10`, which the iteration
+before's value overflows.  The second is unsound in the store, which put
+`out[i] = 2 * xs[n - 1 - i]` within `2**2` of `xs[i]`; no format showed it, a
+`with` at `logb(xs[i])` being unable to assume a summary non-zero.
+
+- `_before` states the phi's join against a copy of the body at
+  `('witness', id(loop))`: the loop's class moves, the copy still varies with
+  it (a Skolem function of `j`), and the loop's phis share it.
+- `_written` states the partial join against a copy of each source at
+  `('witness', id(phi))`, moving the loop and every binder opened inside it
+  (`_opened`) and varying with the element space.
+- A copy now varies with whatever its original did outside the moved classes
+  (`IndexSpaces.copy`), as well as with its index set's binders: a carried
+  list's copy still varies with its element space.  `_copy` takes the moved
+  keys and binders explicitly.
+
+Measured: `TestAJoinHoldsAtAnotherIndex`'s two tests failed on their
+assertions and pass (markers removed); every other test unchanged.  The corpus
+at 60/62, all agreeing on 256 draws; all 138 outputs byte for byte Phase 4's;
+the Triton tests pass.  **The C++ corpus 49 s to 72 s:** the witnesses add
+about 480k replayed constraints across it, 35k in each CDNA3 design (21 s
+each), since a replay copies every constraint naming a variable of the loop's
+class -- most unrelated to the carried value; see the open item.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
+    cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
+    cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py
+
+#### Phase 6 - Unroll static loops that carry a real value
 
 - `_visit_for` walks the body once per iteration where the count is static
   (`_len_of(iterable)`) and a loop phi carries a `RealType` value, under a cap;
@@ -1447,7 +1497,7 @@ digit-bound solver time against the estimate (50 s to about 79 s).
     cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
     cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py
 
-#### Phase 6 - Corpus, sweep and docs
+#### Phase 7 - Corpus, sweep and docs
 
 - `examples/mmasim/tests/test_triton.py`: CDNA3's tree and chain of FMAs as
   agreeing remixes.
@@ -1490,7 +1540,28 @@ Phase 3; keeping them is what the semantics allows.  **Provisional:** keep them
 
 #### Does a `while` loop get a binder?
 
-It is not per-element today.  **Provisional:** no, as today.
+It is not per-element today, and its phis are never joined, so they keep only
+their seeds.  **Provisional:** no, as today.
+
+#### Should a copy replay only what reaches the variables it copies?
+
+A replay copies every constraint naming a moving variable, which for a loop
+witness is most of the loop body -- Phase 5's 23 s.  Replaying only the
+constraints connected to the copied fields through moving variables is sound
+(a fresh variable is only less constrained), and loses precision only where a
+later constraint connects a variable whose earlier facts were skipped -- unless
+skipped constraints are kept and replayed once they connect.  It would change
+every copy, not just the witnesses.  **Open:** for review after Phase 5.
+
+#### Does a loop phi vary with its loop when read after it?
+
+`_def_binders` mints a loop's phis under the loop's binder, and the phi is also
+the value after the loop -- iteration `n`, at no index of a list the loop's
+class corresponds with.  A constraint after the loop relating the phi to
+something varying with that class reads it at an index it does not hold at.
+Phase 5's witness leaves no pointwise fact on a phi for such a reading to
+exploit, which is an argument and not a proof.  **Provisional:** as is; reopen
+with a counterexample.
 
 #### Does the `lsb` exception carry over exactly?
 
@@ -1500,12 +1571,12 @@ It is not per-element today.  **Provisional:** no, as today.
 #### How are an iteration's terms kept apart when a loop is unrolled?
 
 Terms are per `Definition`, and a body's definitions are the same objects every
-iteration.  Phase 5 needs a per-iteration scope for them -- a saved and
+iteration.  Phase 6 needs a per-iteration scope for them -- a saved and
 restored `by_def` per iteration, or terms keyed by `(Definition, iteration)`.
-**Open:** settle it at the start of Phase 5.
+**Open:** settle it at the start of Phase 6.
 
 #### What is the unroll cap?
 
 Large enough for the corpus's chains (seven iterations), small enough to bound
 the solver.  **Provisional:** 64, matching the widest instruction; reopen on
-Phase 5's measurement.
+Phase 6's measurement.

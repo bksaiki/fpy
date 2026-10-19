@@ -9,7 +9,7 @@ classes of that correspondence are the index spaces; a variable's
 ``docs/todos/digit-bound-inference.md``, Part I, "Layer 2".
 """
 
-from collections.abc import Hashable, Iterable
+from collections.abc import Container, Hashable, Iterable
 
 from ...utils import Unionfind
 
@@ -45,6 +45,13 @@ class IndexSpaces:
     def bound(self, var: int, keys: Iterable[Key]) -> None:
         """*var* is bounded by something varying over *keys*."""
         self._bounded.setdefault(var, set()).update(keys)
+
+    def copy(self, var: int, src: int, moved: Container[Key]) -> None:
+        """*var* is *src* at another index of the classes *moved*: it varies
+        over the rest of what *src* does, as *src* does."""
+        for table in (self._minted, self._bounded):
+            keys = {k for k in table.get(src, ()) if self.find(k) not in moved}
+            table.setdefault(var, set()).update(keys)
 
     def keys(self, var: int, *, minted: bool = True) -> set[Key]:
         """The keys *var* varies over; without *minted*, only what bounds it."""

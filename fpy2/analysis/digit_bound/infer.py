@@ -66,7 +66,8 @@ _EltKey: TypeAlias = tuple[Literal['elt'], _Operand, _Operand, _Operand]
 """The elements `a + s * k` for `k` over `range(n)`, as `('elt', a, s, n)`."""
 
 _WitnessKey: TypeAlias = tuple[Literal['witness'], int]
-"""The worst element of one aggregate, by the aggregate's identity."""
+"""An index an existential picks -- an aggregate's worst element, a loop's
+iteration before, an element's writer -- by what picks it."""
 
 
 class _Varying:
@@ -92,6 +93,8 @@ class _IndexSet:
     """The element spaces of the lists taken at this index set."""
     subst: dict[int, Term] = field(default_factory=dict)
     mark: int = 0
+    minted: int = 0
+    """How many of :attr:`subst`'s copies have their index spaces."""
 
 
 @dataclass
@@ -306,6 +309,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
     """The loops enclosing the walk, outermost first."""
     _binders: tuple[Key, ...]
     """The binders enclosing the walk, outermost first; see :mod:`.spaces`."""
+    _opened: set[Key]
+    """The binders opened inside the innermost loop around the walk."""
     _binders_of: dict[Expr, tuple[Key, ...]]
     _binders_of_stmt: dict[Stmt, tuple[Key, ...]]
     _index_binder: dict[Definition, Key]
@@ -361,6 +366,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._elt_guards = {}
         self._loops = ()
         self._binders = ()
+        self._opened = set()
         self._binders_of = {}
         self._binders_of_stmt = {}
         self._index_binder = {}
@@ -1498,7 +1504,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # the part is what a rounding position is built from, and the
             # whole list's value is minted lazily, so force it here
             src.value = self._def_value(d_lst)
-        return self._copy(src, self._elements(d_lst), key)
+        return self._copy(src, (self._elements(d_lst),), key)
 
     def _witness(self, e: AMax | AMin | Sum) -> Term | None:
         """The `msb` of the worst element of the list *e* reduces: a copy of
@@ -1507,33 +1513,59 @@ class _DigitBoundInferInstance(DefaultVisitor):
         src = self.out.by_expr.get(e.arg)
         if src is None or src.msb is None:
             return None
-        return self._copy(src, self._elements(e.arg), ('witness', id(e))).msb
+        return self._copy(src, (self._elements(e.arg),), ('witness', id(e))).msb
 
     def _copy(
-        self, src: Terms, elements: Key, key: '_RangeKey | _EltKey | _WitnessKey',
+        self,
+        src: Terms,
+        elements: Iterable[Key],
+        key: '_RangeKey | _EltKey | _WitnessKey',
+        binders: tuple[Key, ...] | None = None,
     ) -> Terms:
-        """*src*, a list's element terms, renamed onto the index set *key*."""
+        """*src* renamed onto the index set *key*: at another index of
+        *elements*' spaces, varying with *binders* (by default, the walk's)."""
         fields = (src.msb, src.lsb, src.value)
         inst = self._index_sets.get(key)
         if inst is None:
-            inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}', self._binders)
-        inst.elements.add(elements)
+            inst = self._index_sets[key] = _IndexSet(
+                f'@{len(self._index_sets)}', self._binders if binders is None else binders)
+        inst.elements.update(elements)
         # a variable that does not vary with the index is the part's too
         moving = _Varying(self.store.spaces, inst.elements)
         for t in fields:
             for v, _ in (t.coeffs if t is not None else ()):
                 if v.index in moving and v.index not in inst.subst:
-                    inst.subst[v.index] = self._var(v.name + inst.tag)
+                    inst.subst[v.index] = self.store.var(v.name + inst.tag)
         self._replay(inst)
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
     def _replay(self, inst: _IndexSet) -> None:
         """Every fact stated since *inst* was last replayed, renamed onto it."""
-        before = self.store.n_vars
         moving = _Varying(self.store.spaces, inst.elements)
         inst.mark = self.store.instance(moving, inst.subst, inst.mark, inst.tag)
-        for i in range(before, self.store.n_vars):
-            self.store.spaces.mint(i, inst.binders)
+        spaces = self.store.spaces
+        for old, new in list(inst.subst.items())[inst.minted:]:
+            for v, _ in new.coeffs:
+                spaces.copy(v.index, old, moving.classes)
+                spaces.mint(v.index, inst.binders)
+        inst.minted = len(inst.subst)
+
+    def _before(self, stmt: ForStmt, body: Terms) -> Terms:
+        """*body* as the iteration before left it: a copy at another of the
+        loop's iterations, which the loop's phis share and which varies with
+        the iteration it precedes."""
+        b = self._binder(stmt)
+        return self._copy(body, (b,), ('witness', id(stmt)), (*self._binders, b))
+
+    def _written(self, stmt: ForStmt, phi: PhiDef, inner: set[Key]) -> list[Terms] | None:
+        """What the partial writes into the list *phi* left at an element:
+        each source at whichever iteration -- of the loop *stmt* and the
+        binders *inner* to it -- wrote that element, varying with it."""
+        srcs = self._partial.get(self.def_use.defs[phi.rhs])
+        if srcs is None:
+            return None
+        binders = (*self._binders, self._binder(stmt), self._elements(phi))
+        return [self._copy(s, inner, ('witness', id(phi)), binders) for s in srcs]
 
     def _carried(self, d: Definition) -> list[Terms] | None:
         """What bounds an arbitrary element of the list *d*, if anything does.
@@ -1604,6 +1636,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             else:
                 self._bind_iter(target, iterable, e, binder)
         binders, self._binders = self._binders, (*self._binders, *clauses)
+        self._opened.update(clauses)
         self._visit_expr(e.elt, ctx)
         self._binders = binders
         self._gather, self._trip = outer
@@ -1619,7 +1652,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
             self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
         loops, self._loops = self._loops, (*self._loops, stmt)
         binders, self._binders = self._binders, (*self._binders, self._binder(stmt))
+        opened, self._opened = self._opened, {self._binder(stmt)}
         self._visit_block(stmt.body, ctx)
+        inner, self._opened = self._opened, opened | self._opened
         self._binders = binders
         self._loops = loops
         self._gather, self._trip = outer
@@ -1630,7 +1665,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             body = self.out.by_def.get(body_def)
             pre = self.out.by_def.get(self.def_use.defs[phi.lhs])
             if body is None:
-                self._join(phi, self._partial.get(body_def))
+                self._join(phi, self._written(stmt, phi, inner))
             elif (_is_empty_alloc(self.def_use.defs[phi.lhs])
                   or body_def in self._covered_write):
                 # Every iteration writes the same expression, so the body's
@@ -1644,7 +1679,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # pre-loop value on the first pass, and on every pass if the
                 # loop never runs -- so only the join covers both.  A list
                 # that arrived with elements keeps them.
-                self._join(phi, [pre, body])
+                self._join(phi, [pre, self._before(stmt, body)])
             self._partial[phi] = self._partial.get(body_def)
             if body_def in self._fields:
                 self._fields[phi] = self._fields[body_def]

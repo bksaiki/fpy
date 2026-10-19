@@ -839,3 +839,56 @@ class TestIndexSpaces:
         es = self._sig(b, '_logbs(xs)')
         assert self._sig(b, 'xs') <= es
         assert len(es) > len(self._sig(b, 'xs'))   # and the loop's class
+
+
+class TestAJoinHoldsAtAnotherIndex:
+    """A loop's phi is the value from the iteration *before*, and an element a
+    partial write left is from whichever iteration wrote it: neither join is a
+    fact about the index the phi is read at."""
+
+    BIG = (2 ** 24 - 1) * 2.0 ** 76
+
+    def test_a_carried_value_is_from_the_iteration_before(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            acc = fp.rational(1, 1606938044258990275541962092341162602522202993782792835301376)  # 2**-200
+            out = fp.empty(len(xs))
+            for j in range(len(xs)):
+                prev = acc
+                y = xs[j] * 2
+                e = fp.logb(y)
+                with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                    out[j] = fp.round(prev)
+                acc = y
+            return out
+
+        ast = monomorphize(f, args=[ListType(RealType(fp.FP32), 4)]).ast
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        fmt = next(v for e, v in info.by_expr.items() if e.format() == 'fp.round(prev)')
+        xs = [fp.FP32.round(self.BIG), *(fp.FP32.round(1.0) for _ in range(3))]
+        assert fmt.representable_in(f(xs)[1])
+
+    def test_a_partial_write_is_from_another_index(self):
+        """`out[i]` is `2 * xs[n - 1 - i]`, which no bound on `xs[i]` reaches."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            n = len(xs)
+            out = fp.empty(n)
+            for j in range(n):
+                with fp.INTEGER:
+                    k = n - 1 - j
+                out[k] = xs[j] * 2
+            rs = fp.empty(n)
+            for i in range(n):
+                rs[i] = out[i] + xs[i]
+            return rs
+
+        _, b = _analyze(f, [ListType(RealType(fp.FP32), 4)])
+        _, out = _term(b, 'out[i]')
+        _, xs = _term(b, 'xs[i]')
+        lits = frozenset(b.store.not_neg_inf(xs.msb))
+        bound = b.store.maximum(out.msb - xs.msb, lits)
+        # at `[2**-149, 1, 1, 2**128 - 2**104]`, `out[0]` has msb 128 and `xs[0]` -149
+        assert bound is None or bound >= 128 + 149
