@@ -14,7 +14,17 @@ from ...transform import Cursor
 from .. import unfold_round as _u
 from ..unfold_round import UnfoldKind, UnfoldMode, UnfoldSite, UnfoldTarget
 from .emitter import _integral_round
-from .target import _DIV_SHAPES, _fp_ctxs, castable, is_native_ctx, make_op_table
+from .storage import bound_fits_in_scalar
+from .target import (
+    _DIV_SHAPES,
+    _directed_ctxs,
+    _fp_ctxs,
+    _odd_ctxs,
+    _ty_of,
+    castable,
+    is_native_ctx,
+    make_op_table,
+)
 
 __all__ = ['UnfoldKind', 'UnfoldMode', 'UnfoldSite', 'sites', 'unfold', 'unfold_arith']
 
@@ -84,13 +94,18 @@ def _drop_proven_bounds(func: FuncDef) -> FuncDef:
 
 _TABLE = make_op_table()
 
+_LIBDEVICE_CTXS = frozenset([*_directed_ctxs(), *_odd_ctxs()])
+
 _TARGET = UnfoldTarget(
-    native=is_native_ctx,
+    native=lambda c: is_native_ctx(c) or c in _LIBDEVICE_CTXS,
     rounds=lambda c: is_native_ctx(c) or castable(c) or _integral_round(c) is not None,
     ops=frozenset({*_TABLE.unary, *_TABLE.binary, *_TABLE.ternary}),
-    # unlike FP16, every operation in the table has a signature at both
-    intermediates=tuple(_fp_ctxs(_DIV_SHAPES)),
+    # per shape: to nearest, then directed; odd last (two ops, the emitter may refuse)
+    intermediates=(*(c for shape in _DIV_SHAPES
+                     for c in [*_fp_ctxs((shape,)), *_directed_ctxs((shape,))]),
+                   *_odd_ctxs()),
     post=_drop_proven_bounds,
+    holds=lambda c, fmt: bound_fits_in_scalar(fmt, _ty_of(c)),
 )
 
 

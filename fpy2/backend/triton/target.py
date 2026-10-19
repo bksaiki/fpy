@@ -19,9 +19,9 @@ not the one FPy specifies is refused, never approximated.  Left out:
 - **``/`` and ``tl.sqrt``.**  Both are the *fast* variants.  The correctly
   rounded ones are ``tl.div_rn`` and ``tl.sqrt_rn``, and those are what the
   table names.
-- **Arithmetic in any rounding mode but RNE.**  Triton has no per-instruction
-  rounding modifier; only some casts round directed (:func:`directed_cast`),
-  and the rest goes through ``unfold_round`` or not at all.
+- **Directed arithmetic at FP16.**  Triton has no per-instruction rounding
+  modifier; libdevice's directed ``add_rz`` and the rest (correctly rounded:
+  PTX's ``add.rz.f32``) are FP32 and FP64 only, and those are in the table.
 """
 
 from __future__ import annotations
@@ -75,9 +75,10 @@ __all__ = [
 @enum.unique
 class TritonOpStyle(enum.Enum):
     """How a signature spells itself in Triton."""
-    CALL = 'call'      # f(a, b)
-    INFIX = 'infix'    # (a op b)
-    PREFIX = 'prefix'  # (op a)
+    CALL = 'call'          # f(a, b)
+    INFIX = 'infix'        # (a op b)
+    PREFIX = 'prefix'      # (op a)
+    TEMPLATE = 'template'  # the name: a format string over the arguments
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,6 +106,8 @@ class TritonOp:
                 return f'({self.name}{arg})'
             case TritonOpStyle.CALL:
                 return f'{self.name}({", ".join(args)})'
+            case TritonOpStyle.TEMPLATE:
+                return self.name.format(*args)
 
 
 OpTable: TypeAlias = dict[type[Expr], list[TritonOp]]
@@ -147,6 +150,39 @@ _TO_F32 = {
 }
 """libdevice's directed conversions into `f32`; any narrower source is exact.
 `tl.cast` has no directed mode from these: the NVIDIA backend rejects one."""
+
+
+def _directed_ctxs(shapes: tuple[tuple[int, int], ...] = _DIV_SHAPES) -> list[IEEEContext]:
+    """The float contexts libdevice's directed arithmetic dispatches on: FP32
+    and FP64, rounding toward zero, down or up."""
+    return [IEEEContext(es, nbits, rm) for (es, nbits) in shapes for rm in _DIRECTED]
+
+
+def _spelled(f: str, template: str | None) -> tuple[str, TritonOpStyle]:
+    """A call to *f*, or *template* (``{f}`` the function) where given."""
+    return (template.replace('{f}', f), TritonOpStyle.TEMPLATE) if template else (f, TritonOpStyle.CALL)
+
+
+def _directed(op: str, arity: int, template: str | None = None) -> list[TritonOp]:
+    """libdevice's ``<op>_<rz|rd|ru>`` over FP32 and FP64, each the context it
+    rounds in; see :func:`_spelled`."""
+    out = []
+    for c in _directed_ctxs():
+        name, style = _spelled(f'libdevice.{op}_{_DIRECTED[c.rm]}', template)
+        out.append(TritonOp(name, (_ty_of(c),) * arity, c, style=style))
+    return out
+
+
+def _odd_ctxs() -> list[IEEEContext]:
+    """FP32 and FP64 rounding to odd: no libdevice mode, but the launcher's
+    `_fpy_<op>_ro` helpers spell it from rounding down and up."""
+    return [IEEEContext(es, nbits, RM.RTO) for (es, nbits) in _DIV_SHAPES]
+
+
+def _odd(op: str, arity: int, template: str | None = None) -> list[TritonOp]:
+    """The launcher's ``_fpy_<op>_ro`` over FP32 and FP64; see :func:`_spelled`."""
+    name, style = _spelled(f'_fpy_{op}_ro', template)
+    return [TritonOp(name, (_ty_of(c),) * arity, c, style=style) for c in _odd_ctxs()]
 
 
 def _plain(ctx: Context) -> IEEEContext | None:
@@ -219,13 +255,15 @@ def _same(name: str, ctxs: list[Context], arity: int,
 
 
 def _make_unary_table() -> OpTable:
-    fp = _fp_ctxs()
-    same = _all_arith_ctxs()
+    # the exact ops are the same under a directed or odd context
+    fp = _fp_ctxs() + _directed_ctxs() + _odd_ctxs()
+    same = _all_arith_ctxs() + _directed_ctxs() + _odd_ctxs()
     return {
         Neg: _same('-', same, 1, TritonOpStyle.PREFIX),
         Abs: _same('tl.abs', same, 1),
         # correctly rounded; `tl.sqrt` is the fast variant
-        Sqrt: _same('tl.sqrt_rn', _fp_ctxs(_DIV_SHAPES), 1),
+        Sqrt: _same('tl.sqrt_rn', _fp_ctxs(_DIV_SHAPES), 1) + _directed('sqrt', 1)
+        + _odd('sqrt', 1),
         Ceil: _same('tl.ceil', fp, 1),
         Floor: _same('tl.floor', fp, 1),
     }
@@ -234,18 +272,21 @@ def _make_unary_table() -> OpTable:
 def _make_binary_table() -> OpTable:
     same = _all_arith_ctxs()
     table: OpTable = {
-        Add: _same('+', same, 2, TritonOpStyle.INFIX),
-        Sub: _same('-', same, 2, TritonOpStyle.INFIX),
-        Mul: _same('*', same, 2, TritonOpStyle.INFIX),
+        Add: _same('+', same, 2, TritonOpStyle.INFIX) + _directed('add', 2) + _odd('add', 2),
+        # libdevice has no directed subtract; negating is exact
+        Sub: _same('-', same, 2, TritonOpStyle.INFIX) + _directed('add', 2, '{f}({}, -({}))')
+        + _odd('add', 2, '{f}({}, -({}))'),
+        Mul: _same('*', same, 2, TritonOpStyle.INFIX) + _directed('mul', 2) + _odd('mul', 2),
     }
     # float division only, and only where a correctly-rounded one exists.
     # integer `//` floors where FPy truncates, so it is absent entirely.
-    table[Div] = _same('tl.div_rn', _fp_ctxs(_DIV_SHAPES), 2)
+    # no round to odd: the emitter cannot bound a quotient's range
+    table[Div] = _same('tl.div_rn', _fp_ctxs(_DIV_SHAPES), 2) + _directed('div', 2)
     return table
 
 
 def _make_ternary_table() -> OpTable:
-    return {Fma: _same('tl.fma', _fp_ctxs(), 3)}
+    return {Fma: _same('tl.fma', _fp_ctxs(), 3) + _directed('fma', 3) + _odd('fma', 3)}
 
 
 @cache

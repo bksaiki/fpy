@@ -15,7 +15,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 
-from ..analysis import ContextUse, DefineUse
+from ..analysis import (
+    ContextUse,
+    ContextUseAnalysis,
+    DefineUse,
+    DefineUseAnalysis,
+    FormatInfer,
+)
+from ..analysis.format_infer import FormatBound
 from ..ast.fpyast import Cast, Expr, FuncDef, Round
 from ..number import REAL, MPBFixedContext, MPFixedContext
 from ..number.context.context import Context
@@ -33,6 +40,7 @@ from ..transform import (
     UnfoldSpecial,
 )
 from ..transform.cursor import expr_sites
+from ..transform.utils import operands
 
 __all__ = [
     'UnfoldKind',
@@ -55,9 +63,8 @@ class UnfoldMode(Enum):
       means rounding twice, which is a different claim.
     - ``DOUBLE_ROUND``: also compute that arithmetic at a native intermediate
       and re-round, where the correct-double-rounding rules say the two compose
-      to what the one gave.  The intermediate always rounds to nearest -- see
-      `docs/todos/rounding-recovery.md` for why, and for why a round-to-odd
-      level would not close.
+      to what the one gave: to nearest, or a directed mode through the same
+      mode where the backend has one.
     """
 
     NONE = 0
@@ -76,6 +83,11 @@ class UnfoldKind(Enum):
     """A rounding to a float context with no target type: its storage
     *contains* the format rather than equalling it, so a cast rounds to the
     storage's own format.  Recovered by lowering the rounding to fixed-point."""
+
+    WIDE = auto()
+    """An operation the op table has a signature for, but whose operand is held
+    wider than that signature takes, so narrowing it would round.  Recovered as
+    `ARITH` is, at an intermediate that holds it."""
 
     FIXED_ROUND = auto()
     """A rounding to a fixed-point context the emitter cannot lower as it
@@ -115,17 +127,35 @@ class UnfoldTarget:
     post: Callable[[FuncDef], FuncDef] = lambda f: f
     """Run after the roundings are lowered."""
 
+    holds: Callable[[Context, FormatBound], bool] | None = None
+    """Whether arithmetic under a native context takes an operand of a format
+    as it is held, without narrowing it; `None` where every one is."""
+
 
 class _Scopes:
-    """The active context per expression.
+    """The active context per expression, and the formats only `WIDE` sites
+    read, inferred on first use: this runs *before* the rewrites that tighten
+    them, so a format may be missing, and its operation is then no site."""
 
-    `RoundingScopes` answers the same question and also infers formats, which
-    this cannot: it runs *before* the rewrite that makes format inference
-    succeed on these programs.
-    """
+    func: FuncDef
+    def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
+    wide: bool
+    _formats: dict[Expr, FormatBound] | None
 
-    def __init__(self, func: FuncDef):
-        self.ctx_use = ContextUse.analyze(func, def_use=DefineUse.analyze(func))
+    def __init__(self, func: FuncDef, wide: bool):
+        self.func = func
+        self.def_use = DefineUse.analyze(func)
+        self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.wide = wide
+        self._formats = None
+
+    def formats(self, e: Expr) -> list[FormatBound]:
+        """The inferred formats of *e*'s operands."""
+        if self._formats is None:
+            self._formats = FormatInfer.analyze(
+                self.func, def_use=self.def_use, ctx_use=self.ctx_use).by_expr
+        return [self._formats.get(a) for a in operands(e)]
 
     def __call__(self, e: Expr) -> Context | None:
         """*e*'s active context, or `None` where the scope stays symbolic."""
@@ -153,23 +183,31 @@ def _classify(
         # `REAL` is the one non-native context the table reaches, by widening to
         # an op that gives the exact result and rounds to itself.
         active = active_of(e)
-        if active is None or active is REAL or target.native(active):
+        if active is None or active is REAL:
             return None
-        return UnfoldKind.ARITH, active
+        if not target.native(active):
+            return UnfoldKind.ARITH, active
+        if not active_of.wide or target.holds is None:
+            return None
+        holds = target.holds
+        if not all(f is None or holds(active, f) for f in active_of.formats(e)):
+            return UnfoldKind.WIDE, active
     return None
 
 
 def sites(
     func: FuncDef, target: UnfoldTarget, within: Cursor | None = None,
+    *, wide: bool = True,
 ) -> list[UnfoldSite]:
     """The program points of *func* the emitter would refuse, in visit order.
 
     *func* is a specialized :class:`FuncDef`, before the analyses the emitter
     runs on.  `within` keeps the sites at or beneath the point it names.
+    *wide* finds the `WIDE` sites too, which runs format inference.
     """
     if not isinstance(func, FuncDef):
         raise TypeError(f'Expected \'FuncDef\', got {func}')
-    active_of = _Scopes(func)
+    active_of = _Scopes(func, wide)
     out: list[UnfoldSite] = []
     for cursor in expr_sites(
         func,
@@ -198,7 +236,12 @@ def _split_arith(
     A refusal is an ordinary outcome: an operation with no rule keeps the
     refusal it has.
     """
+    holds = target.holds
+    fmts = [] if holds is None else _Scopes(func, True).formats(site.cursor.resolve())
     for cand in target.intermediates:
+        # one that narrows an operand would only move the refusal
+        if holds is not None and not all(f is None or holds(cand, f) for f in fmts):
+            continue
         try:
             return SplitRound.apply(func, cand, where=site.cursor)
         except TransformDeclined:
@@ -206,8 +249,11 @@ def _split_arith(
     return None
 
 
+_ARITH = (UnfoldKind.ARITH, UnfoldKind.WIDE)
+
+
 def _arith(func: FuncDef, target: UnfoldTarget) -> list[UnfoldSite]:
-    return [s for s in sites(func, target) if s.kind is UnfoldKind.ARITH]
+    return [s for s in sites(func, target) if s.kind in _ARITH]
 
 
 def _step(
@@ -271,7 +317,7 @@ def _unfold_roundings(func: FuncDef, target: UnfoldTarget) -> FuncDef:
     emitter already spells too -- correct, and pure waste.  The sites are this
     module's, and one pass of the ladder clears each.
     """
-    todo = [s for s in sites(func, target) if s.kind is not UnfoldKind.ARITH]
+    todo = [s for s in sites(func, target, wide=False) if s.kind not in _ARITH]
     if not todo:
         return func
     # the anchor is the *statement* holding the rounding: a step consumes the

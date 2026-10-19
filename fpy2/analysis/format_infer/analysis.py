@@ -149,7 +149,17 @@ from ...ast.visitor import Visitor
 from ...function import Function
 from ...interpret import get_default_interpreter
 from ...interpret.value import unwrap_foreign
-from ...number import INTEGER, REAL, Context, Float, RealFloat
+from ...number import (
+    INTEGER,
+    REAL,
+    Context,
+    Float,
+    MPBFixedContext,
+    MPFixedContext,
+    MPFloatContext,
+    OverflowMode,
+    RealFloat,
+)
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
     BoolType,
@@ -217,6 +227,18 @@ bounds a magnitude."""
 _INF = float('inf')
 
 
+@dataclass(frozen=True)
+class _AtLeast:
+    """`|v| >= 2 ** binade`: a branch's lower bound on a magnitude, which no
+    :class:`AbstractFormat` states (it has no "away from zero"); kept beside
+    the refinements for `logb` to read."""
+    binade: int
+
+
+_Fact: TypeAlias = 'AbstractFormat | _AtLeast'
+"""What a branch condition says about a variable it tests."""
+
+
 def _logb_operand(d: Definition) -> Var | None:
     """The ``v`` in ``d = logb(v)``, where that is how *d* was defined."""
     if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
@@ -276,6 +298,33 @@ def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
         return _unconstrained(pos_bound=b)
     if op in (CompareOp.GT, CompareOp.GE) and c <= 0:
         return _unconstrained(neg_bound=b)
+    return None
+
+
+def _grid_below(c: Fraction, af: 'AbstractFormat') -> Fraction | None:
+    """The largest value on *af*'s grid below ``c > 0``, or `None` where the
+    grid there is unbounded: just below ``c``, a step is the larger of the
+    precision's and the finest digit's."""
+    steps = []
+    if isinstance(af.prec, int):
+        b = c.numerator.bit_length() - c.denominator.bit_length()
+        if Fraction(2) ** b > c:
+            b -= 1
+        if Fraction(2) ** b == c:
+            b -= 1      # below a power of two, the binade under it
+        steps.append(Fraction(2) ** (b - af.prec + 1))
+    if isinstance(af.exp, int):
+        steps.append(Fraction(2) ** af.exp)
+    if not steps:
+        return None
+    step = max(steps)
+    return (math.ceil(c / step) - 1) * step
+
+
+def _pow2_exponent(e: Expr) -> Expr | None:
+    """The ``n`` in ``2 ** n``."""
+    if isinstance(e, Pow) and isinstance(e.first, RationalVal) and e.first.as_rational() == 2:
+        return e.second
     return None
 
 
@@ -805,6 +854,19 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
     else:
         return _setformat_to_abstract(f)
 
+
+def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> 'FormatBound':
+    """*fmt*, abstractly *af*, met with *cons*: *fmt* itself where that buys
+    nothing (the round trip loses the class: `FP32` comes back an
+    `MPBFloatFormat`) or no `Format` materializes the meet."""
+    met = af & cons
+    if met == af:
+        return fmt
+    try:
+        return met.format()
+    except (ValueError, OverflowError):
+        return fmt
+
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
 def _set_as_fraction(v: SetValue) -> Fraction:
@@ -1065,7 +1127,44 @@ def exact_binop(
     af_b = _to_abstract(rhs)
     if af_a is None or af_b is None:
         return None
-    return op(af_a, af_b)
+    return _clip_to_constant(op(af_a, af_b), lhs, rhs, af_a, af_b, op)
+
+
+def _clip_to_constant(
+    out: 'AbstractFormat',
+    lhs: 'FormatBound',
+    rhs: 'FormatBound',
+    af_a: 'AbstractFormat',
+    af_b: 'AbstractFormat',
+    op: Callable[[Any, Any], Any],
+) -> 'AbstractFormat':
+    """*out*, the abstract ``lhs op rhs``, with its bounds clipped to the
+    interval ``+`` or ``-`` gives where one operand is a set: lifted to a
+    format, a constant keeps no least magnitude, so ``x - 13`` would keep
+    ``x``'s upper bound."""
+    if op not in (operator.add, operator.sub):
+        return out
+    for s, f, af, first in ((rhs, lhs, af_a, False), (lhs, rhs, af_b, True)):
+        if not isinstance(s, SetFormat) or isinstance(f, SetFormat):
+            continue
+        # a special's result is a special; a zero of either sign adds 0
+        vals = [v if isinstance(v, Fraction) else Fraction(0) for v in s.values
+                if isinstance(v, Fraction) or v is NEG_ZERO]
+        if not vals or not isinstance(af.pos_bound, RealFloat) \
+                or not isinstance(af.neg_bound, RealFloat):
+            return out
+        hi, lo = af.pos_bound.as_rational(), af.neg_bound.as_rational()
+        if op is operator.add:
+            hi, lo = hi + max(vals), lo + min(vals)
+        elif first:
+            hi, lo = max(vals) - lo, min(vals) - hi
+        else:
+            hi, lo = hi - min(vals), lo - max(vals)
+        if not (is_dyadic(hi) and is_dyadic(lo)):
+            return out
+        return out & _unconstrained(pos_bound=RealFloat.from_rational(max(hi, Fraction(0))),
+                                    neg_bound=RealFloat.from_rational(min(lo, Fraction(0))))
+    return out
 
 
 def exact_unop(
@@ -1102,13 +1201,6 @@ def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
     if not isinstance(af.pos_bound, RealFloat) or not isinstance(af.neg_bound, RealFloat):
         return None
     return int(af.neg_bound), int(af.pos_bound)
-
-
-def _mag_cap(fmt: 'AbstractFormat') -> int | None:
-    """The largest ``m`` with ``2 ** (m + 1)`` inside *fmt*'s finite bounds,
-    or ``None`` where either side is unbounded and nothing caps it."""
-    es = [b.e for b in (fmt.pos_bound, fmt.neg_bound) if isinstance(b, RealFloat)]
-    return min(es) - 1 if len(es) == 2 else None
 
 
 def _has_finite(fmt: 'FormatBound') -> bool:
@@ -1152,8 +1244,9 @@ def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
     return lo, hi
 
 
-def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
-    """The exact format of ``logb(x)`` for ``x`` in *arg*.
+def exact_logb(arg: 'FormatBound', least: int | None = None) -> 'AbstractFormat | None':
+    """The exact format of ``logb(x)`` for ``x`` in *arg*; with *least*, where
+    ``|x| >= 2 ** least`` is known, ``logb(x) >= least`` and ``x`` is non-zero.
 
     ``logb`` reads an exponent off its argument, so the result is an integer
     fixed by the argument's *range* rather than its precision: the smallest
@@ -1185,6 +1278,9 @@ def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
     if not mags:
         return None     # the zero-only format, whose `logb` is `-inf` alone
     lo, hi = af.exp, max(b.e for b in mags)
+    if least is not None and least <= hi:
+        # past `hi`, no `x` qualifies: keep the unrefined (sound) range
+        lo = max(lo, least)
 
     # the result represents the integers spanning `[lo, hi]`; `prec` has to cover
     # the larger magnitude, and the bounds keep the class's sign convention
@@ -1194,7 +1290,7 @@ def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
         RealFloat.from_int(max(hi, 0)),
         neg_bound=RealFloat.from_int(min(lo, 0)),
         has_pos_inf=af.has_pos_inf or af.has_neg_inf,
-        has_neg_inf=True,
+        has_neg_inf=least is None or least > hi,
         has_nan=af.has_nan,
     )
 
@@ -1816,6 +1912,9 @@ class _FormatInferInstance(Visitor):
         # Per-definition description to meet with on every *read*, from the
         # branches enclosing that read.  Saved and restored around each arm.
         self._refine: dict[Definition, AbstractFormat] = {}
+        # Beside it, `b` per definition where those branches prove
+        # `|v| >= 2 ** b`, which no description states
+        self._least: dict[Definition, int] = {}
         self._region_inserts: dict[
             Region, list[tuple[int, FormatBound, frozenset[Definition]]]
         ] = {}
@@ -1909,18 +2008,7 @@ class _FormatInferInstance(Visitor):
         cons = self._refine.get(d)
         if cons is None or not isinstance(fmt, AbstractableFormat):
             return fmt
-        af = AbstractFormat.from_format(fmt)
-        met = af & cons
-        if met == af:
-            # The round trip preserves the *values* but not the class: `FP32`
-            # comes back an `MPBFloatFormat`, losing the encoding an
-            # `IEEEFormat` carries.  So keep the original where the constraint
-            # bought nothing.
-            return fmt
-        try:
-            return met.format()
-        except (ValueError, OverflowError):
-            return fmt      # no `Format` materializes it; unrefined is sound
+        return _narrowed(fmt, AbstractFormat.from_format(fmt), cons)
 
     @contextmanager
     def _refined(self, cond: Expr, truth: bool) -> Iterator[None]:
@@ -1929,18 +2017,21 @@ class _FormatInferInstance(Visitor):
         Both arms narrow the *enclosing* mask; narrowing whatever ``self._refine``
         holds would carry the first arm's constraint into its sibling.
         """
-        saved = self._refine
-        out = dict(saved)
+        saved, saved_least = self._refine, self._least
+        out, least = dict(saved), dict(saved_least)
         for d, cons in self._implied(cond, truth):
+            if isinstance(cons, _AtLeast):
+                least[d] = max(least.get(d, cons.binade), cons.binade)
+                continue
             prev = out.get(d)
             out[d] = cons if prev is None else prev & cons
-        self._refine = out
+        self._refine, self._least = out, least
         try:
             yield
         finally:
-            self._refine = saved
+            self._refine, self._least = saved, saved_least
 
-    def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, AbstractFormat]]:
+    def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, '_Fact']]:
         """What *cond* being *truth* says about the variables it tests: only a
         comparison against a numeric literal, and only the direction
         :func:`_magnitude_constraint` can state.
@@ -1972,12 +2063,12 @@ class _FormatInferInstance(Visitor):
 
     def _implied_compare(
         self, cond: Compare, truth: bool
-    ) -> list[tuple[Definition, AbstractFormat]]:
+    ) -> list[tuple[Definition, '_Fact']]:
         op = cond.ops[0] if truth else _NEGATE.get(cond.ops[0])
         if op is None:
             return []
         a, b = cond.args
-        out: list[tuple[Definition, AbstractFormat]] = []
+        out: list[tuple[Definition, _Fact]] = []
         for x, y, o in ((a, b, op), (b, a, op.invert())):
             if not isinstance(y, RationalVal):
                 continue
@@ -1988,15 +2079,34 @@ class _FormatInferInstance(Visitor):
             if not isinstance(x, Var):
                 continue
             d = self.def_use.find_def_from_use(x)
-            cons = _magnitude_constraint(o, c)
+            cons = _magnitude_constraint(*self._non_strict(d, o, c))
             if cons is not None:
                 out.append((d, cons))
+            if is_dyadic(c) and ((o in (CompareOp.GE, CompareOp.GT) and c > 0)
+                                 or (o in (CompareOp.LE, CompareOp.LT) and c < 0)):
+                # `v >= c > 0` or `v <= c < 0`: `|v| >= |c|`
+                out += self._at_least(d, RealFloat.from_rational(c).e)
             out += self._implied_logb(d, o, c)
         return out
 
+    def _non_strict(
+        self, d: Definition, op: CompareOp, c: Fraction
+    ) -> tuple[CompareOp, Fraction]:
+        """`v op c` as a non-strict comparison where `v`'s grid has a value
+        nearest `c` on the bound's side: ``v < c`` is ``v <= pred(c)``."""
+        if (op, c > 0) not in ((CompareOp.LT, True), (CompareOp.GT, False)) or c == 0:
+            return op, c
+        # the stored bound, as `_at_least` reads it: only the grid is wanted
+        fmt = self.by_def.get(d)
+        af = AbstractFormat.from_format(fmt) if isinstance(fmt, AbstractableFormat) else None
+        below = None if af is None else _grid_below(abs(c), af)
+        if below is None:
+            return op, c
+        return (CompareOp.LE, below) if c > 0 else (CompareOp.GE, -below)
+
     def _implied_magnitude(
         self, v: Var, op: CompareOp, c: Fraction
-    ) -> list[tuple[Definition, AbstractFormat]]:
+    ) -> list[tuple[Definition, '_Fact']]:
         """What `abs(v) op c` says about *v*.
 
         An upper bound holds on both sides at once, which a comparison against
@@ -2010,29 +2120,33 @@ class _FormatInferInstance(Visitor):
         d = self.def_use.find_def_from_use(v)
         b = RealFloat.from_rational(c)
         if op in (CompareOp.LT, CompareOp.LE) and c >= 0:
-            return [(d, _unconstrained(pos_bound=b, neg_bound=-b))]
+            # `|v| < c` stops a step short on either side, as `v < c` does
+            top = RealFloat.from_rational(self._non_strict(d, op, c)[1])
+            return [(d, _unconstrained(pos_bound=top, neg_bound=-top))]
         if op in (CompareOp.GE, CompareOp.GT) and c > 0:
-            return self._digit_floor(d, b.e)
+            return self._at_least(d, b.e)
         return []
 
-    def _digit_floor(
+    def _at_least(
         self, d: Definition, binade: int
-    ) -> list[tuple[Definition, AbstractFormat]]:
-        """What `|v| >= 2 ** binade` says about *v*: a value that large with at
-        most `p` significant bits has no digit finer than `binade - p + 1`."""
+    ) -> list[tuple[Definition, '_Fact']]:
+        """What `|v| >= 2 ** binade` says about *v*: itself, for `logb`, and a
+        value that large with at most `p` significant bits has no digit finer
+        than `binade - p + 1`."""
+        out: list[tuple[Definition, _Fact]] = [(d, _AtLeast(binade))]
         # the stored bound, not `_bound_of_def`: this runs while the mask that
         # method reads is still being built, and only the precision is wanted
         fmt = self.by_def.get(d)
         if not isinstance(fmt, AbstractableFormat):
-            return []
+            return out
         prec = AbstractFormat.from_format(fmt).prec
         if not isinstance(prec, int):
-            return []       # unbounded precision pins no position
-        return [(d, _unconstrained(exp=binade - prec + 1))]
+            return out      # unbounded precision pins no position
+        return [*out, (d, _unconstrained(exp=binade - prec + 1))]
 
     def _implied_logb(
         self, d: Definition, op: CompareOp, c: Fraction
-    ) -> list[tuple[Definition, AbstractFormat]]:
+    ) -> list[tuple[Definition, '_Fact']]:
         """What a *lower* bound on `logb(v)` says about `v` itself.
 
         ``logb(v) >= lo`` gives ``|v| >= 2 ** lo``.  This domain cannot say
@@ -2046,8 +2160,7 @@ class _FormatInferInstance(Visitor):
         if v is None:
             return []
         # `floor(c)` whether or not `logb`'s result is known to be integral
-        return self._digit_floor(
-            self.def_use.find_def_from_use(v), math.floor(c))
+        return self._at_least(self.def_use.find_def_from_use(v), math.floor(c))
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""
@@ -2070,6 +2183,50 @@ class _FormatInferInstance(Visitor):
             # non-dyadic set can't be abstracted, so fall back to REAL_FORMAT
             return af.format() if af is not None else REAL_FORMAT
         return fmt
+
+    def _assigned(self, v: Expr) -> Expr | None:
+        """What *v* is assigned, where it is a variable defined by one."""
+        if not isinstance(v, Var):
+            return None
+        d = self.def_use.find_def_from_use(v)
+        return d.site.expr if isinstance(d, AssignDef) and isinstance(d.site, Assign) else None
+
+    def _rescaled_rounding(self, e: Mul) -> AbstractFormat | None:
+        """``2 ** k * round(2 ** -k * x)`` with ``k = logb(x) - c``: `x` rounded
+        to ``c + 1`` bits, as `FloatToFixed` and then `RescaleFixed` leave a
+        float rounding.  That rounding is monotone, so the result lies within
+        the rounding of `x`'s bounds, which neither factor states alone."""
+        k, r = _pow2_exponent(e.first), e.second
+        rnd = self._assigned(r)
+        if not isinstance(k, Var) or not isinstance(rnd, Round) or not isinstance(rnd.arg, Var):
+            return None
+        ctx = self._resolve_active_ctx(rnd)
+        if not isinstance(ctx, MPFixedContext | MPBFixedContext) or ctx.nmin != -1 \
+                or ctx.is_stochastic():
+            return None     # not the integer rounding `RescaleFixed` leaves
+        up = self._assigned(rnd.arg)
+        if not isinstance(up, Mul) or not isinstance(up.second, Var):
+            return None
+        neg = _pow2_exponent(up.first)
+        if not isinstance(neg, Neg) or not isinstance(neg.arg, Var):
+            return None
+        anchor = self._assigned(k)
+        if not (isinstance(anchor, Sub) and isinstance(anchor.first, Logb)
+                and isinstance(anchor.first.arg, Var) and isinstance(anchor.second, Integer)):
+            return None
+        find = self.def_use.find_def_from_use
+        dx = find(up.second)
+        if find(neg.arg) != find(k) or find(anchor.first.arg) != dx:
+            return None
+        af = to_abstract(self._bound_of_def(dx))
+        if af is None or not isinstance(af.pos_bound, RealFloat) \
+                or not isinstance(af.neg_bound, RealFloat):
+            return None
+        rounding = MPFloatContext(anchor.second.val + 1, ctx.rm)
+        return _unconstrained(
+            pos_bound=rounding.round(af.pos_bound).as_real(),
+            neg_bound=rounding.round(af.neg_bound).as_real(),
+        )
 
     def _resolve_active_ctx(
         self, e: ContextUseSite
@@ -2336,10 +2493,9 @@ class _FormatInferInstance(Visitor):
     def _tighter(
         self, e: Expr, fmt: FormatBound, arg_fmt: FormatBound = None,
     ) -> FormatBound:
-        """*fmt*, or what digit-bound inference says when that is strictly tighter.
-
-        Tighter means *contained in*, not merely fewer digits: a smaller
-        precision over a wider range is a worse description, not a better one.
+        """*fmt* met with what digit-bound inference says: both are sound, so
+        their meet is too, and no wider than either -- whichever states the
+        precision, the magnitude or the grid more tightly.
 
         *arg_fmt*, where given, is a rounding's operand.  Rounding never
         raises precision, so the answer saturates rather than growing with
@@ -2348,15 +2504,6 @@ class _FormatInferInstance(Visitor):
         if self._digit_bound is None:
             return fmt
         cur = to_abstract(fmt)
-        if cur is not None and fmt != REAL_FORMAT and self._digit_bound.escapes(
-            e,
-            cur.exp if isinstance(cur.exp, int) else None,
-            _mag_cap(cur),
-        ):
-            # *fmt* cannot contain what the store says, whatever the
-            # precision works out to -- one satisfiability question, where
-            # `bounds` below is three optimisations.
-            return fmt
         bounds = self._digit_bound.bounds(e)
         if bounds is None:
             return fmt
@@ -2392,7 +2539,10 @@ class _FormatInferInstance(Visitor):
         )
         if fmt == REAL_FORMAT:
             return alt.format()
-        return alt.format() if cur is not None and alt <= cur else fmt
+        if cur is None or isinstance(fmt, SetFormat):
+            return fmt      # a set of values is exact already
+        # the store's magnitude is a binade, so a tighter `cur` need not contain it
+        return _narrowed(fmt, cur, alt)
 
     def _callee_digit_bound(self, e: Call) -> 'DigitBoundAnalysis | None':
         """Digit-bound inference's sub-result for *e*'s callee, if a pass ran."""
@@ -2528,9 +2678,13 @@ class _FormatInferInstance(Visitor):
                 # Digit-bound inference may beat the scope even when the scope
                 # resolves: a fixed-point context is unbounded above, so what
                 # limits the result is the operand's own reach relative to the
-                # position, clipped by the precision rounding can never raise.
+                # position, clipped by the precision rounding can never raise --
+                # unless it wraps, which takes `-1` to the top of the range.
+                active = self._resolve_active_ctx(e)
+                wraps = getattr(active, 'overflow', None) is OverflowMode.WRAP
                 return self._tighter(
-                    e, fitted if fitted is not None else self._op_bound(e), arg_fmt,
+                    e, fitted if fitted is not None else self._op_bound(e),
+                    None if wraps else arg_fmt,
                 )
             case Abs():
                 # abs: precision-preserving.  Use the unrounded result
@@ -2548,8 +2702,11 @@ class _FormatInferInstance(Visitor):
                     return fitted
             case Logb():
                 # an exponent read off the argument: an integer fixed by the
-                # argument's range, not by its precision.
-                fitted = self._bound_if_fits(e, exact_logb(arg_fmt))
+                # argument's range (narrowed by enclosing branches), not by its
+                # precision
+                least = (self._least.get(self.def_use.find_def_from_use(e.arg))
+                         if isinstance(e.arg, Var) else None)
+                fitted = self._bound_if_fits(e, exact_logb(arg_fmt, least))
                 if fitted is not None:
                     return fitted
             case Exp2():
@@ -2701,6 +2858,9 @@ class _FormatInferInstance(Visitor):
                     e, exact_binop(lhs, rhs, operator.mul, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
+                    cons = self._rescaled_rounding(e)
+                    if cons is not None and isinstance(fitted, AbstractableFormat):
+                        return _narrowed(fitted, AbstractFormat.from_format(fitted), cons)
                     return fitted
             case Pow() if _is_two_set(lhs):
                 # `2 ** n` is a power of two.  Only base two: a general power

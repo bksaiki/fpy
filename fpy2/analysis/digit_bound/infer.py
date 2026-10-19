@@ -25,7 +25,14 @@ from ...ast.fpyast import *
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...interpret.value import unwrap_foreign
-from ...number import Context, RoundingMode
+from ...number import (
+    Context,
+    EFloatContext,
+    MPBFloatContext,
+    MPFloatContext,
+    MPSFloatContext,
+    RoundingMode,
+)
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import ListType, RealType
 from ..alias import Region
@@ -134,27 +141,6 @@ class DigitBoundAnalysis:
     assume_at: Callable[[Expr], frozenset[int]] = lambda _e: frozenset()
     """The guard literals that hold wherever an expression is evaluated."""
 
-    def escapes(self, e: Expr, exp: int | None, mag: int | None) -> bool:
-        """Can *e* sit below digit position *exp*, or reach past ``2 ** (mag
-        + 1)``?  ``None`` for either asks nothing of it.
-
-        The question to ask before :meth:`bounds` is worth asking: a format
-        contains what the store says only if the store's grid is no finer
-        and its magnitude no larger, so a `True` here settles that nothing
-        will be used -- in one satisfiability question where `bounds` costs
-        three optimisations.
-        """
-        terms = self.by_expr.get(e)
-        if terms is None or terms.msb is None or terms.lsb is None:
-            return False
-        # magnitude first: `reaches` stops at the first question that settles it
-        asks: list[tuple[Term, int]] = []
-        if mag is not None:
-            asks.append((terms.msb, mag + 1))
-        if exp is not None:
-            asks.append((-terms.lsb, 1 - exp))
-        return self.store.reaches(asks, self.assume_at(e))
-
     def bounds(self, e: Expr) -> Bounds | None:
         """*e*'s precision, digit position and magnitude.
 
@@ -219,6 +205,10 @@ class FormatView(Protocol):
     def view_of_call(self, e: Call) -> 'FormatView | None':
         """The view for *e*'s callee, or ``None`` when it was not analyzed."""
         ...
+
+
+_FLOAT_CTXS = (EFloatContext, MPFloatContext, MPBFloatContext, MPSFloatContext)
+"""Float formats: a rounding to one keeps its operand's binade or carries."""
 
 
 def _round_will_carry(rm: RoundingMode | None) -> bool:
@@ -378,6 +368,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # frames, so its summary describes an element here too
                 self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
+        # a fact stated after a part was read, such as a `max` over the whole
+        # list, still holds of the part
+        for inst in self._index_sets.values():
+            self._replay(inst)
         self.out.ret = self._merge_returns()
         self._summaries = self._summary_vars()
         self.out.assume_at = self._assumed
@@ -526,8 +520,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 idx, self._len_of(lst)
             ):
                 src = self._def(self.def_use.find_def_from_use(lst))
-            case ListRef(value=Var() as lst, index=Var() as idx) if (
-                inst := self._at_index_set(lst, idx)
+            case ListRef(value=Var() as lst, index=idx) if (
+                inst := self._at_index(lst, idx)
             ) is not None:
                 # an element of a *part* of the list: the value comes too,
                 # since what a gathered exponent goes on to build cancels
@@ -719,6 +713,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         store.le_max(t, [src + 1, pos + 1])
                     else:
                         store.le(t, src)
+                elif src is not None and isinstance(ctx := self._active_ctx(e), _FLOAT_CTXS):
+                    # a float format keeps the binade, or carries out of it; an
+                    # overflow is an infinity, or the bound, which is smaller
+                    rm = None if ctx.is_stochastic() else ctx.rm
+                    store.le(t, src + 1 if _round_will_carry(rm) else src)
             case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
                 store.le(t, k)
             case _:
@@ -818,7 +817,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
-                    if isinstance(e, AMax | Max):
+                    if isinstance(e, AMax):
+                        store.envelope(t, m)    # every element, so every part
+                    elif isinstance(e, AMin):
+                        store.envelope(m, t)
+                    elif isinstance(e, Max):
                         store.ge(m, t)
                     else:
                         store.le(m, t)
@@ -1367,7 +1370,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         `range(n)`."""
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return None
-        e = d.site.expr
+        return self._elt_key_of(d.site.expr)
+
+    def _elt_key_of(self, e: Expr) -> _EltKey | None:
+        """The index set of *e* if it is `a + s * k` for `k` over
+        `range(n)`."""
         if not isinstance(e, Add):
             return None
         for start, step in ((e.first, e.second), (e.second, e.first)):
@@ -1383,6 +1390,18 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if b is not None:
                     return ('elt', a, b, self._trip[1])
         return None
+
+    def _at_index(self, lst: Var, idx: Expr) -> Terms | None:
+        """*lst*'s element summary at *idx*: an index set (:meth:`_at_index_set`),
+        a constant `k`, the set ``range(k, k + 1)``, or `a + s * k` written
+        inline."""
+        if isinstance(idx, Var):
+            return self._at_index_set(lst, idx)
+        k = self.view.int_value(idx)
+        if k is not None:
+            return self._instance(lst, (('c', k), ('c', k + 1), _ONE))
+        key = self._elt_key_of(idx)
+        return None if key is None else self._instance(lst, key)
 
     def _at_index_set(self, lst: Var, idx: Var) -> Terms | None:
         """*lst*'s element summary restricted to the index set *idx* covers:
@@ -1402,6 +1421,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
             if self._gather is None or d_idx is not self._gather[1]:
                 return None
             key = self._gather[0]
+        return self._instance(lst, key)
+
+    def _instance(self, lst: Var, key: '_RangeKey | _EltKey') -> Terms | None:
+        """*lst*'s element summary renamed for the index set *key*; see
+        :meth:`_at_index_set`."""
         d_lst = self.def_use.find_def_from_use(lst)
         src = self._def(d_lst)
         if src.value is None:
@@ -1420,10 +1444,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         for v in names:
             if v.index not in inst.subst:
                 inst.subst[v.index] = self._var(v.name + inst.tag)
-        inst.mark = self.store.instance(
-            self._elt_vars, inst.subst, inst.mark, inst.tag
-        )
+        self._replay(inst)
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
+
+    def _replay(self, inst: _IndexSet) -> None:
+        """Every fact stated since *inst* was last replayed, renamed onto it."""
+        inst.mark = self.store.instance(self._elt_vars, inst.subst, inst.mark, inst.tag)
 
     def _carried(self, d: Definition) -> list[Terms] | None:
         """What bounds an arbitrary element of the list *d*, if anything does.

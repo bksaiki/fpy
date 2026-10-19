@@ -646,3 +646,97 @@ class TestAPathOnlyANonFiniteValueReaches:
     def test_a_zero_guard_is_not_one(self):
         """A zero *is* a state the store describes, so its arm still joins."""
         assert self._round_prec(_exponent0_zero) > 12
+
+
+class TestAFloatRoundingKeepsTheBinade:
+    """Rounding to a float format reaches at most one binade past its operand,
+    and toward zero not even that."""
+
+    def test_nearest_carries_and_toward_zero_does_not(self):
+        rz = fp.IEEEContext(8, 32, fp.RM.RTZ)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, y):
+            with fp.FP32:
+                a = fp.round(x)
+            with rz:
+                b = fp.round(y)
+            return a + b
+
+        _, b = _analyze(f, [RealType(fp.FP64), RealType(fp.FP64)])
+        for text, arg, carry in (('fp.round(x)', 'x', 1), ('fp.round(y)', 'y', 0)):
+            _, t = _term(b, text)
+            _, a = _term(b, arg)
+            assert b.store.maximum(t.msb - a.msb) == carry, text
+
+
+class TestAnEnvelopeHoldsAtEveryIndex:
+    """A `max` over a list bounds each element, so it bounds each element of a
+    part too; any other aggregate still stays with the whole list."""
+
+    def test_an_envelope_is_replayed_and_an_aggregate_is_not(self):
+        s = DigitBoundStore()
+        elt, top, total = s.var('elt'), s.var('top'), s.var('total')
+        s.envelope(elt, top)         # `top = max(xs)`
+        s.le(total, elt + 2)         # `sum` over the list
+        s.le(elt, 7)
+
+        subst: dict[int, Term] = {}
+        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        part = elt.rename(subst)
+
+        assert s.maximum(part - top) == 0            # the envelope came along
+        assert s.maximum(total - part) == math.inf   # the aggregate stayed put
+
+
+class TestAnElementReadAnyWay:
+    """`xs[0]` and `xs[k + 1]` are elements of parts too -- `{0}` and
+    `{1, ..., n}` -- so a `max` over the whole list places them, wherever the
+    `max` is stated."""
+
+    @staticmethod
+    def _prec(fn):
+        _, b = _analyze(fn, [ListType(RealType(fp.FP32), 8)])
+        return max(
+            b.store.prec(t.msb, t.lsb, b.assume_at(e))
+            for e, t in b.by_expr.items()
+            if e.format().startswith('fp.round')
+        )
+
+    def test_a_constant_index_read_before_the_max(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(x) for x in xs]
+            t = xs[0]
+            e = max(es)
+            with fp.MPFixedContext(e - 12, fp.RM.RTZ):
+                return fp.round(t)
+
+        assert self._prec(f) == 12
+
+    def test_an_inline_index(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(x) for x in xs]
+            e = max(es)
+            ys = fp.empty(7)
+            for k in range(7):
+                with fp.MPFixedContext(e - 12, fp.RM.RTZ):
+                    ys[k] = fp.round(xs[k + 1])
+            return sum(ys)
+
+        assert self._prec(f) == 12
+
+    def test_a_max_over_the_evens_does_not_place_an_odd_element(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            n = len(xs)
+            es = [fp.logb(xs[i]) for i in range(len(xs))]
+            ev = max([es[i] for i in range(0, n, 2)])
+            with fp.MPFixedContext(ev - 12, fp.RM.RTZ):
+                return fp.round(xs[1])
+
+        assert self._prec(f) > 12

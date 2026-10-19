@@ -103,6 +103,42 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
 - **A uniform condition.** The special-value arm runs on every row even
   where no row in the program is special; a real `if` on a condition the
   whole program shares would skip it.
+- **Directed arithmetic** (done, `mmasim-serving.md`, Stage 3 Phase 2):
+  Add, Sub, Mul, Div, Fma, Sqrt at FP32 and FP64 rounding toward zero, down
+  or up, by libdevice's `add_rz` and the rest.
+- **Double rounding through directed intermediates** (done): `DOUBLE_ROUND`
+  offers FP32 and FP64 toward zero, down and up as intermediates beside to
+  nearest, so `SplitRound`'s Figure 8 admits a directed target through the
+  same mode: an Add or an Fma rounding to E8M13 toward zero (Hopper's tree
+  and chain of FMAs) is FP32's `add_rz` / `fma_rz`, then truncated.
+- **Operands held wider than their context's storage** (done, `UnfoldKind.WIDE`):
+  an FP32 add of exact BF16 products, held in FP64, is split through FP64 at
+  the same mode where the rules allow, found by format inference
+  (`UnfoldTarget.holds`).  Toward zero composes for every operand.
+- **Round to odd** (done): FP32 and FP64 `RTO` contexts, spelled by the
+  launcher's `_fpy_<op>_ro` helpers from libdevice's `_rd` and `_ru` (toward
+  zero is the nearer to zero, its last bit set where they differ), offered
+  as the last intermediates, so `SplitRound`'s Figure 8 admits a target to
+  nearest through FP64: the WIDE add of exact BF16 products to nearest FP32.
+  Exact only inside the range (past the largest finite, rounding down and up
+  cannot tell where FPy's round to odd overflows), so the emitter refuses it
+  unless the operands bound the result: `+`, `-`, `*`, `fma`, `sqrt`; not `/`.
+- **What a generated design still hits** (`examples/mmasim/tests/test_triton.py`'s
+  `REFUSED` pins them):
+  - *A tree or chain of FMAs with a separate join* (CDNA3's tree and chain
+    of FMAs, and any other anchor's): `round_down_at(t, e - F2 - 2) +
+    round_down_at(c, e - F - 1)` adds two roundings at runtime positions, and
+    the exact add is bounded only where digit-bound inference ties `t`'s
+    magnitude to `e`.  Two gaps keep it from doing so, both in
+    `digit-bound-inference.md`'s "What is left": index spaces by identity
+    (the tree's constant reads, inside the loop over `k`), and loop-carried
+    values (the chain of FMAs).
+  - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
+    accumulator spans ~500 bits, which no storage holds ("`sum` is exact,
+    and no storage holds its elements and partial sums"): CDNA1's E-FDPA,
+    the two of the 62 MMA-Sim designs that never compiled, and an exact sum
+    of FP8 products.  **Not planned:** it needs error-free transformations
+    to carry the sum across storages.
 - **Not blocking a design:** iterating a pointer-backed list (`for t in
   xss[r]`); a `zip` over slice expressions, which `ZipElim` leaves since it
   takes names; a row of a slice, refused.
