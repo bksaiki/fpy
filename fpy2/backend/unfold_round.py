@@ -15,7 +15,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 
-from ..analysis import ContextUse, DefineUse, FormatInfer
+from ..analysis import (
+    ContextUse,
+    ContextUseAnalysis,
+    DefineUse,
+    DefineUseAnalysis,
+    FormatInfer,
+)
 from ..analysis.format_infer import FormatBound
 from ..ast.fpyast import Cast, Expr, FuncDef, Round
 from ..number import REAL, MPBFixedContext, MPFixedContext
@@ -132,8 +138,8 @@ class _Scopes:
     them, so a format may be missing, and its operation is then no site."""
 
     func: FuncDef
-    def_use: DefineUse
-    ctx_use: ContextUse
+    def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
     wide: bool
     _formats: dict[Expr, FormatBound] | None
 
