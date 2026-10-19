@@ -1397,19 +1397,33 @@ outputs.  Times unchanged (C++ corpus 44 s).
 
 #### Phase 4 - Aggregate upper bounds on witnesses
 
-- `_emit_logb`'s `Sum` case, and its `AMax`/`AMin` case where the operand is a
-  list, state their bound on an expanded copy of the list's element terms,
-  keyed by the aggregate expression, instead of on the summary.
-- An audit, recorded here: every rule reading a list's summary, each marked an
-  envelope (true of every element) or an upper bound (needs a witness).
+**Done.**
 
-Separate because it is the soundness fix, and needs Phase 3's renaming.  It
-also lifts the store's skip of a replayed constraint naming a variable outside
-the copied space, once no worst-element rule is left to make that unsound.
+- `_emit_logb`'s `Sum`, and its `AMax`/`AMin` (split from the generic case),
+  bound the aggregate on `_witness`: a copy of the reduced list's element at
+  an index set of the aggregate's own, `('witness', id(e))`.  `_instance` now
+  delegates to `_copy`, which witnesses share.
+- The store replays every constraint naming a copied variable, sharing the
+  rest; the `envelope` flag and method are gone, an envelope being an
+  ordinary constraint once nothing in the store is a worst-element fact.
 
-Tests: both `TestAnAggregateHasItsOwnWorstElement` tests pass (markers
-removed); `TestFusedSum` and the corpus keep `F + 2`; the format-inference
-precision tests unchanged.
+The audit, every rule reading a list's summary:
+
+| rule | reads the summary as | |
+|---|---|---|
+| `msb` of `sum`, and of `max`/`min` over a list | the worst element | witnessed |
+| `val` of `max`/`min` over a list | every element (the envelope) | as is |
+| grid of `sum` | every element: a list's `lsb` is kept only uniform (`_elt_lsb`) | as is |
+| `ListExpr`, `IfExpr`, list joins, returns, assignments | every element, at the same index | as is |
+| `_forced_zero` | every element zero | as is |
+
+Measured: both `TestAnAggregateHasItsOwnWorstElement` tests pass (markers
+removed), and `TestReplayingAtAnIndexSet` checks the new replay, a test the
+old one fails; every other test unchanged.  The corpus at 60/62, all agreeing
+on 256 draws; all 138 outputs byte for byte Phase 3's, so `fused_sum` keeps
+`F + 2` -- the witness gets `es_w <= e_max` replayed; the Triton tests pass;
+CDNA3's and Ampere's trees before a separate join agree on 512 outputs.  The
+C++ corpus 44 s to 49 s.
 
     .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
     cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256

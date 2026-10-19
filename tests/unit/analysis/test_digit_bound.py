@@ -572,24 +572,25 @@ class TestAPartOfAListKeepsItsPairing:
 
 
 class TestReplayingAtAnIndexSet:
-    """`instance` copies the facts that hold at every index onto fresh
-    variables.  One naming anything else may be an aggregate over the whole
-    list, true of the list and false of a part."""
+    """`instance` copies the facts naming a per-element variable onto fresh
+    variables, and shares the rest: every fact holds at every index, since the
+    walk states an aggregate's upper bound only on a copy of its own."""
 
-    def test_an_element_fact_is_copied_and_an_aggregate_is_not(self):
+    def test_an_element_fact_is_copied_and_the_rest_shared(self):
         s = DigitBoundStore()
-        elt, other, total = s.var('elt'), s.var('other'), s.var('total')
+        elt, other, top = s.var('elt'), s.var('other'), s.var('top')
         s.le(elt, other + 1)         # per element
-        s.le(total, elt + 2)         # an aggregate: `sum` over the list
+        s.le(elt, top)               # `top = max(xs)`, at every index
         s.le(other, 7)
+        s.le(top, 5)
 
         subst: dict[int, Term] = {}
         s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, 0, '@0')
         part = elt.rename(subst)
 
         assert part != elt                       # a copy, not the same variable
-        assert s.maximum(part) == 8              # `elt <= other + 1 <= 8`
-        assert s.maximum(total - part) == math.inf   # the aggregate stayed put
+        assert s.maximum(part) == 5              # `<= other + 1 <= 8`, and `<= top <= 5`
+        assert s.maximum(part - top) == 0        # `top` itself, shared
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -670,25 +671,6 @@ class TestAFloatRoundingKeepsTheBinade:
             assert b.store.maximum(t.msb - a.msb) == carry, text
 
 
-class TestAnEnvelopeHoldsAtEveryIndex:
-    """A `max` over a list bounds each element, so it bounds each element of a
-    part too; any other aggregate still stays with the whole list."""
-
-    def test_an_envelope_is_replayed_and_an_aggregate_is_not(self):
-        s = DigitBoundStore()
-        elt, top, total = s.var('elt'), s.var('top'), s.var('total')
-        s.envelope(elt, top)         # `top = max(xs)`
-        s.le(total, elt + 2)         # `sum` over the list
-        s.le(elt, 7)
-
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
-        part = elt.rename(subst)
-
-        assert s.maximum(part - top) == 0            # the envelope came along
-        assert s.maximum(total - part) == math.inf   # the aggregate stayed put
-
-
 class TestAnElementReadAnyWay:
     """`xs[0]` and `xs[k + 1]` are elements of parts too -- `{0}` and
     `{1, ..., n}` -- so a `max` over the whole list places them, wherever the
@@ -756,20 +738,18 @@ def _paired_sums(xs):
 
 class TestAnAggregateHasItsOwnWorstElement:
     """An upper bound on a sum is a fact about its *worst* element, which a
-    summary is not.  Two sums over paired lists whose maxima sit at different
-    indices cannot share one: at `[2**60, 2**-60]` both are about `2**60`, and
-    their product about `2**120`.  Known unsound since v0.2.4; see Part III of
-    `docs/todos/digit-bound-inference.md`."""
+    summary is not, so each sum is bounded on a copy of its own.  Two sums over
+    paired lists whose maxima sit at different indices cannot share one: at
+    `[2**60, 2**-60]` both are about `2**60`, and their product about
+    `2**120`, which bounding both on the summary put at `2**3`."""
 
     XS = [fp.FP32.round(2.0 ** 60), fp.FP32.round(2.0 ** -60)]
 
-    @pytest.mark.xfail(strict=True, reason='an aggregate is bounded on the summary')
     def test_the_store_reaches_the_product(self):
         _, b = _analyze(_paired_sums, [ListType(RealType(fp.FP32), 2)])
         e, t = _term(b, '(s1 * s2)')
         assert b.store.maximum(t.msb, b.assume_at(e)) >= 120   # E(p) is 120
 
-    @pytest.mark.xfail(strict=True, reason='an aggregate is bounded on the summary')
     def test_the_formats_hold_the_values(self):
         ast = monomorphize(_paired_sums, args=[ListType(RealType(fp.FP32), 2)]).ast
         info = FormatInfer.analyze(ast, use_digit_bounds=True)

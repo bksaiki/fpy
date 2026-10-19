@@ -51,10 +51,6 @@ class DigitBoundStore:
     """Each variable's literal "this is not `-inf`", for those that have one;
     see :meth:`not_neg_inf`."""
 
-    _envelopes: set[int]
-    """Constraints that hold at every index although they name an aggregate;
-    see :meth:`envelope`."""
-
     spaces: IndexSpaces
     """Which index spaces each variable varies over, kept with the variables so
     every walk sharing them shares it."""
@@ -69,7 +65,6 @@ class DigitBoundStore:
         self._n_lits = 0
         self._universal = set()
         self._not_neg_inf = {}
-        self._envelopes = set()
         self.spaces = IndexSpaces()
 
     def _add(self, c: Constraint) -> None:
@@ -98,27 +93,26 @@ class DigitBoundStore:
         mark: int,
         tag: str,
     ) -> int:
-        """Replay every constraint over *elementwise* variables alone, from
-        *mark* on, with each variable renamed by *subst*.  Returns a new mark.
+        """Replay every constraint naming an *elementwise* variable, from
+        *mark* on, with each of those renamed by *subst* and the rest shared.
+        Returns a new mark.
 
-        Such a constraint holds at every index of the lists it is about, so
-        it holds at an index drawn from any subset -- which is how a part of
-        a list gets the facts the whole one has without *sharing* a variable
-        with it.  One naming a variable outside *elementwise* may be an
-        aggregate (``logb(sum xs) <= msb(xs) + k``), true of the list and
-        false of a part, so it is left alone -- unless it is an
-        :meth:`envelope`, which holds at every index, and then only its
-        elementwise variables are renamed.  A guarded one is replayed under
-        its guard, and only where every literal in it is universal.
+        Every constraint holds at every index of the lists it is about -- the
+        walk states an aggregate's upper bound only on a copy of its own -- so
+        it holds at an index drawn from any subset: which is how a part of a
+        list gets the facts the whole one has without *sharing* a variable
+        with it, and keeps those relating it to what does not vary.  A guarded
+        one is replayed under its guard, and only where every literal in it is
+        universal.
 
         *subst* grows in place: a second call for the same index set reuses
         the renaming, which is what relates two parts taken over one range.
         """
         end = len(self._constraints)
-        for i, c in enumerate(self._constraints[mark:end], mark):
+        for c in self._constraints[mark:end]:
             vs = [v for t in (c.lhs, *c.rhs) for v, _ in t.coeffs]
             ours = [v for v in vs if v.index in elementwise]
-            if not ours or (len(ours) < len(vs) and i not in self._envelopes):
+            if not ours:
                 continue
             if not self._universal.issuperset(c.guard):
                 # a non-universal literal need not hold at every index
@@ -162,13 +156,6 @@ class DigitBoundStore:
     def le(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs <= rhs``, only where every literal in *guard* holds."""
         self._add(Constraint(lhs, '<=', (_as_term(rhs),), guard))
-
-    def envelope(self, lo: Term, hi: Term) -> None:
-        """``lo <= hi`` at every index of a list, one side its aggregate: a
-        ``max`` over the list bounds each element, and a ``min`` is bounded by
-        each, so a part of the list keeps it; see :meth:`instance`."""
-        self._envelopes.add(len(self._constraints))
-        self.le(lo, hi)
 
     def ge(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs >= rhs``."""

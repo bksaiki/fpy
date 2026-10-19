@@ -65,6 +65,9 @@ _RangeKey: TypeAlias = tuple[_Operand, _Operand, _Operand]
 _EltKey: TypeAlias = tuple[Literal['elt'], _Operand, _Operand, _Operand]
 """The elements `a + s * k` for `k` over `range(n)`, as `('elt', a, s, n)`."""
 
+_WitnessKey: TypeAlias = tuple[Literal['witness'], int]
+"""The worst element of one aggregate, by the aggregate's identity."""
+
 
 class _Varying:
     """The variables varying over one of *elements*' spaces, as a membership
@@ -289,7 +292,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _elt_expr: dict[Definition, Expr]
     _covered_write: set[Definition]
     _lsb_vars: set[int]
-    _index_sets: dict[_RangeKey | _EltKey, _IndexSet]
+    _index_sets: dict[_RangeKey | _EltKey | _WitnessKey, _IndexSet]
     _gather: tuple[_RangeKey, Definition] | None
     _gathered: set[Expr]
     _returns: list[tuple[Expr, Terms]]
@@ -728,10 +731,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         store = self.store
         match e:
             case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
-                  | Min() | Max() | AMin() | AMax()
+                  | Min() | Max()
                   | Mod() | Fmod() | Remainder()):
                 if (ts := self._msbs(*self._operands(e))) is not None:
                     store.le_max(t, ts)
+            case AMin() | AMax():
+                # one element, and not every element: the worst one
+                if (w := self._witness(e)) is not None:
+                    store.le(t, w)
             case Mul():
                 lhs, rhs = self._msb_of(e.first), self._msb_of(e.second)
                 if lhs is not None and rhs is not None:
@@ -757,10 +764,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if (ts := self._msbs(e.arg)) is not None:
                     store.le_max(t, [v + 1 for v in ts] + [0])
             case Sum():
-                # `n` terms below `2 ** (L + 1)` sum below `2 ** (L + 1 + ceil(log2 n))`
-                elt, n = self._msb_of(e.arg), self._len_of(e.arg)
-                if elt is not None and n is not None and n > 0:
-                    store.le(t, elt + math.ceil(math.log2(n)))
+                # `n` terms below `2 ** (L + 1)` sum below `2 ** (L + 1 + ceil(log2 n))`,
+                # `L` the worst term's
+                w, n = self._witness(e), self._len_of(e.arg)
+                if w is not None and n is not None and n > 0:
+                    store.le(t, w + math.ceil(math.log2(n)))
             case Round() | Cast():
                 src, found = self._msb_of(e.args[0]), self._rounding(e)
                 if src is not None and found is not None:
@@ -876,11 +884,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
-                    if isinstance(e, AMax):
-                        store.envelope(t, m)    # every element, so every part
-                    elif isinstance(e, AMin):
-                        store.envelope(m, t)
-                    elif isinstance(e, Max):
+                    if isinstance(e, AMax | Max):
                         store.ge(m, t)
                     else:
                         store.le(m, t)
@@ -1485,7 +1489,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             key = self._gather[0]
         return self._instance(lst, key)
 
-    def _instance(self, lst: Var, key: '_RangeKey | _EltKey') -> Terms | None:
+    def _instance(self, lst: Var, key: '_RangeKey | _EltKey') -> Terms:
         """*lst*'s element summary renamed for the index set *key*; see
         :meth:`_at_index_set`."""
         d_lst = self.def_use.find_def_from_use(lst)
@@ -1494,11 +1498,26 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # the part is what a rounding position is built from, and the
             # whole list's value is minted lazily, so force it here
             src.value = self._def_value(d_lst)
+        return self._copy(src, self._elements(d_lst), key)
+
+    def _witness(self, e: AMax | AMin | Sum) -> Term | None:
+        """The `msb` of the worst element of the list *e* reduces: a copy of
+        its element at an index of *e*'s own, so two aggregates over one list
+        need not share their worst element."""
+        src = self.out.by_expr.get(e.arg)
+        if src is None or src.msb is None:
+            return None
+        return self._copy(src, self._elements(e.arg), ('witness', id(e))).msb
+
+    def _copy(
+        self, src: Terms, elements: Key, key: '_RangeKey | _EltKey | _WitnessKey',
+    ) -> Terms:
+        """*src*, a list's element terms, renamed onto the index set *key*."""
         fields = (src.msb, src.lsb, src.value)
         inst = self._index_sets.get(key)
         if inst is None:
             inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}', self._binders)
-        inst.elements.add(self._elements(d_lst))
+        inst.elements.add(elements)
         # a variable that does not vary with the index is the part's too
         moving = _Varying(self.store.spaces, inst.elements)
         for t in fields:
