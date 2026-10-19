@@ -70,7 +70,9 @@ def _remixes():
     tree of exact products; CDNA2's tree rounding toward zero; an exact sum of
     FP8 rounded to E8M13; CDNA3's even-odd groups over NVIDIA's E4M3 at 13
     bits; MX scales at 13 bits; groups of 32; an FMA rounding toward zero;
-    CDNA2's tree over 16."""
+    CDNA2's tree over 16; Hopper's FP8 and CDNA3's BF16 rounding to nearest
+    below FP32's precision; trees toward zero, of FP8 to E8M13 and of exact
+    BF16 products to FP32."""
     from dataclasses import replace
 
     from generator import Design
@@ -92,19 +94,18 @@ def _remixes():
         'nvfp4-g32': replace(CATALOG['nv.blackwell.nvfp4'], G=32),
         'fma-rz': replace(CATALOG['fp32 (fma)'], rho=RZ_FP32),
         'tree-16': replace(CATALOG['amd.cdna2.f16'], L=16, k=32),
+        'hopper-rne': replace(hopper, rho=fp.IEEEContext(8, 22, fp.RM.RNE)),
+        'cdna3-rne-7': replace(CATALOG['amd.cdna3.bf16'], rho=fp.IEEEContext(8, 15, fp.RM.RNE)),
+        'hopper-tree': replace(hopper, sum='tree'),
+        'ampere-tree': replace(CATALOG['nv.ampere.bf16.f32'], sum='tree'),
     }
 
 
 REFUSED = {
-    'cdna2-rz': 'Mul under context .*RTZ',
-    'fma-rz': 'Fma under context .*RTZ',
     'exact-e8m13': '`sum` is exact, and no storage holds',
-    'tree-8-exact': 'narrow tl.float64 to tl.float32',
 }
-"""The remixes the backend refuses, and why: no arithmetic but RNE's (the
-target's rule; libdevice has `add_rz` and the rest), no storage for an exact
-sum of FP8 products and an FP32 accumulator (CDNA1's too), and a sum of exact
-BF16 products, held in FP64, would round twice to FP32."""
+"""The remixes the backend refuses, and why: no storage for an exact sum of
+FP8 products and an FP32 accumulator (CDNA1's too)."""
 
 
 @pytest.mark.parametrize('remix', list(REFUSED))
