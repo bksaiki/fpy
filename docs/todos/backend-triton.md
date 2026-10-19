@@ -128,8 +128,11 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
   - *A tree or chain of FMAs with a separate join* (CDNA3's tree and chain
     of FMAs, and any other anchor's): `round_down_at(t, e - F2 - 2) +
     round_down_at(c, e - F - 1)` adds two roundings at runtime positions, and
-    with `t` a plain FP32 sum rather than a fused one aligned at `e`, format
-    inference cannot bound the exact add (2^542, 288 bits): no storage.
+    the exact add is bounded only where digit-bound inference ties `t`'s
+    magnitude to `e`.  Two gaps keep it from doing so, both in
+    `digit-bound-inference.md`'s "What is left": index spaces by identity
+    (the tree's constant reads, inside the loop over `k`), and loop-carried
+    values (the chain of FMAs).
   - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
     accumulator spans ~500 bits, which no storage holds ("`sum` is exact,
     and no storage holds its elements and partial sums"): CDNA1's E-FDPA,

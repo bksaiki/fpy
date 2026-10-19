@@ -676,6 +676,30 @@ cancel against a position its caller built.
 `fused_sum` reaches `F + 2`; see [The mmasim corpus](#the-mmasim-corpus) for
 where each design stops.
 
+Two gaps the mmasim generator's designs reach (a tree or a chain of FMAs
+before CDNA3's separate join; `backend-triton.md`):
+
+- **Index spaces by depth, not identity.**  Whether a variable moves with a
+  list's index is read off nesting depth (`_var_level`, `_anchor_level`),
+  and instantiation renames every per-element variable.  A `max` over `es`
+  inside an outer loop moves with that loop and not with `es`'s index, yet
+  a part of a list sitting at the same depth renames it too, cutting the
+  envelope off.  The fix tracks, per variable, *which* index spaces it
+  varies over -- loops and lists by identity -- and replaces the depth proxy
+  wherever it is read.  The case that needs it: `xs[0]` read inside `for j`
+  with `e = max([logb(x) for x in xs])` beside it.
+- **Loop-carried values.**  [Emit, then query](#emit-then-query) says known
+  loop counts unroll; `_visit_for` walks a body once, so a carried value
+  leaves a cyclic constraint and is unbounded.  Emitting the body once per
+  iteration of a static count, under a size cap, is the documented design.
+
+Index-set instantiation covers a constant index (`range(k, k + 1)`) and an
+inline `a + s * k`, and replays an *envelope* -- `max(xs) >= x_i`, which holds
+at every index -- along with the per-element constraints, at the read and
+again once the walk ends, so a `max` stated after the read still reaches it.
+A rounding to a float format keeps or carries its operand's binade, as one to
+a fixed-point format does.
+
 Unexercised, and so unproven:
 
 - **Coverage.** A partial write claims nothing about elements no write
