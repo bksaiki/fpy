@@ -18,7 +18,9 @@ Relational bounds on the precision of a value rounded at a run-time position
 to C++.  Two soundness bugs present since v0.2.4 are fixed: an upper bound on
 an aggregate stated on a list's summary (Phase 4), and a loop's carried value
 and a partial write's elements joined pointwise (Phase 5); see
-[The soundness bugs fixed](#the-soundness-bugs-fixed).
+[The soundness bugs fixed](#the-soundness-bugs-fixed).  Known unsound, also
+since v0.2.4: a covering write under an inner loop, in the store only (Part
+IV, "After Phase 7"; Phases 8-11).
 
 ## Part I: semantics and soundness
 
@@ -1248,6 +1250,9 @@ designs to C++):
 
 ### What is left
 
+- **Part I does not cover writes, sharing or correspondence**, and a covering
+  write under an inner loop is unsound in the store (Part IV, "After Phase 7").
+  Phases 8-11.
 - **CDNA3's chain of FMAs** stays refused: its exit needs `e_max + 4`, and
   per-add rules give `e_max + 30`.  An open item.
 - **Replay cost.**  A copy replays every constraint naming a moving variable,
@@ -1494,6 +1499,119 @@ emitter's unit tests, `test_triton.py` and `test_generator.py` pass.
     cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py tests/test_generator.py
     .venv/bin/pytest -q -n 8 tests/unit/backend/triton
 
+#### After Phase 7: what Part I does not cover
+
+Phase 7's review found a soundness bug that predates the branch, in a rule
+Part I never states.  Part I specifies operator facts, aggregates, element
+reads, loop and branch joins, and calls; it does not specify **writes**,
+**sharing** (one variable standing for two entities, the strongest claim the
+store makes), or **when a binder's index is a list's** (correspondence).  The
+implementation has rules for all three, with premises never written down, and
+Phase 4's audit asked only whether a rule reads a summary as the worst element.
+
+Every share and correspondence, against the premise its validity needs (Part I,
+section 4: the exact assignment satisfies it at every point of its signature):
+
+| rule | premise | found |
+|---|---|---|
+| a parameter, a call's result, `for x in xs`, a covering read `xs[i]` | the same value at the same point | holds |
+| a covering write `out[i] = v` (`_share`, and `_binders[-1]` unified with `E(out)`) | each element written once, at its own index | **unsound** under an inner loop: `for i: for j: out[i] = xs[j]` makes `out` and `xs` one variable, claiming `out[i] = xs[i]` where it is `xs[3]`; the same on `main` |
+| a comprehension of several clauses | the result's index is each clause's | **unsound** in the store: `[x * y for x in xs for y in ys]` puts `xs`, `ys` and the result in one space, and the store puts `zs[1] = xs[0] * ys[1]` within `2**16` of `xs[1]` (Phase 8's checker; a hand probe through names missed it) |
+| a gather write | the write lands at the gathered index | not checked; both probes sound |
+| a loop's phi, read after the loop | varies with the loop | the open item below; no exploit found |
+| variable creation, which signatures rest on | every path records its spaces | holds: `_var`, `_copy`, and the store's replay |
+
+Three of the four store bugs found so far (the partial write, the inner-loop
+write, the product) reach no inferred format, since a `with` cannot assume a
+summary non-zero; the corpus and the format-level tests cannot see them, which
+is why reading has been the only net.  Hence the order: a checker that sees
+the store, then the contract, then the fixes against both.
+
+#### Phase 8 - A store-level soundness checker
+
+**Done.**  `tests/unit/analysis/test_digit_bound_oracle.py`: `check(fn,
+arg_types)` runs *fn* on adversarial inputs and returns every claim of the
+store a run contradicts; `test_the_store_holds_every_run` holds it over twelve
+shapes, in 3.3 s at `-n 8`.
+
+- **Tracing** (settling the open item): `BytecodeCompiler`'s existing `hook`
+  sees every expression's value, and a subclass wraps each loop's and clause's
+  iterable in a counting generator, so each value carries its iteration
+  vector.  The program measured is the one analyzed.
+- **Inputs**: per list, one element at its format's largest magnitude and the
+  rest at its smallest, and the reverse, at every position; four random
+  ordinal draws.  Observations are keyed by run, so two runs never pair.
+- **Readings**: `E` and `G` of a non-zero value, and `V`, the exact value, of
+  an integer.  Each alone is checked against `maximum` both ways; pairs in one
+  body at one point check `E - E`, `E - G`, `E - V` and `V - E`.  **`V` was not
+  in the plan, and is needed**: `msb` has no lower bounds, so `E - E` alone
+  cannot see a join -- the loop phi's bug shows only against `val(logb(y))`,
+  as a rounding position reads it.
+- **Literals**: every value observed non-zero makes its own literals true at
+  its point, so a claim is checked under all of them at the point its
+  difference peaks, in that body and the ones around it.  With `b`'s alone the
+  loop phi's bug stayed hidden.
+- **Programs**: twelve hand-written shapes -- Phases 4-5's programs, the
+  table's probes, a constant, affine, covering, nested, carried-list, branch
+  and fused-sum shape -- rather than `test_digit_bound.py`'s programs (defined
+  inside its tests) and a random generator.
+
+Measured against history: before Phase 4 the checker flags the paired sums,
+the carried value (once its start is non-zero: a zero's `msb` is unconstrained)
+and the reversed write; at Phase 7 all three pass.  The inner-loop write and
+the product fail it, strict xfails for Phase 10.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py
+
+#### Phase 9 - Part I: writes, sharing and correspondence
+
+- Part I, section 4 gains the missing rules, each with its premise:
+  - **sharing**: two entities may name one variable only where they are equal
+    at every point of its signature;
+  - **correspondence**: a binder's index *is* a list's where it iterates the
+    list, reads or writes it at its own target once per iteration with no
+    binder in between, or builds it with one clause; unifying is an equation,
+    so a false one is unsound, unlike renaming more;
+  - **writes**: a covering write shares; anything else -- a partial write, a
+    write under an inner binder, a product -- joins with a witness over what
+    it consumes.
+- A table in Part III mapping each rule to the code that applies it, so the
+  next audit reads the premises off the page.
+
+Separate because it is the contract the fixes are checked against; no code.
+
+#### Phase 10 - Correspondence only where the indices are equal
+
+- `_visit_indexed_assign`: a covering write shares only where the written value
+  varies over no binder opened inside the index's loop; otherwise the element
+  joins with a copy over those binders (the value as the last inner iteration
+  left it), as `_written` does.  The `_binders[-1]` unify goes; `_indexed_at`
+  records the write's correspondence.
+- `_visit_expr`'s `ListComp`: a comprehension of one clause unifies its result
+  with the clause; one of several does not, its element a witness over the
+  clauses.
+- A gather write shares only at the gather binder's own target.
+
+Tests: the Phase 8 xfails pass (markers removed); the checker over the
+generator; the corpus at 60/62, all 138 outputs compared with Phase 7's.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
+    cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
+    cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py
+
+#### Phase 11 - A loop's value after it
+
+- After `_visit_for`, uses of a phi read **exit terms**, not the phi's: the
+  pre-loop value joined with the body at a witness of the last iteration, which
+  does not vary with the loop.  `by_def[phi]` is replaced once the body is
+  walked, as Phase 6's prototype did; the in-loop uses keep the phi's.
+
+Separate because it changes what every loop's later uses read, so it is the
+phase most likely to change outputs, measured alone.
+
+Tests: a phi read after its loop paired with a list the loop covered, through
+the checker; the corpus as Phase 10.
+
 ### After the last phase
 
     .venv/bin/pytest -q -n 8 tests/unit
@@ -1507,9 +1625,13 @@ emitter's unit tests, `test_triton.py` and `test_generator.py` pass.
 #### Is unification by length sound for lists that are never read together?
 
 Covering is by length, so two unrelated lists of one length land in one class
-as soon as one loop covers both, and a class only grows: a variable can be
-renamed for a part of a list it never met.  Renaming more is the safe
-direction.  **Provisional:** accept it; reopen if a design loses a bound to it.
+as soon as one loop covers both, and a class only grows.  This is sound for a
+different reason than the one first given: covering reads both lists at the
+same index, so the equation the class asserts is true.  "Renaming more is the
+safe direction" holds for copies only; unifying asserts an equation, and a
+false one is unsound (the product comprehension, Phase 10).
+**Provisional:** accept unification by covering; reopen if a design loses a
+bound to it.
 
 #### Should a binder key be the AST node, or the node in one callee instance?
 
@@ -1538,6 +1660,8 @@ every copy, not just the witnesses.  **Open:** for review after Phase 5.
 
 #### Does a loop phi vary with its loop when read after it?
 
+**Scheduled:** Phase 11 gives the value after the loop terms of its own.
+
 `_def_binders` mints a loop's phis under the loop's binder, and the phi is also
 the value after the loop -- iteration `n`, at no index of a list the loop's
 class corresponds with.  A constraint after the loop relating the phi to
@@ -1550,6 +1674,19 @@ with a counterexample.
 
 `_moves_at` counts only what bounds a list's own grid, not where it was minted.
 **Provisional:** carried over as is in Phase 3; Phase 2's tests pin it first.
+
+#### How does the checker trace values?
+
+**Settled in Phase 8:** `BytecodeCompiler` already has a `hook` per expression;
+a subclass adds iteration counts by wrapping each iterable.
+
+#### Which pairs does the checker compare?
+
+Pairs in one loop body at equal iteration vectors catch every bug found so far.
+Pairs across loops whose classes are unified (a list built in one loop, read in
+another) are what layer 2 also claims, but need the element index each read
+maps to.  **Provisional:** one body, as Phase 8 built it; across loops if a bug is
+found that one body misses.
 
 #### How does a chain of rounded adds get the bound of a sum?
 

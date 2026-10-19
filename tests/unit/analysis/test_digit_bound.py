@@ -850,7 +850,7 @@ class TestAJoinHoldsAtAnotherIndex:
 
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
-            acc = fp.rational(1, 1606938044258990275541962092341162602522202993782792835301376)  # 2**-200
+            acc = fp.digits(1, -200, 2)
             out = fp.empty(len(xs))
             for j in range(len(xs)):
                 prev = acc
