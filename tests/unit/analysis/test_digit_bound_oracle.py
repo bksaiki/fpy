@@ -432,6 +432,17 @@ def _gather_inner(xs):
     return rs
 
 
+@fp.fpy(ctx=fp.REAL)
+def _after_loop(xs):
+    acc = xs[0]
+    for i in range(4):
+        acc = xs[i] * 2         # past the loop, 2 * xs[3]
+    rs = fp.empty(4)
+    for i in range(4):
+        rs[i] = acc + xs[i]
+    return rs
+
+
 SHAPES = {
     'paired-sums': (_paired_sums, [ListType(RealType(fp.FP32), 2)]),
     'carried': (_carried, _L4),
@@ -450,6 +461,7 @@ SHAPES = {
     'gather-counter-copied': (_gather_counter_copied, _L4),
     'gather-one-index': (_gather_one_index, _L4),
     'gather-inner': (_gather_inner, _L4),
+    'after-loop': (_after_loop, _L4),
 }
 
 KNOWN: dict[str, str] = {}

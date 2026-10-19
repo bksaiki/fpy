@@ -821,6 +821,25 @@ class TestIndexSpaces:
         assert e and not (e & elements)
         assert elements <= self._sig(b, 'es') and e <= self._sig(b, 'es')
 
+    def test_a_value_after_its_loop_varies_with_it_no_longer(self):
+        """Inside the loop `acc` is an iteration's start, which varies with
+        `i` and so with `xs`'s index; after it, the last iteration's, which
+        does not."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            acc = xs[0]
+            for i in range(len(xs)):
+                acc = acc + xs[i]
+            return acc * 2
+
+        _, b = _analyze(f, self.L4)
+        elements = self._sig(b, 'xs[i]')
+        uses = [frozenset().union(*(b.store.spaces.signature(v.index) for v, _ in t.msb.coeffs))
+                for e, t in b.by_expr.items() if e.format() == 'acc']
+        assert len(uses) == 2
+        assert any(u & elements for u in uses) and any(not (u & elements) for u in uses)
+
     def test_a_callee_corresponds_with_its_caller(self):
         """A callee's comprehension over its parameter pairs with the caller's
         list, and what it mints varies with the loop around the call."""

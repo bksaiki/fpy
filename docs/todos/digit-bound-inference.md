@@ -1166,8 +1166,6 @@ Where it is still weaker than Part I, or reads it loosely:
   in one class (an open item; renaming more is the safe direction).
 - **A `while` loop** has no binder, and its phis are never joined: they keep
   their seeds alone.
-- **A loop's phi is also its value after the loop**, read there as varying with
-  the loop (an open item).
 
 ### The rules and the code that applies them
 
@@ -1183,7 +1181,7 @@ premise holds there.  An audit reads the premises off this table.
 | element reads at a binder's target | `_visit_expr`'s covering `ListRef`, `_visit_assign`, `_unpack_elt`; `_indexed_at` | holds |
 | element reads elsewhere | `_at_index`, `_at_index_set`, `_instance`, `_copy`, `_replay` | holds |
 | correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`) | holds (Phase 10) |
-| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: a use past a loop reads the phi's terms (Phase 11) |
+| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | holds; a use past a loop reads the exit terms `_visit_for` gives the phi (Phase 11) |
 | writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | holds (Phase 10) |
 | branches | `_visit_branches`, `_merge_arms`, `_untaken`, guards | holds |
 | loops | `_visit_for`'s joins, `_before` | holds (Phase 5); a `while` states nothing |
@@ -1316,8 +1314,6 @@ designs to C++):
 
 ### What is left
 
-- **A loop's value after it** reads the phi's terms, which vary with the loop
-  (Phase 11).
 - **CDNA3's chain of FMAs** stays refused: its exit needs `e_max + 4`, and
   per-add rules give `e_max + 30`.  An open item.
 - **Replay cost.**  A copy replays every constraint naming a moving variable,
@@ -1678,16 +1674,28 @@ the same 6 refused.
 
 #### Phase 11 - A loop's value after it
 
-- After `_visit_for`, uses of a phi read **exit terms**, not the phi's: the
-  pre-loop value joined with the body at a witness of the last iteration, which
-  does not vary with the loop.  `by_def[phi]` is replaced once the body is
-  walked, as Phase 6's prototype did; the in-loop uses keep the phi's.
+**Done.**  `_visit_for` gives each phi joined at a witness **exit terms** once
+every phi's iteration-start join is stated, and replaces `by_def[phi]` with
+them, so the uses past the loop read them; the uses inside were walked
+already, and a phi's value is never looked up lazily.
 
-Separate because it changes what every loop's later uses read, so it is the
-phase most likely to change outputs, measured alone.
+- A value the `[pre, body]` join carries exits joined with the pre-loop value
+  and a copy of the body at the loop's last iteration, `('last', id(loop))`:
+  over the loop's own class, minted with the binders around it, so it does not
+  vary with the loop; the loop's phis share it.
+- A partially written list exits joined with a copy of each write at its last
+  writer, `('last', id(phi))`: over the loop and every binder inside it,
+  varying with the element.
+- A list an `empty` or a covering write fills keeps the shared terms: its
+  elements do correspond with the loop's index.
+- `_join` splits off `_bracket`, which bounds given terms.
 
-Tests: a phi read after its loop paired with a list the loop covered, through
-the checker; the corpus as Phase 10.
+Measured: `test_a_value_after_its_loop_varies_with_it_no_longer` (fails on
+Phase 10's code) and an `after-loop` checker shape (sound before, as the open
+item argued; now pinned) pass; the digit-bound and format-inference tests pass.
+All 141 corpus outputs byte for byte Phase 10's, the same 6 refused.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
 
 ### After the last phase
 
@@ -1737,7 +1745,7 @@ every copy, not just the witnesses.  **Open:** for review after Phase 5.
 
 #### Does a loop phi vary with its loop when read after it?
 
-**Scheduled:** Phase 11 gives the value after the loop terms of its own.
+**Settled in Phase 11:** no; the value after the loop has terms of its own.
 
 `_def_binders` mints a loop's phis under the loop's binder, and the phi is also
 the value after the loop -- iteration `n`, at no index of a list the loop's

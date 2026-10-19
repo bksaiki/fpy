@@ -69,6 +69,10 @@ _WitnessKey: TypeAlias = tuple[Literal['witness'], int]
 """An index an existential picks -- an aggregate's worst element, a loop's
 iteration before, an element's writer -- by what picks it."""
 
+_LastKey: TypeAlias = tuple[Literal['last'], int]
+"""A loop's last iteration, by the loop's identity, or a partial write's last
+writer, by its phi's."""
+
 
 class _Varying:
     """The variables varying over one of *elements*' spaces, as a membership
@@ -299,7 +303,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _elt_expr: dict[Definition, Expr]
     _covered_write: set[Definition]
     _lsb_vars: set[int]
-    _index_sets: dict[_RangeKey | _EltKey | _WitnessKey, _IndexSet]
+    _index_sets: dict[_RangeKey | _EltKey | _WitnessKey | _LastKey, _IndexSet]
     _gather: tuple[_RangeKey, Definition] | None
     _gathered: set[Expr]
     _returns: list[tuple[Expr, Terms]]
@@ -536,9 +540,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         One source without a term leaves the join unstated: the bound is a
         claim about all of them.
         """
-        if not srcs:
-            return
-        terms = self._def(d)
+        if srcs:
+            self._bracket(self._def(d), d, srcs)
+
+    def _bracket(self, terms: Terms, d: Definition, srcs: list[Terms]) -> None:
+        """Bound *terms*, *d*'s, by every one of *srcs*."""
         msbs = [s.msb for s in srcs if s.msb is not None]
         lsbs = [t for s in srcs if (t := self._elt_lsb(d, s)) is not None]
         if terms.msb is not None and len(msbs) == len(srcs):
@@ -1528,7 +1534,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self,
         src: Terms,
         elements: Iterable[Key],
-        key: '_RangeKey | _EltKey | _WitnessKey',
+        key: '_RangeKey | _EltKey | _WitnessKey | _LastKey',
         binders: tuple[Key, ...] | None = None,
     ) -> Terms:
         """*src* renamed onto the index set *key*: at another index of
@@ -1701,6 +1707,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._binders = binders
         self._loops = loops
         self._gather, self._trip = outer
+        # what each phi is after the loop, where it is not the iteration's
+        exits: list[tuple[PhiDef, list[Terms]]] = []
         for phi in self.def_use.phis[stmt]:
             body_def = self.def_use.defs[phi.rhs]
             self._unify_elements(phi, body_def)
@@ -1709,6 +1717,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             pre = self.out.by_def.get(self.def_use.defs[phi.lhs])
             if body is None:
                 self._join(phi, self._written(stmt, phi, inner))
+                if (srcs := self._partial.get(body_def)) is not None:
+                    # each element as its last writer left it
+                    at = (*self._binders, self._elements(phi))
+                    exits.append((phi, [self._copy(s, inner, ('last', id(phi)), at) for s in srcs]))
             elif (_is_empty_alloc(self.def_use.defs[phi.lhs])
                   or body_def in self._covered_write):
                 # Every iteration writes the same expression, so the body's
@@ -1723,11 +1735,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # loop never runs -- so only the join covers both.  A list
                 # that arrived with elements keeps them.
                 self._join(phi, [pre, self._before(stmt, body)])
+                last = self._copy(body, (self._binder(stmt),), ('last', id(stmt)), self._binders)
+                exits.append((phi, [pre, last]))
             self._partial[phi] = self._partial.get(body_def)
             if body_def in self._fields:
                 self._fields[phi] = self._fields[body_def]
             if body_def in self._elt_expr:
                 self._elt_expr[phi] = self._elt_expr[body_def]
+        # Past the loop a phi is its last iteration's value, or the pre-loop
+        # one if the loop never ran, and varies with the loop no longer: the
+        # uses there read terms of their own, every use inside having been
+        # walked.
+        for phi, srcs in exits:
+            terms = Terms()
+            self._fresh_interval(terms, phi, f'x{len(self.out.by_def)}')
+            self._bracket(terms, phi, srcs)
+            self.out.by_def[phi] = terms
 
     def _visit_assign(self, stmt: Assign, ctx):
         self._visit_expr(stmt.expr, ctx)
