@@ -41,6 +41,7 @@ from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
 from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
 from ..value_class import ValueClass, ValueClassAnalysis, ValueClassInfer
+from .spaces import Key
 from .store import DigitBoundStore, Term
 
 __all__ = [
@@ -70,6 +71,8 @@ class _IndexSet:
     """One renaming of the per-element variables, for one range."""
 
     tag: str
+    binders: tuple[Key, ...] = ()
+    """The binders enclosing the read, which a copy varies over."""
     subst: dict[int, Term] = field(default_factory=dict)
     mark: int = 0
 
@@ -291,6 +294,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
     elements a guard names."""
     _loops: tuple[Stmt, ...]
     """The loops enclosing the walk, outermost first."""
+    _binders: tuple[Key, ...]
+    """The binders enclosing the walk, outermost first; see :mod:`.spaces`."""
+    _binders_of: dict[Expr, tuple[Key, ...]]
+    _binders_of_stmt: dict[Stmt, tuple[Key, ...]]
+    _index_binder: dict[Definition, Key]
+    """The binder whose index each loop target is."""
+    _outer_binders: tuple[Key, ...]
+    """The caller's binders around the call this walk is."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
     _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
     _scope_of: dict[ContextStmt, ContextScope]
@@ -310,6 +321,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         arg_lit: Callable[[int], int | None] | None = None,
         classes: ValueClassAnalysis | None = None,
         outer: Callable[[], frozenset[int]] | None = None,
+        outer_binders: tuple[Key, ...] = (),
     ):
         self.func = func
         self.outer = outer
@@ -343,6 +355,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._guards = {}
         self._elt_guards = {}
         self._loops = ()
+        self._binders = ()
+        self._binders_of = {}
+        self._binders_of_stmt = {}
+        self._index_binder = {}
+        self._outer_binders = outer_binders
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
         self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
@@ -367,6 +384,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # `_fresh_interval` does -- but a list is a list in both
                 # frames, so its summary describes an element here too
                 self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
+                self._corresponds(d, src, self._outer_binders)
         self._visit_block(self.func.body, None)
         # a fact stated after a part was read, such as a `max` over the whole
         # list, still holds of the part
@@ -386,6 +404,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             self._elt_vars.update(v.index for v, _ in t.coeffs)
             for v, _ in t.coeffs:
                 self._var_level[v.index] = self._elt_depth
+        for v, _ in t.coeffs:
+            self.store.spaces.mint(v.index, self._binders)
         return t
 
     def _mark_elt(
@@ -405,6 +425,40 @@ class _DigitBoundInferInstance(DefaultVisitor):
             if t is not None:
                 for v, _ in t.coeffs:
                     self._raise_anchor(v.index, self._elt_depth + 1)
+                    self.store.spaces.bound(v.index, (self._elements(of),))
+
+    def _binder(self, node: Stmt | Expr, clause: int = 0) -> Key:
+        """A loop's, or a comprehension clause's, key: this walk's own, so two
+        calls to one function keep theirs apart."""
+        return ('binder', id(self), id(node), clause)
+
+    def _elements(self, of: Expr | Definition) -> Key:
+        """The key of the list *of*'s element space."""
+        return ('elements', id(self), id(of))
+
+    def _unify_elements(self, a: Expr | Definition, b: Expr | Definition) -> None:
+        """*a* and *b* hold one list's elements, where they are lists."""
+        if isinstance(self._type_of(a), ListType):
+            self.store.spaces.unify(self._elements(a), self._elements(b))
+
+    def _indexed_at(self, d_lst: Definition, idx: Expr) -> None:
+        """The list *d_lst*, read or written at *idx*, corresponds with the
+        binder whose index *idx* is."""
+        if isinstance(idx, Var):
+            b = self._index_binder.get(self.def_use.find_def_from_use(idx))
+            if b is not None:
+                self.store.spaces.unify(b, self._elements(d_lst))
+
+    def _corresponds(self, of: Expr | Definition, src: Terms, outer: tuple[Key, ...]) -> None:
+        """The list *of* takes *src*, another frame's list: its elements
+        correspond with every space *src*'s summary varies over but the binders
+        *outer* around it."""
+        if not isinstance(self._type_of(of), ListType):
+            return
+        for t in (src.msb, src.value):
+            for v, _ in (t.coeffs if t is not None else ()):
+                for k in self.store.spaces.keys(v.index) - set(outer):
+                    self.store.spaces.unify(self._elements(of), k)
 
     def _fresh_interval(self, terms: Terms, of: Expr | Definition, tag: str) -> tuple[Term, Term]:
         """Give *terms* a bracketing pair, seeded from *of*'s inferred range.
@@ -434,8 +488,27 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms = self.out.by_def.get(d)
         if terms is None:
             terms = self.out.by_def[d] = Terms()
+            # minted where it is first read, but varying as its definition does
+            binders, self._binders = self._binders, self._def_binders(d)
             self._fresh_interval(terms, d, f'd{len(self.out.by_def)}')
+            self._binders = binders
         return terms
+
+    def _def_binders(self, d: Definition) -> tuple[Key, ...]:
+        """The binders *d* varies over: those around its site, and the site's
+        own where it binds per iteration -- a loop's target and phis, a
+        comprehension's targets."""
+        site = d.site
+        match site:
+            case Argument() | FuncDef():
+                return ()
+            case ListComp():
+                outer = self._binders_of.get(site, self._binders)
+                return (*outer, *(self._binder(site, k) for k in range(len(site.targets))))
+            case ForStmt():
+                return (*self._binders_of_stmt.get(site, self._binders), self._binder(site))
+            case _:
+                return self._binders_of_stmt.get(site, self._binders)
 
     def _share(self, d: Definition, src: Terms) -> None:
         """Adopt *src*'s terms for *d*, field by field, where *d* has none.
@@ -500,6 +573,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_expr(self, e: Expr, ctx):
         self._elt_depth_of[e] = self._elt_depth
+        self._binders_of[e] = self._binders
         self._loops_of_expr[e] = self._loops
         self._established_at[e] = self._established
         super()._visit_expr(e, ctx)
@@ -515,11 +589,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
         src: Terms | None
         match e:
             case Var():
-                src = self._def(self.def_use.find_def_from_use(e))
+                d = self.def_use.find_def_from_use(e)
+                src = self._def(d)
+                self._unify_elements(e, d)
             case ListRef(value=Var() as lst, index=idx) if self._covers(
                 idx, self._len_of(lst)
             ):
-                src = self._def(self.def_use.find_def_from_use(lst))
+                d_lst = self.def_use.find_def_from_use(lst)
+                src = self._def(d_lst)
+                self._indexed_at(d_lst, idx)
             case ListRef(value=Var() as lst, index=idx) if (
                 inst := self._at_index(lst, idx)
             ) is not None:
@@ -531,6 +609,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return
             case ListComp():
                 src = self.out.by_expr.get(e.elt)
+                for k in range(len(e.targets)):
+                    self.store.spaces.unify(self._elements(e), self._binder(e, k))
             case _:
                 src = None
         if src is not None:
@@ -551,8 +631,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         self.store.ge_min(grid, ts)
         level = max((self._term_level(t) for t in ts), default=0)
+        keys = {k for t in ts for v, c in t.coeffs
+                for k in self.store.spaces.keys(
+                    v.index, minted=not (c > 0 and v.index in self._lsb_vars))}
         for v, _ in grid.coeffs:
             self._raise_anchor(v.index, level)
+            self.store.spaces.bound(v.index, keys)
 
     def _raise_anchor(self, index: int, level: int) -> None:
         if level > self._anchor_level.get(index, 0):
@@ -763,10 +847,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # first: a value is minted once and memoized, and a position
             # built outside a loop is no less shared for being demanded
             # inside one.
-            outer = self._elt_depth
+            outer, outer_b = self._elt_depth, self._binders
             self._elt_depth = self._elt_depth_of.get(e, outer)
+            self._binders = self._binders_of.get(e, outer_b)
             terms.value = self._value_uncached(e)
-            self._elt_depth = outer
+            self._elt_depth, self._binders = outer, outer_b
         return terms.value
 
     def _value_uncached(self, e: Expr) -> Term | None:
@@ -1065,6 +1150,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             ift, iff = self.def_use.defs[phi.rhs], self.def_use.defs[phi.lhs]
             if isinstance(stmt, IfStmt):
                 ift, iff = iff, ift
+            self._unify_elements(phi, ift)
+            self._unify_elements(phi, iff)
             # An arm with no digits -- zero, or only infinities and NaN --
             # states nothing, so it is dropped rather than joined, as
             # `_visit_return` drops a path returning only infinities.
@@ -1235,6 +1322,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         self._loops_of_stmt[stmt] = self._loops
+        self._binders_of_stmt[stmt] = self._binders
         return super()._visit_statement(stmt, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any) -> None:
@@ -1440,7 +1528,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return None
         inst = self._index_sets.get(key)
         if inst is None:
-            inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}')
+            inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}', self._binders)
         for v in names:
             if v.index not in inst.subst:
                 inst.subst[v.index] = self._var(v.name + inst.tag)
@@ -1449,7 +1537,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _replay(self, inst: _IndexSet) -> None:
         """Every fact stated since *inst* was last replayed, renamed onto it."""
+        before = self.store.n_vars
         inst.mark = self.store.instance(self._elt_vars, inst.subst, inst.mark, inst.tag)
+        for i in range(before, self.store.n_vars):
+            self.store.spaces.mint(i, inst.binders)
 
     def _carried(self, d: Definition) -> list[Terms] | None:
         """What bounds an arbitrary element of the list *d*, if anything does.
@@ -1466,11 +1557,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms = self.out.by_def.get(d)
         return None if terms is None else [terms]
 
-    def _bind_elt(self, target: NamedId, site, source: Var) -> None:
+    def _bind_elt(self, target: NamedId, site, source: Var, binder: Key) -> None:
         d_src = self.def_use.find_def_from_use(source)
         self._share(self.def_use.find_def_from_site(target, site), self._def(d_src))
+        self.store.spaces.unify(binder, self._elements(d_src))
 
-    def _bind_iter(self, target: Id | TupleBinding, iterable: Expr, site) -> None:
+    def _bind_iter(self, target: Id | TupleBinding, iterable: Expr, site, binder: Key) -> None:
         """What iterating *iterable* as *target* binds, at *site*.
 
         Shared by the comprehension and the loop it lowers to, which is where
@@ -1481,13 +1573,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         match iterable:
             case Var():
                 # iterating a list directly binds the target to its element
-                self._bind_elt(target, site, iterable)
+                self._bind_elt(target, site, iterable, binder)
             case Range1():
                 # ... while `range(len(xs))` makes the target an index.  Only
                 # `Range1`: a range with a start or a step does not visit
                 # every index from zero, and covering is the claim that it
                 # does ...
                 n = self._len_of(iterable)
+                self._index_binder[self.def_use.find_def_from_site(target, site)] = binder
                 if n is not None:
                     self._loop_index[self.def_use.find_def_from_site(target, site)] = n
                 # ... and a trip count, whose `a + s * k` the body may index by
@@ -1498,6 +1591,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # ... it visits a *part*, which `_at_index_set` gives
                 # variables of its own.
                 key = self._range_key(iterable)
+                self._index_binder[self.def_use.find_def_from_site(target, site)] = binder
                 if key is not None:
                     self._gather = (key, self.def_use.find_def_from_site(target, site))
             case _:
@@ -1506,17 +1600,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _visit_list_comp(self, e: ListComp, ctx):
         outer = self._gather, self._trip
         self._trip = None
-        for target, iterable in zip(e.targets, e.iterables):
+        clauses = tuple(self._binder(e, k) for k in range(len(e.targets)))
+        for target, iterable, binder in zip(e.targets, e.iterables, clauses):
             self._visit_expr(iterable, ctx)
             # a `zip` has no counterpart in the lowered loop, so it stays here
             if isinstance(target, TupleBinding) and isinstance(iterable, Zip):
                 for sub, part in zip(target.elts, iterable.args):
                     if isinstance(sub, NamedId) and isinstance(part, Var):
-                        self._bind_elt(sub, e, part)
+                        self._bind_elt(sub, e, part, binder)
             else:
-                self._bind_iter(target, iterable, e)
+                self._bind_iter(target, iterable, e, binder)
         self._elt_depth += 1
+        binders, self._binders = self._binders, (*self._binders, *clauses)
         self._visit_expr(e.elt, ctx)
+        self._binders = binders
         self._elt_depth -= 1
         self._gather, self._trip = outer
 
@@ -1524,19 +1621,23 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_expr(stmt.iterable, ctx)
         outer = self._gather, self._trip
         self._trip = None
-        self._bind_iter(stmt.target, stmt.iterable, stmt)
+        self._bind_iter(stmt.target, stmt.iterable, stmt, self._binder(stmt))
         # A list the body fills enters the loop holding whatever it already
         # does, which a partial write leaves in place.
         for phi in self.def_use.phis[stmt]:
             self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
         self._elt_depth += 1
         loops, self._loops = self._loops, (*self._loops, stmt)
+        binders, self._binders = self._binders, (*self._binders, self._binder(stmt))
         self._visit_block(stmt.body, ctx)
+        self._binders = binders
         self._loops = loops
         self._elt_depth -= 1
         self._gather, self._trip = outer
         for phi in self.def_use.phis[stmt]:
             body_def = self.def_use.defs[phi.rhs]
+            self._unify_elements(phi, body_def)
+            self._unify_elements(phi, self.def_use.defs[phi.lhs])
             body = self.out.by_def.get(body_def)
             pre = self.out.by_def.get(self.def_use.defs[phi.lhs])
             if body is None:
@@ -1581,16 +1682,19 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     # `range(n)[i] == i`, so indexing a materialized range with
                     # a full index yields another one.  Comprehension
                     # elimination emits exactly this for a `zip`.
-                    self._loop_index[d] = self._loop_index[
-                        self.def_use.find_def_from_use(idx)
-                    ]
+                    d_idx = self.def_use.find_def_from_use(idx)
+                    self._loop_index[d] = self._loop_index[d_idx]
+                    if d_idx in self._index_binder:
+                        self._index_binder[d] = self._index_binder[d_idx]
                 else:
                     self._share(d, self._def(d_src))
+                    self._indexed_at(d_src, idx)
             case _:
                 src = self.out.by_expr.get(stmt.expr)
                 if src is None:
                     return
                 terms = self._def(d)
+                self._unify_elements(d, stmt.expr)
                 # One-directional, not an equality.  `_def` seeds this
                 # definition from *its* format, which branch refinement
                 # narrows to the path the assignment sits on -- and the
@@ -1623,6 +1727,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 idx, self._len_of(lst)
             ):
                 d_lst = self.def_use.find_def_from_use(lst)
+                self._indexed_at(d_lst, idx)
             case _:
                 return
         fields = self._fields.get(d_lst) or self._zip_fields(d_lst)
@@ -1638,6 +1743,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_expr(stmt.expr, ctx)
         d_in = self.def_use.find_def_from_use(stmt)
         d = self.def_use.find_def_from_site(stmt.var, stmt)
+        self._unify_elements(d, d_in)
         src = self.out.by_expr.get(stmt.expr)
         length = _size(self.array_size.by_def.get(d_in))
         covers = len(stmt.indices) == 1 and self._covers(stmt.indices[0], length)
@@ -1649,6 +1755,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             prior = self._carried(d_in)
             self._partial[d] = None if src is None or prior is None else [*prior, src]
             return
+        # each iteration writes an element, so the loop's index is the list's
+        if self._binders:
+            self.store.spaces.unify(self._binders[-1], self._elements(d))
+        self._indexed_at(d, stmt.indices[0])
         if src is not None:
             self._share(d, src)
         self._covered_write.add(d)
@@ -1750,12 +1860,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
             e.fn.ast, view, self.store, args,
             lambda i: self._lit_of(e.args[i]),
             outer=lambda: self._assumed(e),
+            outer_binders=self._binders,
         ).analyze()
         if self._elt_depth:
             # called once per element, so everything it minted is per-element
             self._elt_vars.update(range(before, self.store.n_vars))
             for i in range(before, self.store.n_vars):
                 self._raise_anchor(i, self._elt_depth)
+                self.store.spaces.bound(i, self._binders)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows
@@ -1770,6 +1882,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     and sub.ret.msb not in passed):
                 self.store.le(sub.ret.msb, hi)
             self.out.by_expr[e] = Terms(sub.ret.msb, sub.ret.lsb, sub.ret.value)
+            self._corresponds(e, sub.ret, self._binders)
 
 
 class DigitBoundInfer:

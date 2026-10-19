@@ -798,3 +798,66 @@ class TestAnElementReadInsideAnOuterLoop:
             return out
 
         assert TestAnElementReadAnyWay._prec(f) == 12
+
+
+@fp.fpy(ctx=fp.REAL)
+def _logbs(ys):
+    return [fp.logb(y) for y in ys]
+
+
+class TestIndexSpaces:
+    """What each variable varies over, read off the table the walk records:
+    the index spaces correspondence builds, by identity rather than depth."""
+
+    L4 = [ListType(RealType(fp.FP32), 4)]
+
+    @staticmethod
+    def _sig(b, text, field='msb'):
+        _, t = _term(b, text)
+        return frozenset().union(
+            *(b.store.spaces.signature(v.index) for v, _ in getattr(t, field).coeffs))
+
+    def test_a_comprehension_pairs_its_list_with_its_source(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(x) for x in xs]
+            return es
+
+        _, b = _analyze(f, self.L4)
+        assert self._sig(b, 'xs') <= self._sig(b, 'es')
+
+    def test_an_outer_loops_max_varies_with_the_loop_alone(self):
+        """`e` is minted under `j`, and is a reduction over `es`: it varies
+        with `j` and not with `xs`'s index."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                es = [fp.logb(x) for x in xs]
+                e = max(es)
+                out[j] = e
+            return out
+
+        _, b = _analyze(f, self.L4)
+        elements, e = self._sig(b, 'xs'), self._sig(b, 'max(es)', 'value')
+        assert e and not (e & elements)
+        assert elements <= self._sig(b, 'es') and e <= self._sig(b, 'es')
+
+    def test_a_callee_corresponds_with_its_caller(self):
+        """A callee's comprehension over its parameter pairs with the caller's
+        list, and what it mints varies with the loop around the call."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                es = _logbs(xs)
+                out[j] = es[0]
+            return out
+
+        _, b = _analyze(f, self.L4)
+        es = self._sig(b, '_logbs(xs)')
+        assert self._sig(b, 'xs') <= es
+        assert len(es) > len(self._sig(b, 'xs'))   # and the loop's class

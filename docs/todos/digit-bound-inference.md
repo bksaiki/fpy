@@ -1333,26 +1333,38 @@ assertions: 3 against 120, a format excluding the value, 288 against 12.
 
 #### Phase 2 - Index spaces, recorded but not read
 
-- New `fpy2/analysis/digit_bound/spaces.py`: `IndexSpaces`, a union-find over
-  space keys (a `ForStmt`, a comprehension clause, a list definition's element
-  space), and per store variable two key sets, `minted` and `anchors`.  Built
-  in `DigitBoundInfer.analyze` and handed to callee instances beside the store.
-- In `_DigitBoundInferInstance`: a binder stack pushed by `_visit_for` and
-  `_visit_list_comp`, and `_binders_of[e]` beside `_elt_depth_of`.  `_var`,
-  `_mark_elt`, `_grid_ge` and `_visit_call` record into the table as they
-  record levels today; `_covers` succeeding, `_bind_elt`, a covering write in
-  `_visit_indexed_assign`, a comprehension's result, and `_share`/`_join` of
-  list definitions unify.
-- Nothing reads the table, so every result is unchanged.
+**Done.**  Where it diverged from the plan:
 
-Separate because it is pure addition: the table can be checked against the
-programs it describes before anything trusts it.
+- **The table lives on the store** (`DigitBoundStore.spaces`), not handed to
+  instances beside it: variables live there, so every walk sharing them --
+  a callee, a `DigitBoundParams` continuation -- shares their signatures with
+  no threading.  `IndexSpaces` (`spaces.py`) wraps `fpy2.utils.Unionfind`.
+- **Keys are per instance**, `('binder', id(walk), id(node), clause)` and
+  `('elements', id(walk), id(list))`, settling the open item: it costs
+  nothing.
+- **A definition mints under its own binders.**  Terms are minted on first
+  read (`_def`), so a parameter first read inside `for j` was recorded as
+  varying with `j`.  `_def_binders` takes the binders around the definition's
+  site instead (none for a parameter; a loop's own for its target and phis;
+  a comprehension's clauses for its targets).  The depth proxy has the same
+  flaw, `_var_level` set at the read; Phase 3 retires it.
+- **Copies record the binders at their read** (`_IndexSet.binders`), since
+  the store mints a replayed copy's variables itself.
+- Correspondence is recorded at `_bind_elt`, covering reads (`_visit_expr`,
+  `_visit_assign`, `_unpack_elt`), covering and gathering writes (with the
+  innermost binder, and the index's), a comprehension's result and its
+  clauses, list assignments, branch and loop phis, a list parameter's seed
+  (`_corresponds`, against the caller's spaces but those around the call),
+  and a call's list result.
 
-Tests: a new `TestIndexSpaces` reading the table off small programs -- `es`,
-`xs` and the comprehension in one class; an outer loop's `max` outside it; a
-callee's binders under its call site.
+Unchanged by construction, and checked: all 138 corpus outputs (62 C++
+sources, 60 catalog kernels, 16 remixes) are byte for byte those of the
+commit before.  `TestIndexSpaces` reads the table: a comprehension pairs its
+list with its source; an outer loop's `max` varies with the loop alone; a
+callee's comprehension pairs with the caller's list and varies with the loop
+around the call.
 
-    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
 
 #### Phase 3 - Copies rename by signature
 
@@ -1443,10 +1455,7 @@ direction.  **Provisional:** accept it; reopen if a design loses a bound to it.
 
 #### Should a binder key be the AST node, or the node in one callee instance?
 
-Two calls to one function share its AST, so keying by node merges their
-classes -- safe, renaming more, but imprecise.  Keying by `(instance, node)`
-keeps them apart.  **Provisional:** by instance, if Phase 2 finds it cheap;
-otherwise by node, recorded here.
+**Settled in Phase 2:** by instance, which costs nothing.
 
 #### Does a list of symbolic length keep its relational facts?
 

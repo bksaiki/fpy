@@ -11,6 +11,7 @@ import math
 from collections.abc import Iterable, Sequence
 
 from .solver import Constraint, Solver, Term, Z3Solver, _Var
+from .spaces import IndexSpaces
 
 __all__ = ['DigitBoundStore']
 
@@ -54,6 +55,10 @@ class DigitBoundStore:
     """Constraints that hold at every index although they name an aggregate;
     see :meth:`envelope`."""
 
+    spaces: IndexSpaces
+    """Which index spaces each variable varies over, kept with the variables so
+    every walk sharing them shares it."""
+
     def __init__(self, solver: Solver | None = None):
         self._solver = solver if solver is not None else Z3Solver()
         self._constraints = []
@@ -65,6 +70,7 @@ class DigitBoundStore:
         self._universal = set()
         self._not_neg_inf = {}
         self._envelopes = set()
+        self.spaces = IndexSpaces()
 
     def _add(self, c: Constraint) -> None:
         self._constraints.append(c)
