@@ -740,3 +740,61 @@ class TestAnElementReadAnyWay:
                 return fp.round(xs[1])
 
         assert self._prec(f) > 12
+
+
+@fp.fpy(ctx=fp.REAL)
+def _paired_sums(xs):
+    ys = [2 ** (-fp.logb(x)) for x in xs]     # msb(ys) = -msb(xs), paired
+    s1 = sum(xs)
+    s2 = sum(ys)
+    p = s1 * s2
+    e = max([fp.logb(x) for x in xs])
+    with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+        r = fp.round(p)
+    return p + p + r
+
+
+class TestAnAggregateHasItsOwnWorstElement:
+    """An upper bound on a sum is a fact about its *worst* element, which a
+    summary is not.  Two sums over paired lists whose maxima sit at different
+    indices cannot share one: at `[2**60, 2**-60]` both are about `2**60`, and
+    their product about `2**120`.  Known unsound since v0.2.4; see Part III of
+    `docs/todos/digit-bound-inference.md`."""
+
+    XS = [fp.FP32.round(2.0 ** 60), fp.FP32.round(2.0 ** -60)]
+
+    @pytest.mark.xfail(strict=True, reason='an aggregate is bounded on the summary')
+    def test_the_store_reaches_the_product(self):
+        _, b = _analyze(_paired_sums, [ListType(RealType(fp.FP32), 2)])
+        e, t = _term(b, '(s1 * s2)')
+        assert b.store.maximum(t.msb, b.assume_at(e)) >= 120   # E(p) is 120
+
+    @pytest.mark.xfail(strict=True, reason='an aggregate is bounded on the summary')
+    def test_the_formats_hold_the_values(self):
+        ast = monomorphize(_paired_sums, args=[ListType(RealType(fp.FP32), 2)]).ast
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        fmt = next(b for e, b in info.by_expr.items() if e.format() == '(p + p)')
+        assert fmt.representable_in(fp.REAL.round(2 * (2.0 ** 60 + 2.0 ** -60) ** 2))
+
+
+class TestAnElementReadInsideAnOuterLoop:
+    """The `max` moves with the outer loop and not with `xs`'s index, so a
+    part of `xs` keeps it rather than a copy.  Today correspondence is read off
+    loop depth, which conflates the two; see Part III of
+    `docs/todos/digit-bound-inference.md`."""
+
+    @pytest.mark.xfail(strict=True, reason='index spaces are read off depth')
+    def test_the_max_reaches_the_part(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                es = [fp.logb(x) for x in xs]
+                t = xs[0]
+                e = max(es)
+                with fp.MPFixedContext(e - 12, fp.RM.RTZ):
+                    out[j] = fp.round(t)
+            return out
+
+        assert TestAnElementReadAnyWay._prec(f) == 12

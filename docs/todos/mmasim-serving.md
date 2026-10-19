@@ -962,7 +962,7 @@ the sub-FP32 roundings compiled, and after double rounding).
     to odd now; what is left is bounding the separate join, which needs
     digit-bound inference to tie the block sum to `e` (Triton backend,
     "What a generated design still hits").  **Moved** to its own branch:
-    index spaces by identity (`digit-bound-index-spaces.md`), then
+    index spaces by identity (`digit-bound-inference.md`, Part III), then
     loop-carried values for the chain.
 - **Since closed by double rounding** (`compile_triton` compiles with
   `DOUBLE_ROUND`): an Add or an Fma rounding to E8M13 toward zero

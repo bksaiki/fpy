@@ -130,7 +130,7 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
     round_down_at(c, e - F - 1)` adds two roundings at runtime positions, and
     the exact add is bounded only where digit-bound inference ties `t`'s
     magnitude to `e`.  Two gaps keep it from doing so, both in
-    `digit-bound-inference.md`'s "What is left": index spaces by identity
+    `digit-bound-inference.md`'s Part III: index spaces by identity
     (the tree's constant reads, inside the loop over `k`), and loop-carried
     values (the chain of FMAs).
   - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
