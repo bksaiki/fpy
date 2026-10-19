@@ -41,7 +41,7 @@ from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
 from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
 from ..value_class import ValueClass, ValueClassAnalysis, ValueClassInfer
-from .spaces import Key
+from .spaces import IndexSpaces, Key
 from .store import DigitBoundStore, Term
 
 __all__ = [
@@ -66,6 +66,18 @@ _EltKey: TypeAlias = tuple[Literal['elt'], _Operand, _Operand, _Operand]
 """The elements `a + s * k` for `k` over `range(n)`, as `('elt', a, s, n)`."""
 
 
+class _Varying:
+    """The variables varying over one of *elements*' spaces, as a membership
+    test: a replay asks it only of the variables it meets."""
+
+    def __init__(self, spaces: 'IndexSpaces', elements: set[Key]):
+        self.spaces = spaces
+        self.classes = {spaces.find(k) for k in elements}
+
+    def __contains__(self, var: object) -> bool:
+        return isinstance(var, int) and bool(self.spaces.signature(var) & self.classes)
+
+
 @dataclass
 class _IndexSet:
     """One renaming of the per-element variables, for one range."""
@@ -73,6 +85,8 @@ class _IndexSet:
     tag: str
     binders: tuple[Key, ...] = ()
     """The binders enclosing the read, which a copy varies over."""
+    elements: set[Key] = field(default_factory=set)
+    """The element spaces of the lists taken at this index set."""
     subst: dict[int, Term] = field(default_factory=dict)
     mark: int = 0
 
@@ -274,13 +288,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _fields: dict[Definition, tuple[Terms | None, ...]]
     _elt_expr: dict[Definition, Expr]
     _covered_write: set[Definition]
-    _elt_depth: int
-    _elt_depth_of: dict[Expr, int]
-    _elt_vars: set[int]
-    _var_level: dict[int, int]
-    """the loop nesting each variable takes a new value at"""
-    _anchor_level: dict[int, int]
-    """... and the nesting the bounds *on* it were built at"""
     _lsb_vars: set[int]
     _index_sets: dict[_RangeKey | _EltKey, _IndexSet]
     _gather: tuple[_RangeKey, Definition] | None
@@ -341,11 +348,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._fields = {}
         self._elt_expr = {}
         self._covered_write = set()
-        self._elt_depth = 0
-        self._elt_depth_of = {}
-        self._elt_vars = set()
-        self._var_level = {}
-        self._anchor_level = {}
         self._lsb_vars = set()
         self._index_sets = {}
         self._gather = None
@@ -383,7 +385,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # the caller minted these, and `_share` skips the seeding
                 # `_fresh_interval` does -- but a list is a list in both
                 # frames, so its summary describes an element here too
-                self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
+                self._mark_elt(d, src.msb, src.value)
                 self._corresponds(d, src, self._outer_binders)
         self._visit_block(self.func.body, None)
         # a fact stated after a part was read, such as a `max` over the whole
@@ -398,34 +400,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
     # -- terms ---------------------------------------------------------
 
     def _var(self, name: str) -> Term:
-        """A fresh variable, per-element where the walk is inside a loop."""
+        """A fresh variable, varying with the binders around the walk."""
         t = self.store.var(name)
-        if self._elt_depth:
-            self._elt_vars.update(v.index for v, _ in t.coeffs)
-            for v, _ in t.coeffs:
-                self._var_level[v.index] = self._elt_depth
         for v, _ in t.coeffs:
             self.store.spaces.mint(v.index, self._binders)
         return t
 
-    def _mark_elt(
-        self, of: Expr | Definition, *ts: Term | None, lsb: Term | None = None,
-    ) -> None:
-        """Record *ts* as per-element where *of* is a list, whoever minted
-        them: a list's summary describes an element wherever it came from, so
-        it moves with that list's index -- one nesting in from where the list
-        itself sits.  An *lsb* is the exception, being already at or below
-        every element's."""
+    def _mark_elt(self, of: Expr | Definition, *ts: Term | None) -> None:
+        """Record *ts* as varying with the list *of*'s index, whoever minted
+        them: a list's summary describes an element wherever it came from.  Its
+        lsb is not among them, being already at or below every element's --
+        unless what bounds it varies (`_grid_ge`)."""
         if not isinstance(self._type_of(of), ListType):
             return
-        for t in (*ts, lsb):
-            if t is not None:
-                self._elt_vars.update(v.index for v, _ in t.coeffs)
         for t in ts:
-            if t is not None:
-                for v, _ in t.coeffs:
-                    self._raise_anchor(v.index, self._elt_depth + 1)
-                    self.store.spaces.bound(v.index, (self._elements(of),))
+            for v, _ in (t.coeffs if t is not None else ()):
+                self.store.spaces.bound(v.index, (self._elements(of),))
 
     def _binder(self, node: Stmt | Expr, clause: int = 0) -> Key:
         """A loop's, or a comprehension clause's, key: this walk's own, so two
@@ -471,7 +461,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms.msb = self._var(f'msb{tag}')
         terms.lsb = self._var(f'lsb{tag}')
         self._lsb_vars.update(v.index for v, _ in terms.lsb.coeffs)
-        self._mark_elt(of, terms.msb, lsb=terms.lsb)
+        self._mark_elt(of, terms.msb)
         if hi is not None:
             self.store.le(terms.msb, hi)
         if lo is not None:
@@ -572,7 +562,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
     # -- emission ------------------------------------------------------
 
     def _visit_expr(self, e: Expr, ctx):
-        self._elt_depth_of[e] = self._elt_depth
         self._binders_of[e] = self._binders
         self._loops_of_expr[e] = self._loops
         self._established_at[e] = self._established
@@ -626,38 +615,21 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
         Every such bound is true of the value in hand.  It stays true of a
         whole *list* only while nothing it was built from moves with that
-        list's index, so *grid* inherits the deepest nesting its bounds came
-        from: see :meth:`_elt_lsb`.
+        list's index, so *grid* inherits what its bounds vary over: see
+        :meth:`_elt_lsb`.
         """
         self.store.ge_min(grid, ts)
-        level = max((self._term_level(t) for t in ts), default=0)
-        keys = {k for t in ts for v, c in t.coeffs
-                for k in self.store.spaces.keys(
-                    v.index, minted=not (c > 0 and v.index in self._lsb_vars))}
+        keys = {k for t in ts for k in self._varies(t)}
         for v, _ in grid.coeffs:
-            self._raise_anchor(v.index, level)
             self.store.spaces.bound(v.index, keys)
 
-    def _raise_anchor(self, index: int, level: int) -> None:
-        if level > self._anchor_level.get(index, 0):
-            self._anchor_level[index] = level
-
-    def _moves_at(self, index: int, c: int) -> int:
-        """The nesting a variable moves with, entering a bound with
-        coefficient *c*.
-
-        Where it was minted, and where whatever bounds it was -- except that
-        an lsb of its own is already at or below every element's, so only
-        what bounds it counts.  Negated it is a ceiling, not a floor, and
-        that exception lapses.
-        """
-        level = self._anchor_level.get(index, 0)
-        if c > 0 and index in self._lsb_vars:
-            return level
-        return max(level, self._var_level.get(index, 0))
-
-    def _term_level(self, t: Term) -> int:
-        return max((self._moves_at(v.index, c) for v, c in t.coeffs), default=0)
+    def _varies(self, t: Term) -> set[Key]:
+        """What *t* varies over, entering a bound: where its variables were
+        minted and what bounds them -- except that an lsb of its own is already
+        at or below every element's, so only what bounds it counts.  Negated it
+        is a ceiling, not a floor, and that exception lapses."""
+        return {k for v, c in t.coeffs for k in self.store.spaces.keys(
+            v.index, minted=not (c > 0 and v.index in self._lsb_vars))}
 
     def _elt_lsb(self, of: Expr | Definition, src: Terms) -> Term | None:
         """*src*'s grid, as *of*'s -- dropped where *of* is a list and the
@@ -668,8 +640,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         and reading it uniformly would claim the smallest element sits as
         high as the widest.  No grid at all is the weaker, true reading.
         """
-        if (src.lsb is not None and isinstance(self._type_of(of), ListType)
-                and self._term_level(src.lsb) > self._elt_depth):
+        if src.lsb is None or not isinstance(self._type_of(of), ListType):
+            return src.lsb
+        spaces = self.store.spaces
+        here = {spaces.find(b) for b in self._binders}
+        if any(spaces.find(k) not in here for k in self._varies(src.lsb)):
             return None
         return src.lsb
 
@@ -847,11 +822,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # first: a value is minted once and memoized, and a position
             # built outside a loop is no less shared for being demanded
             # inside one.
-            outer, outer_b = self._elt_depth, self._binders
-            self._elt_depth = self._elt_depth_of.get(e, outer)
-            self._binders = self._binders_of.get(e, outer_b)
+            outer = self._binders
+            self._binders = self._binders_of.get(e, outer)
             terms.value = self._value_uncached(e)
-            self._elt_depth, self._binders = outer, outer_b
+            self._binders = outer
         return terms.value
 
     def _value_uncached(self, e: Expr) -> Term | None:
@@ -1521,24 +1495,24 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # whole list's value is minted lazily, so force it here
             src.value = self._def_value(d_lst)
         fields = (src.msb, src.lsb, src.value)
-        names = [v for t in fields if t is not None for v, _ in t.coeffs]
-        if any(v.index not in self._elt_vars for v in names):
-            # a variable this frame cannot vouch for as per-element would be
-            # left shared rather than copied, which is the two-way claim
-            return None
         inst = self._index_sets.get(key)
         if inst is None:
             inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}', self._binders)
-        for v in names:
-            if v.index not in inst.subst:
-                inst.subst[v.index] = self._var(v.name + inst.tag)
+        inst.elements.add(self._elements(d_lst))
+        # a variable that does not vary with the index is the part's too
+        moving = _Varying(self.store.spaces, inst.elements)
+        for t in fields:
+            for v, _ in (t.coeffs if t is not None else ()):
+                if v.index in moving and v.index not in inst.subst:
+                    inst.subst[v.index] = self._var(v.name + inst.tag)
         self._replay(inst)
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
     def _replay(self, inst: _IndexSet) -> None:
         """Every fact stated since *inst* was last replayed, renamed onto it."""
         before = self.store.n_vars
-        inst.mark = self.store.instance(self._elt_vars, inst.subst, inst.mark, inst.tag)
+        moving = _Varying(self.store.spaces, inst.elements)
+        inst.mark = self.store.instance(moving, inst.subst, inst.mark, inst.tag)
         for i in range(before, self.store.n_vars):
             self.store.spaces.mint(i, inst.binders)
 
@@ -1610,11 +1584,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         self._bind_elt(sub, e, part, binder)
             else:
                 self._bind_iter(target, iterable, e, binder)
-        self._elt_depth += 1
         binders, self._binders = self._binders, (*self._binders, *clauses)
         self._visit_expr(e.elt, ctx)
         self._binders = binders
-        self._elt_depth -= 1
         self._gather, self._trip = outer
 
     def _visit_for(self, stmt: ForStmt, ctx):
@@ -1626,13 +1598,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # does, which a partial write leaves in place.
         for phi in self.def_use.phis[stmt]:
             self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
-        self._elt_depth += 1
         loops, self._loops = self._loops, (*self._loops, stmt)
         binders, self._binders = self._binders, (*self._binders, self._binder(stmt))
         self._visit_block(stmt.body, ctx)
         self._binders = binders
         self._loops = loops
-        self._elt_depth -= 1
         self._gather, self._trip = outer
         for phi in self.def_use.phis[stmt]:
             body_def = self.def_use.defs[phi.rhs]
@@ -1862,12 +1832,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
             outer=lambda: self._assumed(e),
             outer_binders=self._binders,
         ).analyze()
-        if self._elt_depth:
-            # called once per element, so everything it minted is per-element
-            self._elt_vars.update(range(before, self.store.n_vars))
-            for i in range(before, self.store.n_vars):
-                self._raise_anchor(i, self._elt_depth)
-                self.store.spaces.bound(i, self._binders)
+        # called once per iteration, so everything it minted varies with them
+        for i in range(before, self.store.n_vars):
+            self.store.spaces.bound(i, self._binders)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows

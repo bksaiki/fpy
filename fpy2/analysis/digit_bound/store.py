@@ -8,7 +8,7 @@ out of the constraints and the store decidable.  What the variables mean is
 """
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Container, Iterable, Sequence
 
 from .solver import Constraint, Solver, Term, Z3Solver, _Var
 from .spaces import IndexSpaces
@@ -93,7 +93,7 @@ class DigitBoundStore:
 
     def instance(
         self,
-        elementwise: set[int],
+        elementwise: Container[int],
         subst: dict[int, Term],
         mark: int,
         tag: str,

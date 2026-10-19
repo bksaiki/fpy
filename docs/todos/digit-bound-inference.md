@@ -1368,19 +1368,28 @@ around the call.
 
 #### Phase 3 - Copies rename by signature
 
-- `_instance` and `_replay` rename the variables whose signature contains the
-  part's class; `_elt_lsb` drops a grid whose signature holds a class not
-  enclosing the current position; `_grid_ge` unions.
-- Delete `_elt_vars`, `_var_level`, `_anchor_level`, `_raise_anchor`,
-  `_moves_at`, `_term_level` and `_elt_depth_of`, and the store's renaming
-  argument becomes the signature query.
+**Done.**
 
-Separate from Phase 2 so the switch is reviewed on its own, against a table
-already checked.
+- `_instance` and `_replay` rename exactly the variables varying over the
+  copied list's space, through a membership test (`_Varying`) asked only of
+  the variables a replay meets; a variable not varying with the index is the
+  part's too, so `_instance` no longer declines a list with one.
+- `_elt_lsb` keeps a list's grid where it varies over nothing outside the
+  binders around the walk; `_grid_ge` unions what its bounds vary over
+  (`_varies`, keeping the lsb exception).
+- Deleted: `_elt_depth`, `_elt_depth_of`, `_elt_vars`, `_var_level`,
+  `_anchor_level`, `_raise_anchor`, `_moves_at`, `_term_level`, and
+  `_mark_elt`'s `lsb` parameter.
+- **Not lifted yet:** the store still skips a replayed constraint naming a
+  variable outside the copied space unless it is an envelope.  Shared, such a
+  variable would be valid to replay -- but not while the worst-element
+  aggregate rules stand, so Phase 4 lifts it with them.
 
-Tests: `TestAnElementReadInsideAnOuterLoop` passes (marker removed); every
-existing part, pairing and gather test unchanged; the corpus at 60/62; CDNA3's
-tree before a separate join compiling.
+Measured: `TestAnElementReadInsideAnOuterLoop` passes (marker removed), every
+other test unchanged; the corpus at 60/62, all agreeing on 256 draws; all 138
+corpus outputs byte for byte the commit before's; the Triton tests pass; and
+CDNA3's tree before a separate join, and Ampere's, compile and agree on 512
+outputs.  Times unchanged (C++ corpus 44 s).
 
     .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
     cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
@@ -1394,7 +1403,9 @@ tree before a separate join compiling.
 - An audit, recorded here: every rule reading a list's summary, each marked an
   envelope (true of every element) or an upper bound (needs a witness).
 
-Separate because it is the soundness fix, and needs Phase 3's renaming.
+Separate because it is the soundness fix, and needs Phase 3's renaming.  It
+also lifts the store's skip of a replayed constraint naming a variable outside
+the copied space, once no worst-element rule is left to make that unsound.
 
 Tests: both `TestAnAggregateHasItsOwnWorstElement` tests pass (markers
 removed); `TestFusedSum` and the corpus keep `F + 2`; the format-inference

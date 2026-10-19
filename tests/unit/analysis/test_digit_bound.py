@@ -779,11 +779,9 @@ class TestAnAggregateHasItsOwnWorstElement:
 
 class TestAnElementReadInsideAnOuterLoop:
     """The `max` moves with the outer loop and not with `xs`'s index, so a
-    part of `xs` keeps it rather than a copy.  Today correspondence is read off
-    loop depth, which conflates the two; see Part III of
-    `docs/todos/digit-bound-inference.md`."""
+    part of `xs` keeps it rather than a copy -- which loop depth alone, the
+    same for both, cannot tell apart."""
 
-    @pytest.mark.xfail(strict=True, reason='index spaces are read off depth')
     def test_the_max_reaches_the_part(self):
 
         @fp.fpy(ctx=fp.REAL)
