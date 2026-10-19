@@ -964,6 +964,14 @@ the sub-FP32 roundings compiled, and after double rounding).
     "What a generated design still hits").  **Moved** to its own branch:
     index spaces by identity (`digit-bound-inference.md`, Part III), then
     loop-carried values for the chain.
+- **Since, on the digit-bound branch** (2026-10-19, every point compiled and
+  launched once, no model run): 182 of 188 compile, 6 refused -- the 5 exact
+  sums, and CDNA3's chain of FMAs, whose exit is bounded add by add
+  (`digit-bound-inference.md`, the open item on a chain of rounded adds).
+  CDNA3's tree compiles (`test_triton.py`'s `cdna3-tree`).  The check found
+  Hopper's and Ampere's BF16 at `F` 8-16 failing Triton's compile since #337:
+  an exact round emitted its operand in the operand's storage, so the carried
+  accumulator changed type; fixed in `_emit_round` (`hopper-bf16-f8`).
 - **Since closed by double rounding** (`compile_triton` compiles with
   `DOUBLE_ROUND`): an Add or an Fma rounding to E8M13 toward zero
   (Hopper's tree and chain of FMAs), through FP32 toward zero, and

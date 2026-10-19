@@ -9,8 +9,8 @@ Relational bounds on the precision of a value rounded at a run-time position
 - [Part II: design and history](#part-ii-design-and-history) -- how the
   analysis was built for `fused_sum` and the mmasim corpus, with the
   measurements that shaped it.
-- [Part III: status and plan](#part-iii-status-and-plan) -- where the
-  implementation departs from Part I, and what changes.
+- [Part III: status](#part-iii-status) -- where the implementation stands
+  against Part I, the soundness bugs fixed, and what is left.
 - [Part IV: implementation plan](#part-iv-implementation-plan) -- the phases
   that bring the implementation to Part I, one commit each.
 
@@ -18,7 +18,7 @@ Relational bounds on the precision of a value rounded at a run-time position
 to C++.  Two soundness bugs present since v0.2.4 are fixed: an upper bound on
 an aggregate stated on a list's summary (Phase 4), and a loop's carried value
 and a partial write's elements joined pointwise (Phase 5); see
-[Where the implementation departs](#where-the-implementation-departs).
+[The soundness bugs fixed](#the-soundness-bugs-fixed).
 
 ## Part I: semantics and soundness
 
@@ -184,10 +184,7 @@ paired.
 
 - **Branches** guard the facts their arms state by the arm's literal; a
   failed test that names a value's zero is a literal on that value.
-- **A loop of static count that carries a real value** is unrolled: each
-  iteration is its own instance, and the carried value relates consecutive
-  iterations pointwise.
-- **Any other loop** is one generic iteration, a summary over its iterations.
+- **A loop** is one generic iteration, a summary over its iterations.
   A value it carries relates iteration `j + 1` to `j`, which no constraint over
   one iteration states.  Its phi joins the pre-loop value with the body's at
   an expanded copy, the iteration before: a witness that varies with the
@@ -1100,24 +1097,39 @@ by asking the solver less often rather than by making it faster.
 - Where should the derived precision be *stated* — inferred at every use, or
   materialized once into the AST so later passes need not re-derive it?
 
-## Part III: status and plan
+## Part III: status
 
-### Where the implementation departs
+### Where the implementation stands
 
-| | this page | `infer.py` today | consequence |
+Part I against `fpy2/analysis/digit_bound/`, after Part IV's phases:
+
+| | Part I | the implementation | since |
 |---|---|---|---|
-| what a variable varies over | its signature, by correspondence | `_elt_vars` and loop depth (`_var_level`, `_anchor_level`); correspondence by length (`_covers`) | pairing where no correspondence is stated, and copies renaming too much or too little: the outer-loop case in [The index-space mechanism](#the-index-space-mechanism) |
-| an upper bound on an aggregate | stated on an expanded witness | stated on the summary (`Sum`, `AMax`/`AMin`'s `msb`) | reads the summary as the worst element, which no element is in general |
-| a loop of static count carrying a real value | unrolled | walked once; the carried value is unbounded | the FMA chain |
-| copies | keyed by point, renaming by signature | index sets keyed by range, renaming every per-element variable; constant and inline indices added this branch | as the first row |
-| envelopes | a rule shape | a store flag (`envelope`) added this branch | agrees |
-| a loop phi, an element a partial write left | joined at a witness of another iteration | joined pointwise | relates the iteration before, or an element's writer, to the index it is read at |
+| what a variable varies over | its signature, by correspondence | `IndexSpaces` (`spaces.py`) on the store: a union-find over binder and element keys, and per variable the keys it was minted under and is bounded by | Phases 2-3 |
+| copies | an expanded copy at a point, renaming by signature | `_copy`: renames the variables whose signature meets the moved classes, replays every constraint naming one, and varies with the rest of the original's spaces and the index set's binders | Phases 3-5 |
+| an upper bound on an aggregate | on an expanded witness | `_witness`, a copy at `('witness', id(e))` | Phase 4 |
+| envelopes | a rule shape | ordinary constraints | Phase 4 |
+| a loop phi | the pre-loop value joined with the iteration before | `_before`, a copy at `('witness', id(loop))` varying with the loop | Phase 5 |
+| an element a partial write left | joined with its writer | `_written`, a copy at `('witness', id(phi))` over the loop and every binder inside it, varying with the element | Phase 5 |
+| a loop | one generic iteration | as Part I; unrolling static loops was built and dropped | Phase 6 |
 
-The second row is a **soundness bug**, present since v0.2.4.  Summarizing is
-safe; reading a summary as the worst element is not.  It holds only while one
-assignment can make the summary the worst element for every aggregate in a
-solve, and two sums over paired lists whose maxima sit at different indices
-break that:
+Where it is still weaker than Part I, or reads it loosely:
+
+- **Covering is by length**: two lists of one length that one loop covers land
+  in one class (an open item; renaming more is the safe direction).
+- **A `while` loop** has no binder, and its phis are never joined: they keep
+  their seeds alone.
+- **A loop's phi is also its value after the loop**, read there as varying with
+  the loop (an open item).
+
+### The soundness bugs fixed
+
+Both were present since v0.2.4, both were found by reading the rules against
+Part I, and neither changed a corpus output.
+
+**An aggregate's upper bound on the summary** (Phase 4).  Summarizing is safe;
+reading a summary as the worst element is not, once two aggregates over paired
+lists have their maxima at different indices:
 
 ```python
 @fp.fpy(ctx=fp.REAL)
@@ -1132,170 +1144,127 @@ def f(xs):                                  # xs: list[FP32], length 2
     return p + p + r
 ```
 
-At `xs = [2^60, 2^-60]`, `s1` and `s2` are both about `2^60` and `p` about
-`2^120`.  The store bounds `msb(p)` at 3, and format inference materializes it:
-`p + p` is inferred below `2^5` and the rounding below `2^4`, neither of which
-holds the value (`representable_in` is false).  The upper-only discipline does
-not save it, since the product adds two terms whose worst elements differ.  A
-single aggregate beside pointwise queries on its own list should not be broken
-this way, since the maximum is free to put the representative at the worst
-element -- an argument, not a test.  The fix is the expanded witness of
-Part I, section 4.
+At `xs = [2^60, 2^-60]`, `p` is about `2^120`; the store bounded `msb(p)` at 3,
+and the formats of `p + p` and the rounding excluded the value.
+
+**A loop's joins read pointwise** (Phase 5).  A phi is the iteration before's
+value, and an element a partial write left is its writer's, but both were
+joined at the index they are read at:
+
+```python
+acc = 2 ** -200
+for j in range(len(xs)):
+    prev = acc                    # y from the iteration before
+    y = xs[j] * 2
+    with fp.MPFixedContext(fp.logb(y) - 10, fp.RM.RTZ):
+        out[j] = fp.round(prev)   # inferred at pmax=10
+    acc = y
+```
+
+At `xs = [(2^24 - 1) * 2^76, 1, 1, 1]`, `out[1]` is not representable in the
+inferred format.  The partial write's case was unsound in the store alone:
+`out[n - 1 - j] = 2 * xs[j]` put `out[i]` within `2^2` of `xs[i]`.
 
 ### The index-space mechanism
 
-How layer 2's correspondence and signatures replace the depth proxy in
-`infer.py`; Part I's [Layer 2](#layer-2-pointwise-relations) is the semantics.
+How layer 2's correspondence and signatures are recorded; Part I's
+[Layer 2](#layer-2-pointwise-relations) is the semantics.
 
-#### Today: the depth proxy
+#### Why identity, not depth
 
-A list contributes one *element summary* to the store: variables that stand
-for an arbitrary element, universally quantified over its index.  Three
-places need to know whether a variable varies with some index:
-
-| consumer | question | today |
-|---|---|---|
-| `_instance` (a part of a list: `xs[0]`, `xs[k + 1]`, a gather) | which variables does the part rename? | every variable in `_elt_vars` |
-| `_elt_lsb` | is a list's grid uniform, or does it move with the list's index? | `_term_level(lsb) > _elt_depth` |
-| `_grid_ge` | what a grid bound inherits from the terms bounding it | the deepest `_term_level` |
-
-`_elt_vars` is one global set, every variable minted inside any loop or
-comprehension, or a summary.  `_term_level` is a loop *depth*: `_var_level`
-(the depth a variable is minted at) and `_anchor_level` (the depth of what
-bounds it; a list summary sits one deeper than its list).
-
-Depth stands in for identity, and two different index spaces at one depth
-are conflated:
+The implementation once read correspondence off loop depth, and two index
+spaces at one depth were conflated:
 
 ```python
-for j in range(2):                        # depth 1: j
-    es = [fp.logb(x) for x in xs]         # es, xs summaries: depth 1, xs's index
+for j in range(2):                        # j
+    es = [fp.logb(x) for x in xs]         # es, xs: xs's index
     t = xs[0]                             # a part of xs
-    e = max(es)                           # depth 1: varies with j, not xs's index
+    e = max(es)                           # varies with j, not xs's index
     with fp.MPFixedContext(e - 12, fp.RM.RTZ):
         out[j] = fp.round(t)
 ```
 
-Instantiating `{0}` of `xs` renames everything in `_elt_vars`, `e`
-included, so the envelope `es_i <= e` reaches the part as `es@0 <= e@0` and
-says nothing about `e`.  Renaming by depth instead ("at least as deep as the
-list's summary") fails the other way: `e` and `xs`'s summary are both at
-depth 1.  The precision is 288 where 12 is right.  The mmasim generator's tree
-before CDNA3's separate join is this shape.
+A copy of `xs` at `{0}` must rename `xs`'s summary and keep `e`, but both sat
+at depth 1; renaming by depth gave a precision of 288 where 12 is right
+(`TestAnElementReadInsideAnOuterLoop`).  The mmasim generator's tree before
+CDNA3's separate join is this shape.
 
-#### What an index space is
+#### Keys and classes
 
-Covering is by length: `_covers` lets any `range(n)` loop read every list of
-length `n` through the list's own summary variables, and two lists are paired
-exactly when one loop body reads both.  So the identity is not a loop but the
-class covering builds:
-
-- every list definition has an **element space**;
-- every binder (a `for`, a comprehension clause) has an **index space**;
-- a binder that covers a list, or iterates it directly, *unifies* its index
-  space with the list's element space (union-find);
-- a list a binder builds -- a comprehension, an `fp.empty` filled by a covering
-  loop -- has its element space unified with that binder's.
-
-`es = [logb(x) for x in xs]` thus puts `es`, `xs` and the comprehension in one
-class, which is the pairing the summaries already rely on.  `j`'s loop covers
-nothing here, so it is a class of its own.
+- A **binder** -- a `for`, a comprehension clause -- is
+  `('binder', id(walk), id(node), clause)`; a list's **element space** is
+  `('elements', id(walk), id(list))`.  Keys are per walk, so two calls to one
+  function keep theirs apart.
+- A binder **corresponds** with a list it covers or iterates, and a list a
+  binder builds with that binder: `IndexSpaces.unify`.  It is recorded at
+  `_bind_elt`, covering reads and writes (`_indexed_at`), a comprehension and
+  its clauses, list assignments, branch and loop phis, a list parameter's seed
+  against the caller's spaces (`_corresponds`), and a call's list result.
+- Covering stays by length (`_covers`); correspondence only names the claim.
 
 #### What a variable varies over
 
-Each variable carries a set of classes, `spaces(v)`:
+`IndexSpaces.signature(v)` is the classes of `v`'s keys:
 
-- **minted** inside binders `B1 .. Bn`: their classes;
-- a list's **summary**: its element space, plus wherever the list itself
-  sits;
-- a **grid** bounded below by terms (`_grid_ge`, the `_anchor_level` role):
-  the union of theirs, except that an lsb's own bound does not add its
-  list's space -- the exception `_moves_at` already makes.  Other
-  constraints, a `max`'s among them, propagate nothing, as today;
-- a callee's, called from inside binders: the callee's plus the call site's
-  -- `_raise_anchor(i, _elt_depth)` today.
+- **minted**: the binders around the definition's site (`_def_binders`: none
+  for a parameter; a loop's own for its target and phis; a comprehension's
+  clauses for its targets), whenever it is first read;
+- **bounded**: a list summary's element space (`_mark_elt`), and a grid's
+  bounds (`_grid_ge`), except that an lsb's own bound adds only what bounds it
+  (`_varies`);
+- **copied**: a copy's index-set binders, and the original's keys outside the
+  moved classes (`IndexSpaces.copy`).
 
-An aggregate over a list -- `max`, `min`, `sum` -- is minted *outside* the
-binder that built the list, so it does not vary over the list's space: `e`
-above is `{j}`.  No rule removes a space; it is never added.
+An aggregate over a list is minted outside the binder that built the list, so
+it does not vary over the list's space: `e` above varies with `j` alone.
 
 #### The consumers
 
-- `_instance` for a part of a list in class `S` renames exactly the variables
-  with `S` in their spaces.  `e` keeps its name, and the envelope reaches the
-  part as `es@0 <= e`.
-- `_elt_lsb` keeps a summary's grid when the list's own class is not among the
-  grid bound's spaces: uniform over the list's index.
-- `_grid_ge` unions spaces instead of taking a maximum depth.
+- `_copy` and `_replay` rename exactly the variables whose signature meets the
+  moved classes (`_Varying`), and the store replays every constraint naming
+  one, sharing the rest -- at the copy, and again once the walk ends.
+- `_elt_lsb` keeps a list's grid only where it varies over nothing outside the
+  binders around the walk: uniform over the list's index.
+- `_grid_ge` unions what its bounds vary over.
 
-`_elt_vars` becomes "has a non-empty set", and the depth fields go.
+### Measurements
 
-#### What does not change
-
-- Covering stays by length, and what it claims stays the same; this only
-  gives the claim a name.
-- The store, its constraints, and every operator rule.
-- Parts keep their keys, so `es` and `prods` over one range still share a
-  renaming.
-
-### Measurements, and the design they settle
-
-Measured on the mmasim corpus (60 catalog designs and 16 remixes compiled to
-Triton, 62 designs to C++), without changing the analysis:
+On the mmasim corpus (60 catalog designs and 16 remixes compiled to Triton, 62
+designs to C++):
 
 - **No relation over a list of symbolic length is needed.**  With those
-  relations disabled (`_bind_elt` and `_instance` declining a list whose
-  length is unknown), all 76 kernels and all 62 C++ sources are byte for byte
+  relations disabled, all 76 kernels and all 62 C++ sources are byte for byte
   the same.
 - **Expanding every static list and loop costs too much.**  Constraints grow
-  10x (C++, median; 12.7x worst) and 4.1x (Triton), queries 12x and 5x, and
-  the solver's corpus time an estimated 51 s to 300 s (C++) and 73 s to 220 s
-  (Triton).  Rejected.
-- **Unrolling only static loops that carry a real value is cheap.**  The C++
-  solver time goes from 50 s to about 79 s (one design 3.4x), Triton's is
-  unchanged: nearly every such loop is the symbolic one over instructions.
-
-So the design is:
-
-1. layer-1 summaries, read as any element, with aggregates bounded only through
-   envelopes and expanded witnesses;
-2. layer-2 pointwise relations, only between lists whose correspondence the
-   program states, with signatures by correspondence rather than depth;
-3. static loops carrying a real value unrolled, every other loop one generic
-   iteration.
-
-Summaries are what keep the solver's time where it is; signatures are what keep
-them sound.  Parts, constant and affine reads, and witnesses are all one
-operation, an expanded copy at a point.
+  10x (C++, median; 12.7x worst) and 4.1x (Triton), and the solver's corpus
+  time an estimated 51 s to 300 s (C++) and 73 s to 220 s (Triton).  Rejected.
+- **Unrolling static loops that carry a real value is not enough** (Phase 6):
+  CDNA3's chain of FMAs needs a sum's bound, which no per-add chain reaches,
+  and the copies cost minutes a design.  Dropped.
+- **What soundness cost**: no output changed across all 138 (62 C++ sources,
+  60 catalog kernels, 16 remixes) from Phase 1 to Phase 5; the C++ corpus
+  went from 44 s to 49 s (Phase 4, witnesses) to 72 s (Phase 5, loop joins,
+  about 480k replayed constraints).
 
 ### What is left
 
-`fused_sum` reaches `F + 2`; see [The mmasim corpus](#the-mmasim-corpus) for
-where each design stops.
-
-Index-set instantiation covers a constant index (`range(k, k + 1)`) and an
-inline `a + s * k`, and replays an *envelope* -- `max(xs) >= x_i`, which holds
-at every index -- along with the per-element constraints, at the read and
-again once the walk ends, so a `max` stated after the read still reaches it.
-A rounding to a float format keeps or carries its operand's binade, as one to
-a fixed-point format does.
-
-Unexercised, and so unproven:
-
-- **Coverage.** A partial write claims nothing about elements no write
-  reaches, which is sound only because reading one is undefined. A language
-  that defined `empty`'s contents would need the tiling proof after all.
-- **The corpus is the only real net.** `_vacuous` fires 127 times compiling
-  the 16 designs and twice across the whole 5028-test unit suite, and
-  `compile.py` is in no test target and not in the `Makefile` -- it is a
-  tracker, as it says. The path that takes the corpus from 3/16 to 14/16 is
-  therefore covered almost entirely by a script nobody runs automatically,
-  which is how the unsoundness above survived three audits.
+- **CDNA3's chain of FMAs** stays refused: its exit needs `e_max + 4`, and
+  per-add rules give `e_max + 30`.  An open item.
+- **Replay cost.**  A copy replays every constraint naming a moving variable,
+  most of a loop body for a loop witness.  An open item.
+- **Coverage.**  A partial write claims nothing about elements no write
+  reaches, which is sound only because reading one is undefined.  A language
+  that defined `empty`'s contents would need a tiling proof.
+- **The corpus is the only real net.**  `compile.py` is in no test target; it
+  is a tracker, as it says.  The unit tests pin each fixed bug, but the path
+  that takes the corpus from 3/16 to 14/16 is covered almost entirely by a
+  script nobody runs automatically, which is how the bugs of Phases 4 and 5
+  survived three audits.
 
 ## Part IV: implementation plan
 
 Implementation plan.  The design is settled (Part I, and Part III's
-[Measurements, and the design they settle](#measurements-and-the-design-they-settle));
+[Measurements](#measurements));
 what follows is the phase breakdown, one phase per commit.
 
 ### Working policy
@@ -1314,14 +1283,14 @@ what follows is the phase breakdown, one phase per commit.
 
 ### Context
 
-`fpy2/analysis/digit_bound/infer.py` departs from Part I in four places
-([Where the implementation departs](#where-the-implementation-departs)): index
+Before the phases, `fpy2/analysis/digit_bound/infer.py` departed from Part I
+in four places (Part III records where it stands now): index
 correspondence read off loop depth, aggregates bounded on the summary (unsound
 since v0.2.4), static loops walked once, and copies renaming every per-element
 variable.  Three strict xfails in `tests/unit/analysis/test_digit_bound.py` pin
 the first two.  The phases fix them in the order the dependencies force.
-Phase 4's audit turned up a fifth, the joins of the last row of that table,
-which Phase 5 fixes before the unrolling.
+Phase 4's audit turned up a fifth, a loop's joins read pointwise, which
+Phase 5 fixes.
 
 **Why index spaces come before the soundness fix.**  A witness is a copy, and a
 copy made with today's renaming renames every per-element variable -- including
@@ -1440,8 +1409,7 @@ C++ corpus 44 s to 49 s.
 
 #### Phase 5 - Joins at another iteration
 
-**Done.**  A soundness phase, found by Phase 4's audit; the unrolling moves to
-Phase 6.  The pointwise reading of two joins in `_visit_for`, both present since
+**Done.**  A soundness phase, found by Phase 4's audit.  The pointwise reading of two joins in `_visit_for`, both present since
 v0.2.4:
 
 | join | stated as | true of |
@@ -1480,36 +1448,51 @@ class -- most unrelated to the carried value; see the open item.
 
 #### Phase 6 - Unroll static loops that carry a real value
 
-- `_visit_for` walks the body once per iteration where the count is static
-  (`_len_of(iterable)`) and a loop phi carries a `RealType` value, under a cap;
-  each iteration's definitions get terms of their own, and the carried value
-  enters iteration `k` as iteration `k - 1`'s.  Past the cap, or with a
-  symbolic count, the loop stays one generic iteration.
+**Dropped.**  Built and measured, then reverted (the patch is not kept in the
+tree).  It unrolled without re-walking: iteration `k` was a copy of the walked
+iteration at `('iter', id(loop), k)`, each carried phi at `k` bracketed by the
+body at `k - 1` (the pre-loop value at `0`), and `by_def[phi]` replaced after
+the loop by the last iteration's body, so uses past the loop read the exit
+value rather than the phi.  That settled the per-iteration scope without a
+second walk.  Two findings ended it:
 
-Separate because it is the only phase that changes how much the solver is
-asked, so its cost is measured on its own.
-
-Tests: a chain of seven rounded adds bounded relative to its operands' `max`;
-CDNA3's chain of FMAs before a separate join compiling; the C++ corpus's
-digit-bound solver time against the estimate (50 s to about 79 s).
-
-    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound.py
-    cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
-    cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py
+- **Not enough.**  A seven-add FP32 chain went from 296 bits to 34, but
+  CDNA3's chain of FMAs still refuses: its exit came to `e_max + 30`, from
+  `e_max + 394`, where `(t216 + t207)` needs about `e_max + 4` to fit.  Each
+  step adds 4 -- the add, and a carry at each of an `RTO` and two `RNE`
+  roundings, all sound (`RTO` carries below the grid's last place).  A
+  max-plus chain of seven adds grows by at least seven; `e_max + 4` is a fact
+  about the sum, `|acc| < 8 * 2**(e_max + 1)`, not about iterations.
+- **Not cheap.**  Each iteration's copy replays every constraint varying with
+  the loop, and nested copies multiply: a CDNA3 design went from 21 s to past
+  two minutes, workers at 5.7 GB.
 
 #### Phase 7 - Corpus, sweep and docs
 
-- `examples/mmasim/tests/test_triton.py`: CDNA3's tree and chain of FMAs as
-  agreeing remixes.
-- Rerun the sweep; CDNA3's two `sum` points measured, leaving the exact sums
-  as the only refusals.
+**Done.**
+
+- `examples/mmasim/tests/test_triton.py`: `cdna3-tree` agrees; `cdna3-fma`
+  is pinned refused (`StorageSelectionError` now accepted beside
+  `TritonEmitError`, as that is how this gap surfaces); `hopper-bf16-f8`, below.
+- **The sweep, compiled rather than run** (each point compiled and launched
+  once, no model): 182 of 188 points compile, 6 refused -- the 5 exact sums
+  and CDNA3's chain of FMAs (the open item on a chain of rounded adds).
+  Oct 2's run refused CDNA3's tree too.
+- **A backend regression it found**, since #337 and unrelated to this branch:
+  Hopper's and Ampere's BF16 at `F` 8-16 generated, then failed Triton's
+  compile, the loop-carried accumulator turning `fp32` to `fp64`.  An exact
+  round (`_emit_round`) returned its operand in the operand's storage; it now
+  casts into the round's own, losslessly (`hopper-bf16-f8` agrees).  The
+  serve kernel cache keys on `generator/`'s sources only, so a compiler fix
+  does not invalidate it: today's entries were cleared by hand.
 - Part III rewritten to the implementation as it stands; `backend-triton.md`
   and `mmasim-serving.md`'s records updated.
 
-Separate because it is the mmasim side, which rebases with the stuck PR.
+Measured: all 138 earlier corpus outputs byte for byte Phase 5's; the Triton
+emitter's unit tests, `test_triton.py` and `test_generator.py` pass.
 
     cd examples/mmasim && ../../.venv/bin/pytest -q -n 8 tests/test_triton.py tests/test_generator.py
-    cd examples/mmasim && ../../.venv/bin/python serve/sweep.py
+    .venv/bin/pytest -q -n 8 tests/unit/backend/triton
 
 ### After the last phase
 
@@ -1568,15 +1551,10 @@ with a counterexample.
 `_moves_at` counts only what bounds a list's own grid, not where it was minted.
 **Provisional:** carried over as is in Phase 3; Phase 2's tests pin it first.
 
-#### How are an iteration's terms kept apart when a loop is unrolled?
+#### How does a chain of rounded adds get the bound of a sum?
 
-Terms are per `Definition`, and a body's definitions are the same objects every
-iteration.  Phase 6 needs a per-iteration scope for them -- a saved and
-restored `by_def` per iteration, or terms keyed by `(Definition, iteration)`.
-**Open:** settle it at the start of Phase 6.
-
-#### What is the unroll cap?
-
-Large enough for the corpus's chains (seven iterations), small enough to bound
-the solver.  **Provisional:** 64, matching the widest instruction; reopen on
-Phase 6's measurement.
+CDNA3's chain of FMAs needs `msb(acc) <= e_max + 4`; per-step rules give
+`e_max + 4 * steps` even unrolled (Phase 6).  A rule reading
+`acc = round(acc + y)` in a loop as a sum with rounding -- `ceil(log2 n)` plus
+a carry, as `Sum` gets -- would reach it, but it is a new transfer rule with
+its own soundness argument.  **Open:** not planned; the design stays refused.

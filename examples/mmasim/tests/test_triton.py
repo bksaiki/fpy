@@ -95,11 +95,17 @@ def _remixes() -> 'dict[str, Design]':
         'cdna3-rne-7': replace(CATALOG['amd.cdna3.bf16'], rho=fp.IEEEContext(8, 15, fp.RM.RNE)),
         'hopper-tree': replace(hopper, sum='tree'),
         'ampere-tree': replace(CATALOG['nv.ampere.bf16.f32'], sum='tree'),
+        'cdna3-tree': replace(CATALOG['amd.cdna3.bf16'], sum='tree'),
+        # an exact round to `rho`, its operand held wider, carried round `k`
+        'hopper-bf16-f8': replace(CATALOG['nv.hopper.bf16.f32'], F=8),
+        'cdna3-fma': replace(CATALOG['amd.cdna3.bf16'], sum='fma'),
     }
 
 
 REFUSED = {
     'exact-e8m13': '`sum` is exact, and no storage holds',
+    # the chain's exit is bounded only per add, not as a sum
+    'cdna3-fma': 'no storage format contains',
 }
 """The remixes the backend refuses, by error text."""
 
@@ -111,9 +117,10 @@ def test_a_backend_gap_is_refused(remix: str) -> None:
     import compile_triton as ct
     from generator import build
 
+    from fpy2.analysis.storage_infer import StorageSelectionError
     from fpy2.backend.triton.emitter import TritonEmitError
 
-    with pytest.raises(TritonEmitError, match=REFUSED[remix]):
+    with pytest.raises((TritonEmitError, StorageSelectionError), match=REFUSED[remix]):
         ct.compile_matmul(lambda: build(_remixes()[remix]), None)
 
 
