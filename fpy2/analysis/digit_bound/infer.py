@@ -74,7 +74,10 @@ class _Varying:
     """The variables varying over one of *elements*' spaces, as a membership
     test: a replay asks it only of the variables it meets."""
 
-    def __init__(self, spaces: 'IndexSpaces', elements: set[Key]):
+    spaces: IndexSpaces
+    classes: set[Key]
+
+    def __init__(self, spaces: IndexSpaces, elements: set[Key]):
         self.spaces = spaces
         self.classes = {spaces.find(k) for k in elements}
 
@@ -84,13 +87,14 @@ class _Varying:
 
 @dataclass
 class _IndexSet:
-    """One renaming of the per-element variables, for one range."""
+    """One copy of some variables at another index: a part, an element read,
+    or a witness."""
 
     tag: str
     binders: tuple[Key, ...] = ()
-    """The binders enclosing the read, which a copy varies over."""
+    """The binders the copy varies with."""
     elements: set[Key] = field(default_factory=set)
-    """The element spaces of the lists taken at this index set."""
+    """The spaces the copy moves over."""
     subst: dict[int, Term] = field(default_factory=dict)
     mark: int = 0
     minted: int = 0

@@ -743,8 +743,6 @@ class TestAnAggregateHasItsOwnWorstElement:
     `[2**60, 2**-60]` both are about `2**60`, and their product about
     `2**120`, which bounding both on the summary put at `2**3`."""
 
-    XS = [fp.FP32.round(2.0 ** 60), fp.FP32.round(2.0 ** -60)]
-
     def test_the_store_reaches_the_product(self):
         _, b = _analyze(_paired_sums, [ListType(RealType(fp.FP32), 2)])
         e, t = _term(b, '(s1 * s2)')

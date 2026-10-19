@@ -548,9 +548,9 @@ Two things this deliberately is not:
 Constraints are emitted while walking the AST; precisions are queried at rounding
 sites. That split is the architecture regardless of what answers the query, and
 it is what keeps the solver out of `FormatInfer`'s widening loop — solver
-answers are not a lattice. Known loop counts unroll (`ArraySizeInfer` supplies
-them here); unknown counts would need invariant inference, which a solver alone
-does not provide.
+answers are not a lattice. Every loop is one generic iteration (Part III);
+unknown counts would need invariant inference, which a solver alone does not
+provide.
 
 #### Feeding back into format inference
 
