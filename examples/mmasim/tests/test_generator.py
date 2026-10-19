@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from compile import DESIGNS, _fmt, _length, _row, _same
 from generator import Design, build, invalid
 from generator.catalog import CATALOG
+from models.nv import RZ_FP32 as RZ
 
 import fpy2 as fp
 
@@ -106,9 +107,6 @@ def _combinations() -> list[Design]:
                             out.append(Design(fp.MX_E4M3, fp.MX_E4M3, fp.FP32, 32, RZ, 32, F=25,
                                               scales=fp.MX_E8M0, G=G, **stages))
     return out
-
-
-RZ = fp.IEEEContext(8, 32, fp.RM.RTZ)
 
 
 @pytest.mark.parametrize('design', _combinations(), ids=lambda d: (

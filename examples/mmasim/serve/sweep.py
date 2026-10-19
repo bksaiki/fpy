@@ -1,16 +1,12 @@
 """
-A sweep of hardware design parameters (`docs/todos/mmasim-serving.md`,
-Stage 3): around each anchor design, one parameter at a time over its values,
-every other held at the anchor's; each point's local metrics on cached
-activations; one table.
+A sweep of MMA design parameters, one at a time around each anchor.
 
-Every point is a design (`generator`); one the compiler refuses is a row with
-its reason.  Every point is registered (this file is `local.py`'s
-`--register`), compiled in parallel, and the compiled ones of each scheme run
-in one `local.py` pass.  The table, `<results>/sweep/sweep.csv`: a row per
-point -- its anchor, the parameter varied and its value, every parameter, its
-status, and the design's metrics against the quantized operands' exact
-product -- and beside it what it came from (`sweep.provenance.json`).
+Each point is a `generator` design: an anchor with one parameter changed.
+Points are registered through `local.py --register`, compiled in parallel,
+and run one `local.py` pass per scheme; a refused point is a row with its
+reason.  Writes `<results>/sweep/sweep.csv` (a row per point: its
+parameters, status and metrics against the quantized operands' exact
+product) and `sweep.provenance.json`.
 
     python serve/sweep.py                          # from examples/mmasim
     python serve/sweep.py --anchors nv.hopper.e4m3.f32 --params F --tokens 512
@@ -31,7 +27,7 @@ from typing import Any
 sys.path[:0] = [str(Path(__file__).resolve().parent), str(Path(__file__).resolve().parents[1])]
 
 import generator
-from core import cli, kernels, outputs
+from core import cli, kernels, outputs, swap
 from generator.catalog import CATALOG
 
 import fpy2 as fp
@@ -104,7 +100,7 @@ def points(anchors: list[str], params: list[str]) -> list[Point]:
             if p in _UNUSED and _UNUSED[p](base):
                 continue
             read, values = PARAMS[p]
-            mine = [(v, change) for v, change in values]
+            mine = list(values)
             if all(v != read(base) for v, _ in mine):
                 mine.append((read(base), lambda d: d))
                 if all(isinstance(v, int) and not isinstance(v, bool) for v, _ in mine):
@@ -126,7 +122,7 @@ def main(argv: list[str]) -> int:
                     help='anchor designs (default: all)')
     ap.add_argument('--params', nargs='*', choices=list(PARAMS), default=list(PARAMS),
                     help='parameters to vary (default: all)')
-    ap.add_argument('--model', default='Qwen/Qwen3-0.6B', help='the model (default: %(default)s)')
+    ap.add_argument('--model', default=swap.MODEL, help='the model (default: %(default)s)')
     ap.add_argument('--tokens', type=int, default=2048, help='rows captured (default: %(default)s)')
     ap.add_argument('--results', type=Path, default=cli.RESULTS,
                     help="the outputs' root (default: %(default)s)")
@@ -136,26 +132,21 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     pts = points(args.anchors, args.params)
-    status = {d: ('ok', '') for d in dict.fromkeys(p.design for p in pts)}
+    names = {d: generator.name(d) for d in dict.fromkeys(p.design for p in pts)}
     if args.list:
         for p in pts:
-            print(f'{p.anchor:24} {p.param:9} {p.value!s:9} {status[p.design][0]:10} '
-                  f'{status[p.design][1]}')
-        print(f'{len(pts)} points, {len(status)} designs')
+            print(f'{p.anchor:24} {p.param:9} {p.value!s:9}')
+        print(f'{len(pts)} points, {len(names)} designs')
         return 0
 
     register()
-    kernels.CACHE = args.results / 'cache' / 'kernels'
-    names = {d: generator.name(d) for d, (s, _) in status.items() if s == 'ok'}
+    kernels.CACHE = cli.cache(args, 'kernels')
     refused = kernels.compile_designs(list(names.values()), args.jobs)
-    for d, n in names.items():
-        if n in refused:
-            status[d] = ('refused', refused[n])
     out = args.results / 'sweep'
     metrics: dict[str, dict[str, str]] = {}
     for scheme in sorted({ANCHORS[p.anchor] for p in pts}):
         run = [names[d] for d in dict.fromkeys(p.design for p in pts if ANCHORS[p.anchor] == scheme)
-               if status[d][0] == 'ok']
+               if names[d] not in refused]
         if not run:
             continue
         json_out = out / f'local-{scheme}.json'
@@ -174,19 +165,20 @@ def main(argv: list[str]) -> int:
     for p in pts:
         about = generator.about(p.design)
         about.pop('exact')
-        s, why = status[p.design]
-        m = metrics.get(names.get(p.design, ''), {})
+        n = names[p.design]
+        m = metrics.get(n, {})
         rows.append({'anchor': p.anchor, 'scheme': ANCHORS[p.anchor], 'param': p.param,
-                     'value': p.value, 'is_anchor': p.is_anchor, 'status': s, 'reason': why,
-                     'design': names.get(p.design, ''), **about,
+                     'value': p.value, 'is_anchor': p.is_anchor,
+                     'status': 'refused' if n in refused else 'ok', 'reason': refused.get(n, ''),
+                     'design': n, **about,
                      **{k: v for k, v in m.items()
                         if k not in ('model', 'reference', 'design', 'group')}})
     outputs.write_csv(out / 'sweep.csv', rows)
     outputs.write_json(out / 'sweep.provenance.json', {
         'argv': sys.argv, **outputs.commit(),
         'settings': {k: v if isinstance(v, (int, list)) else str(v) for k, v in vars(args).items()}})
-    print(f'{len(rows)} points, {sum(s == "ok" for s, _ in status.values())} designs measured, '
-          f'{sum(s == "refused" for s, _ in status.values())} refused: {out / "sweep.csv"}')
+    print(f'{len(rows)} points, {len(names) - len(refused)} designs measured, '
+          f'{len(refused)} refused: {out / "sweep.csv"}')
     return 0
 
 

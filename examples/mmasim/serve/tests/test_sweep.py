@@ -45,18 +45,12 @@ def test_a_parameter_the_anchor_does_not_read_is_not_swept() -> None:
     assert not [p for p in ALL if p.param == 'F2' and sweep.CATALOG[p.anchor].join != 'separate']
 
 
-@pytest.fixture
-def registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ('TILES', '_BUILDS', 'REGISTERED', '_PICKLED', '_KERNELS'):
-        monkeypatch.setattr(kernels, name, dict(getattr(kernels, name)))
-
-
 def test_every_point_is_a_design(registry: None) -> None:
     """None invalid; `register()` adds each, and again without a clash."""
     assert not [p for p in ALL if generator.invalid(p.design)]
     sweep.register()
     assert {generator.name(p.design) for p in ALL} <= set(kernels.TILES)
-    sweep.register()    # again, as a second `local.py --register` would: no clash
+    sweep.register()
 
 
 def test_a_figure_draws_from_the_table_alone(tmp_path: Path) -> None:

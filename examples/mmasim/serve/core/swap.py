@@ -32,10 +32,9 @@ BF16 = quant.SCHEMES['bf16']
 
 
 def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
-    """*scheme*'s runs: R0, its exact run (to nearest and toward zero), and
+    """*scheme*'s runs: R0, its exact runs (`-exact`, `-rtz`, `-rand`), and
     every design it applies to."""
-    exact = f'{scheme.name}-exact'
-    return ('fp32', exact, f'{exact}-rtz', f'{exact}-rand', *kernels.designs(scheme))
+    return ('fp32', *(f'{scheme.name}-exact{s}' for s in _EXACT), *kernels.designs(scheme))
 
 
 MODEL = 'Qwen/Qwen3-0.6B'
@@ -90,7 +89,7 @@ def _round(p: torch.Tensor, rounding: Rounding) -> torch.Tensor:
     if rounding == 'random-sign':
         g = _SIGNS.setdefault(f.device, torch.Generator(f.device).manual_seed(0))
         up = torch.rand(f.shape, device=f.device, generator=g) < 0.5
-        return torch.nextafter(f, torch.where(up, torch.inf, -torch.inf).to(f.device))
+        return torch.nextafter(f, torch.where(up, torch.inf, -torch.inf))
     return f
 
 
@@ -204,9 +203,8 @@ class Run:
         if self.mode == 'fp32' or id(w) in self.ignore:
             return F.linear(x, w)
         qa, qw = self.quantize(x, w), self.weight(w)
-        suffix = self.mode.removeprefix(f'{self.scheme.name}-exact')
-        if suffix != self.mode and suffix in _EXACT:
-            y = exact(qa, qw, _EXACT[suffix])
+        if (r := _EXACT.get(self.mode.removeprefix(f'{self.scheme.name}-exact'))) is not None:
+            y = exact(qa, qw, r)
         elif self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
             held = kernels.storage(self.mode)[1]
             y = gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held), self.combine)

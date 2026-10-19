@@ -10,12 +10,16 @@ import functools
 import math
 import os
 import sys
+from typing import TYPE_CHECKING
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fpy2.backend.triton import unavailable
+
+if TYPE_CHECKING:
+    from generator import Design
 
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
@@ -64,15 +68,8 @@ def test_all_negative_zeros_agree(name: str) -> None:
             assert math.copysign(1.0, got[i][j]) == math.copysign(1.0, want) and got[i][j] == want
 
 
-def _remixes():
-    """A design of each structure the catalog has, with what no model has:
-    NVIDIA's FP8 chain joined as CDNA3 joins, or flushing subnormals; a wider
-    tree of exact products; CDNA2's tree rounding toward zero; an exact sum of
-    FP8 rounded to E8M13; CDNA3's even-odd groups over NVIDIA's E4M3 at 13
-    bits; MX scales at 13 bits; groups of 32; an FMA rounding toward zero;
-    CDNA2's tree over 16; Hopper's FP8 and CDNA3's BF16 rounding to nearest
-    below FP32's precision; trees toward zero, of FP8 to E8M13 and of exact
-    BF16 products to FP32."""
+def _remixes() -> 'dict[str, Design]':
+    """Designs no model has, one or more per structure the catalog has."""
     from dataclasses import replace
 
     from generator import Design
@@ -104,8 +101,7 @@ def _remixes():
 REFUSED = {
     'exact-e8m13': '`sum` is exact, and no storage holds',
 }
-"""The remixes the backend refuses, and why: no storage for an exact sum of
-FP8 products and an FP32 accumulator (CDNA1's too)."""
+"""The remixes the backend refuses, by error text."""
 
 
 @pytest.mark.parametrize('remix', list(REFUSED))

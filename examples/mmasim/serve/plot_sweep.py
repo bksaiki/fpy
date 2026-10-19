@@ -1,9 +1,9 @@
 """
-The sweep's graphs from `sweep.py`'s table alone: for each local metric, a
-panel per parameter, how each anchor's design measures as that parameter
-varies and the rest hold.  A line per anchor (its colour and marker); its own
-value ringed; a point the compiler refused an x on the panel's floor.  A categorical parameter's points are not joined:
-its values have no order.  Writes `<results>/plots/sweep/<metric>.png`.
+The sweep's plots, from `sweep.py`'s table.
+
+Per metric, a panel per parameter and a line per anchor; the anchor's own
+value ringed, a refused point an x on the floor; categorical values unjoined.
+Writes `<results>/plots/sweep/<metric>.png`.
 
     python serve/plot_sweep.py                      # from examples/mmasim
     python serve/plot_sweep.py --metrics backward_normwise flips
@@ -25,8 +25,7 @@ from matplotlib import transforms
 RESULTS = Path('results')
 
 COLORS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4')
-"""The anchors' hues, in this order (the dataviz reference's categorical
-slots 1-5)."""
+"""The anchors' colours, in order."""
 MARKERS = ('o', 's', '^', 'D', 'v')
 INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
 
@@ -84,7 +83,7 @@ def panel(ax: plt.Axes, rows: list[dict], param: str, metric: str, anchors: list
         for r, x, y in zip(ok, xs, ys):
             if r['is_anchor'] == 'True':
                 ax.scatter(x, y, s=150, facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
-        # side by side, so the anchors' marks at one value do not hide each other
+        # offset each anchor's x so marks at one value don't overlap
         shift = transforms.offset_copy(ax.get_xaxis_transform(), fig=ax.figure, units='points',
                                        x=7 * (swept.index(a) - (len(swept) - 1) / 2))
         for r in pts:

@@ -214,18 +214,11 @@ def test_a_k_the_design_cannot_take_is_refused() -> None:
         kernels.linear(torch.zeros(1, k0).cuda(), torch.zeros(1, k0).cuda(), design, split_k=2)
 
 
-@pytest.fixture
-def registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The registries as they were, after the test."""
-    for name in ('TILES', '_BUILDS', 'REGISTERED', '_PICKLED', '_KERNELS'):
-        monkeypatch.setattr(kernels, name, dict(getattr(kernels, name)))
-
-
-@pytest.mark.parametrize('remix', ['hopper-f17', 'cdna2-tree-16'])
-def test_a_generated_design_registers_and_agrees(remix: str, registry: None) -> None:
-    """Registered from the generator, compiled in a worker process (its build
-    pickles), it runs through `kernels.linear` bit for bit (any NaN as one)
-    against the generator's function; its name is its parameters'."""
+def test_generated_designs_register_and_agree(registry: None) -> None:
+    """Registered from the generator, compiled together in worker processes
+    (their builds pickle), each runs through `kernels.linear` bit for bit (any
+    NaN as one) against the generator's function; its name is its
+    parameters'."""
     from dataclasses import replace
 
     import generator
@@ -233,21 +226,22 @@ def test_a_generated_design_registers_and_agrees(remix: str, registry: None) -> 
 
     import fpy2 as fp
 
-    d = {'hopper-f17': replace(CATALOG['nv.hopper.e4m3.f32'], F=17,
-                               rho=fp.IEEEContext(8, 9 + 17, fp.RM.RTZ)),
-         'cdna2-tree-16': replace(CATALOG['amd.cdna2.bf16_1k'], L=16, k=32)}[remix]
-    name = kernels.register_design(d)
-    assert name == generator.name(d) and kernels.REGISTERED[name] == generator.about(d)
-    kernels.precompile([name], jobs=2)
-    f, arg_types = generator.build(d)
+    remixes = [replace(CATALOG['nv.hopper.e4m3.f32'], F=17, rho=fp.IEEEContext(8, 9 + 17, fp.RM.RTZ)),
+               replace(CATALOG['amd.cdna2.bf16_1k'], L=16, k=32)]
+    names = [kernels.register_design(d) for d in remixes]
+    for d, name in zip(remixes, names):
+        assert name == generator.name(d) and kernels.REGISTERED[name] == generator.about(d)
+    kernels.precompile(names, jobs=2)
     rng = random.Random(0)
-    m, n, k = 2, 3, 2 * d.k
-    x = _draw(arg_types[0], rng, m, k)
-    w = _draw(arg_types[1], rng, n, k)
-    got = kernels.linear(x.cuda(), w.cuda(), name).cpu()
-    for i in range(m):
-        for j in range(n):
-            acc = 0.0
-            for t in range(0, k, d.k):
-                acc = float(f(x[i, t:t + d.k].tolist(), w[j, t:t + d.k].tolist(), acc))
-            assert _bits(got[i, j].item()) == _bits(acc), (i, j, got[i, j].item(), acc)
+    for d, name in zip(remixes, names):
+        f, arg_types = generator.build(d)
+        m, n, k = 2, 3, 2 * d.k
+        x = _draw(arg_types[0], rng, m, k)
+        w = _draw(arg_types[1], rng, n, k)
+        got = kernels.linear(x.cuda(), w.cuda(), name).cpu()
+        for i in range(m):
+            for j in range(n):
+                acc = 0.0
+                for t in range(0, k, d.k):
+                    acc = float(f(x[i, t:t + d.k].tolist(), w[j, t:t + d.k].tolist(), acc))
+                assert _bits(got[i, j].item()) == _bits(acc), (name, i, j, got[i, j].item(), acc)

@@ -32,7 +32,7 @@ import fpy2
 from fpy2.backend.triton import KernelSource, launch
 from fpy2.backend.triton.launcher import _torch_dtype
 
-from . import quant
+from . import outputs, quant
 
 TILES: dict[str, tuple[int, int]] = {
     'nv.ampere.bf16.f32': (32, 1),
@@ -85,9 +85,8 @@ def register(name: str, build: Callable, block: int, block_m: int,
              about: dict[str, Any] | None = None) -> None:
     """Add a design, as `compile.DESIGNS` defines them (*build* returns the
     FPy function and its argument types), run at the tile `(block, block_m)`;
-    *about* describes it (its parameters) for the results.  Without *about*
-    its kernel is not kept on disk: its name alone does not say what it
-    computes."""
+    *about* (its parameters) describes it in results and keys its disk
+    cache, without which it is not cached on disk."""
     if name in TILES:
         raise ValueError(f'{name!r} is already a design')
     _BUILDS[name] = build
@@ -96,9 +95,8 @@ def register(name: str, build: Callable, block: int, block_m: int,
 
 
 def tile(d: generator.Design) -> tuple[int, int]:
-    """A generator design's tile `(block, block_m)`, by the catalog's fastest
-    of its kind: a tree's short instructions take tall tiles, a long scaled
-    one narrow ones."""
+    """*d*'s tile `(block, block_m)`, the catalog's fastest of its kind: tall
+    for a tree, narrower for `L` ≥ 64."""
     if d.sum == 'tree':
         return 16, 64
     return (16, 1) if d.L >= 64 else (32, 1)
@@ -176,24 +174,22 @@ def _kernel(design: str, k: int | None = None) -> KernelSource:
     """*design*'s kernel over any `k` (`None`), or fused over *k*; cached, in
     memory and in :data:`CACHE`."""
     if (design, k) not in _KERNELS and not _load(design, k):
-        build = _BUILDS[design]
-        _KERNELS[design, k] = (ct.compile_matmul(build, None)[0] if k is None
-                               else ct.compile_fused(build, k))
+        _KERNELS[design, k] = _compile(_BUILDS[design], k)
         _store(design, k)
     return _KERNELS[design, k]
 
 
+def _compile(build: Callable, k: int | None) -> KernelSource:
+    return ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)
+
+
 @cache
 def _sources() -> str:
-    """A digest of every source a kernel depends on: FPy, the models, and the
-    compilers."""
+    """A digest of every source a kernel depends on: FPy, the models, the
+    generator, the compilers."""
     here = Path(__file__).resolve().parents[2]
-    files = sorted([*Path(fpy2.__file__).parent.rglob('*.py'), *(here / 'models').rglob('*.py'),
-                    *(here / 'generator').rglob('*.py'), here / 'compile.py', here / 'compile_triton.py'])
-    digest = hashlib.sha256()
-    for f in files:
-        digest.update(f.read_bytes())
-    return digest.hexdigest()
+    return outputs.sources(Path(fpy2.__file__).parent, here / 'models', here / 'generator',
+                           here / 'compile.py', here / 'compile_triton.py')
 
 
 def _path(design: str, k: int | None) -> Path | None:
@@ -217,10 +213,7 @@ def _store(design: str, k: int | None) -> None:
     """*design*'s kernel over *k* into :data:`CACHE`, whole or not at all."""
     path = _path(design, k)
     if path is not None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f'.{path.name}.tmp')
-        tmp.write_bytes(pickle.dumps(_KERNELS[design, k]))
-        os.replace(tmp, path)
+        outputs.replace(path, lambda f: pickle.dump(_KERNELS[design, k], f), binary=True)
 
 
 def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int] = ()) -> None:
@@ -229,48 +222,45 @@ def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int
     and :func:`register_design`'s; another :func:`register`ed one compiles
     here."""
     todo = [(d, k) for d in designs for k in (None, *ks) if (d, k) not in _KERNELS and not _load(d, k)]
-    named = [(d, k, _PICKLED.get(d)) for d, k in todo
-             if d in _PICKLED or _BUILDS[d] is dict(DESIGNS).get(d)]
-    jobs = min(len(named), jobs or os.cpu_count() or 1)
-    _KERNELS.update(zip([t[:2] for t in named], in_processes(_compile_in_worker, named, jobs)))
-    for d, k, _ in named:
-        _store(d, k)
+    _compile_all(todo, jobs)
     for t in todo:
-        _kernel(*t)
+        _kernel(*t)     # a refused one again, to raise its error
 
 
 def compile_designs(designs: Sequence[str], jobs: int | None = None) -> dict[str, str]:
     """Compile each of *designs* (its kernel over any `k`) not yet compiled,
-    in *jobs* processes as :func:`precompile` does, keeping the compiled in
-    :data:`CACHE`; the refused ones' errors, by design."""
-    todo = [d for d in designs if (d, None) not in _KERNELS and not _load(d, None)]
-    items = [(d, None, _PICKLED.get(d)) for d in todo]
-    jobs = min(len(items), jobs or os.cpu_count() or 1)
+    as :func:`precompile` does; the refused ones' errors, by design."""
+    todo = [(d, None) for d in designs if (d, None) not in _KERNELS and not _load(d, None)]
+    return {d: why for (d, _), why in _compile_all(todo, jobs).items()}
+
+
+def _compile_all(todo: Sequence[tuple[str, int | None]], jobs: int | None) -> dict[tuple[str, int | None], str]:
+    """Compile *todo*, in *jobs* processes where a worker can rebuild it (from
+    its pickled build or MMA-Sim name), else here, keeping the compiled in
+    :data:`CACHE`; the refused ones' errors."""
+    named = [(d, k, _PICKLED.get(d)) for d, k in todo
+             if d in _PICKLED or _BUILDS[d] is dict(DESIGNS).get(d)]
+    jobs = min(len(named), jobs or os.cpu_count() or 1)
+    done = dict(zip([t[:2] for t in named], in_processes(_compile_or_refuse, named, jobs)))
+    done.update({t: _compile_or_refuse((*t, _BUILDS[t[0]])) for t in todo if t not in done})
     refused = {}
-    for (d, _, _), (kernel, why) in zip(items, in_processes(_compile_or_refuse, items, jobs)):
+    for (d, k), (kernel, why) in done.items():
         if kernel is None:
-            refused[d] = why
+            refused[d, k] = why
         else:
-            _KERNELS[d, None] = kernel
-            _store(d, None)
+            _KERNELS[d, k] = kernel
+            _store(d, k)
     return refused
 
 
 def _compile_or_refuse(item: tuple[str, int | None, Callable | None]) -> tuple[KernelSource | None, str]:
-    """:func:`_compile_in_worker`'s kernel, or `None` and why it was refused."""
+    """A design's kernel, from its build, else (in a worker) by its MMA-Sim
+    name; or `None` and why it was refused."""
+    design, k, build = item
     try:
-        return _compile_in_worker(item), ''
+        return _compile(build or _BUILDS[design], k), ''
     except Exception as ex:  # noqa: BLE001 -- a refusal is a result
         return None, f'{type(ex).__name__}: {str(ex).splitlines()[0] if str(ex) else ""}'
-
-
-def _compile_in_worker(item: tuple[str, int | None, Callable | None]) -> KernelSource:
-    """A design's kernel in a worker process, from its pickled build, else by
-    its MMA-Sim name."""
-    design, k, build = item
-    if build is None:
-        return _kernel(design, k)
-    return ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)
 
 
 @cache

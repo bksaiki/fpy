@@ -183,6 +183,10 @@ def evaluate(
     return stats
 
 
+_SOURCES = outputs.sources(Path(__file__).resolve().parent / 'core', Path(__file__).resolve())
+"""What the activations depend on, for their cache's key."""
+
+
 def _digest(key: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -242,7 +246,8 @@ def main(argv: list[str]) -> int:
         transcripts = args.transcripts or cli.cache(args, 'mtbench', f'{name.replace("/", "--")}.json')
         key = {'model': name, 'scheme': args.scheme.name, 'source': about['source'],
                'workload': args.workload, 'tokens': args.tokens, 'seed': args.seed,
-               'transcripts': str(transcripts) if args.workload == 'mtbench' else None}
+               'transcripts': str(transcripts) if args.workload == 'mtbench' else None,
+               'sources': _SOURCES}
         cached = (args.acts or cli.cache(args, 'acts')) / f'acts-{_digest(key)}.pt'
         if cached.exists():
             acts = Activations(**torch.load(cached, weights_only=True))
@@ -255,10 +260,7 @@ def main(argv: list[str]) -> int:
                 seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name),
                                          transcripts)
             acts = capture(model, run, seqs, args.tokens, args.seed)
-            cached.parent.mkdir(parents=True, exist_ok=True)
-            tmp = cached.with_name(f'.{cached.name}.tmp')
-            torch.save(vars(acts), tmp)
-            tmp.replace(cached)
+            outputs.replace(cached, partial(torch.save, vars(acts)), binary=True)
 
         results: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
         total: dict[str, dict[str, dict[str, dict[str, float]]]] = {}

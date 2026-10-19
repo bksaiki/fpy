@@ -5,21 +5,19 @@ over every token.
 
 - `normwise`: normwise relative error `||Ŷ - Y||_F / ||Y||_F`;
 - `backward`: log2 of the componentwise backward error `|ŷ - y| / (|x|ᵀ|w|)`
-  per element (Oettli-Prager; Higham, ch. 7), its mean over the elements it
-  is not 0 for, its max, its 50th, 90th and 99th percentiles
-  (`backward_p50`, ...), and the share it is 0 for (`backward_exact`); and
-  normwise, `||ŷ - y||_F / |||x|ᵀ|w|||_F` (`backward_normwise`), in log2;
+  (Oettli-Prager; Higham, ch. 7) where it is not 0: mean, max, and
+  percentiles (`backward_p50`, `_p90`, `_p99`); the share where it is 0
+  (`backward_exact`); and normwise, log2 `||ŷ - y||_F / |||x|ᵀ|w|||_F`
+  (`backward_normwise`);
 - `ulp`: `log2(1 + |ŷ - y| / ulp(y))` per element in FP32 ("bits of error"),
   mean and max;
 - `rounded`: the fraction of elements equal to `fl(y)`, `y` rounded to FP32;
 - `bias`: mean error `(ŷ - y) / (|x|ᵀ|w|)`, the drift about zero;
 - `magnitude_bias`: mean error in magnitude, `sign(y) (ŷ - y) / (|x|ᵀ|w|)`,
   negative when errors lean toward zero;
-- `flips`: the share of elements whose code on the scheme's activation grid
-  differs between `ŷ` and `fl(y)`, each quantized as the next layer's input
-  would be (its own scales, over the output block's columns: whole rows for
-  these models; a scale a hair apart moves no code), over the blocks whose
-  columns are whole scaling blocks (NaN if none);
+- `flips`: the share of elements whose code differs between `ŷ` and
+  `fl(y)`, each quantized as the next layer's input (its own scales), over
+  blocks whose columns are whole scaling blocks (NaN if none);
 - `quantization`: normwise relative error of `Y` itself against the exact
   product `Y_0` of the unquantized inputs, the quantization's own error.
 
@@ -89,7 +87,8 @@ class Stats:
         n = max(self.n, 1)
         out = {
             'normwise': math.sqrt(self.err / self.ref) if self.ref else 0.0,
-            'backward': self.log_backward_err / max(self.backward_nonzero, 1),
+            'backward': (self.log_backward_err / self.backward_nonzero
+                         if self.backward_nonzero else -math.inf),
             'backward_max': self.log_backward_err_max,
             'backward_exact': 1 - self.backward_nonzero / n,
             **{f'backward_p{p}': _percentile(self.log_backward_err_hist, p) for p in PERCENTILES},
@@ -154,12 +153,12 @@ def _exact(metrics: Collection[str], a: torch.Tensor, wt: torch.Tensor,
         ex = torch.where(y == 0, -125, ex)
         ulp = torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149))
     scale = None if wa is None else a.abs() @ wa
+    grid = quant.quantize(y.float(), op).elements if op is not None and 'flips' in metrics else None
     return _Exact(y, scale, ulp, y.float() if 'rounded' in metrics else None,
                   float((y * y).sum()) if 'normwise' in metrics else 0.0,
                   torch.sign(y) if 'magnitude_bias' in metrics else None,
                   None if scale is None else scale > 0,
-                  *((op, quant.quantize(y.float(), op).elements) if 'flips' in metrics and op
-                    and (op.scaling is None or y.shape[1] % (op.scaling.cols or 1) == 0) else ()))
+                  op=None if grid is None else op, grid=grid)
 
 
 def _against(s: Stats, metrics: Collection[str], r: _Exact, g: torch.Tensor) -> None:
@@ -196,7 +195,7 @@ def _against(s: Stats, metrics: Collection[str], r: _Exact, g: torch.Tensor) -> 
     if r.rounded is not None:
         s.rounded += int((g == r.rounded).sum())
     if r.grid is not None and r.op is not None:
-        s.flips += int((quant.quantize(g, r.op).elements != r.grid).sum())
+        s.flips += int((quant.quantize(g.contiguous(), r.op).elements != r.grid).sum())
         s.flips_n += g.numel()
 
 
@@ -214,15 +213,19 @@ def local(outs: Sequence[tuple[Stats, torch.Tensor, Stats | None]], metrics: Col
     against0 = any(s0 is not None for _, _, s0 in outs)
     before = against0 or 'quantization' in metrics
     metrics0 = set(metrics) - set(QUANTIZED_ONLY)
-    cols = _rows(k)
-    for j in range(0, outs[0][1].shape[1], cols):
+    n, cols, scaling = outs[0][1].shape[1], _rows(k), qa.operand.scaling
+    for j in range(0, n, cols):
         wt = qw.dequantize(slice(j, j + cols)).T
         wa = wt.abs() if scaled else None
         w0t = w0[j:j + cols].double().T if before else None
         w0a = w0t.abs() if against0 and scaled else None
-        rows = _rows(wt.shape[1])
+        width = wt.shape[1]
+        rows = _rows(width)
+        # `flips` quantizes a block alone: only whole scaling blocks (rows, for row scaling)
+        whole = scaling is None or (width % scaling.cols == 0 if scaling.cols else width == n)
         for i in range(0, m, rows):
-            r = _exact(metrics, qa.dequantize(slice(i, i + rows)), wt, wa, qa.operand)
+            r = _exact(metrics, qa.dequantize(slice(i, i + rows)), wt, wa,
+                       qa.operand if whole else None)
             r0 = None
             if w0t is not None:
                 a0 = x0[i:i + rows].double()
@@ -241,7 +244,7 @@ def local(outs: Sequence[tuple[Stats, torch.Tensor, Stats | None]], metrics: Col
 
 
 def fmt(key: str, v: float) -> str:
-    """*v* as printed: errors in log2, `rounded` as a percentage, biases in u."""
+    """*v* as printed: shares as percentages, biases in u, errors in log2."""
     if key in ('rounded', 'backward_exact', 'flips'):
         return f'{v:.2%}'
     if key.endswith('bias'):
