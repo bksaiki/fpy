@@ -962,6 +962,11 @@ every combination of stages became a design).
     twice (the BF16 trees, CDNA3's chain of FMAs);
   - 2: an Add or an Fma rounding to E8M13 toward zero (Hopper's tree and
     chain of FMAs).
+- **Since closed:** the 8 sub-FP32 roundings.  `unfold_round`'s normal arm
+  (`|x| >= 2 ** emin`) bounded `logb(x)` by `x`'s finest digit, not by
+  `emin`, so the unfolded round looked finer than FP32; format inference now
+  carries the arm's least magnitude to `logb` (`test_triton.py`'s
+  `hopper-rne`, `cdna3-rne-7`).  Not yet rerun.
 - **What the graphs show** (`results/plots/sweep/`; normwise backward
   error, log2, unless said):
   - **`F` and `rho_bits` trade one for one until the other limits:** each
