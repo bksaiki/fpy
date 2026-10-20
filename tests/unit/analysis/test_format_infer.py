@@ -2337,8 +2337,7 @@ class TestElementWiseFrames:
     comprehension over the same ``xs``.
 
     A list has one element term, and a fact about it is a claim about every
-    element -- which is what lets two comprehensions share it.  Precisions are
-    measured against the interpreter in ``docs/todos/digit-bound-inference.md``.
+    element -- which is what lets two comprehensions share it.
     """
 
     L32 = ListType(RealType(fp.FP32), 32)
@@ -4420,9 +4419,8 @@ def _cpp_block_inline(exponent, *, checked: int = 4):
 
 
 class TestTheCheckInCppShape:
-    """C++ keeps `exponent0` a call and the fused sum a callee, so the
-    finiteness the sum needs sits on list elements, past an early return, and
-    across a call."""
+    """C++ keeps `exponent0` a call and the fused sum a callee; a finite sum's
+    summands are finite, so each aligns with or without the check."""
 
     _L = ListType(RealType(fp.S1E5M2), 4)
 
@@ -4430,11 +4428,6 @@ class TestTheCheckInCppShape:
     def _fused_prec(cls, f) -> int:
         """The widest fused-sum precision over its specializations, each
         analyzed with its caller's params."""
-        return max(cls._fused_precs(f))
-
-    @classmethod
-    def _fused_precs(cls, f) -> list[int]:
-        """... in each of its specializations."""
         from fpy2.ast.fpyast import Sum
         from fpy2.module import Module
         from fpy2.transform import ConstFold, FreeVarElim, Specialize
@@ -4453,13 +4446,15 @@ class TestTheCheckInCppShape:
                     digit_bound_params=params.get(spec.name))
                 out_precs += [AbstractFormat.from_format(b).prec
                               for e, b in info.by_expr.items() if isinstance(e, Sum)]
-        return out_precs
+        return max(out_precs)
 
     def test_written_directly(self):
         assert self._fused_prec(_cpp_block(_cpp_exponent)) <= 28
 
-    def test_through_the_sentinel(self):
-        assert self._fused_prec(_cpp_block(_cpp_exponent0)) <= 28
+    @pytest.mark.parametrize('kw', [{}, {'check_first': False}, {'checked': 3}],
+                             ids=['check-first', 'check-after', 'check-misses-one'])
+    def test_through_the_sentinel(self, kw):
+        assert self._fused_prec(_cpp_block(_cpp_exponent0, **kw)) <= 28
 
     @classmethod
     def _inline_prec(cls, f) -> int:
@@ -4474,19 +4469,14 @@ class TestTheCheckInCppShape:
     def test_inline_written_directly(self):
         assert self._inline_prec(_cpp_block_inline(_cpp_exponent)) <= 28
 
-    def test_inline_through_the_sentinel(self):
-        """Every element of `A` and `B` is finite past the check, and each
-        `exponent0` call reads one, so its guarded return resolves."""
-        assert self._inline_prec(_cpp_block_inline(_cpp_exponent0)) <= 28
+    @pytest.mark.parametrize('checked', [4, 3])
+    def test_inline_through_the_sentinel(self, checked):
+        """`exponent0`'s guarded return resolves."""
+        assert self._inline_prec(_cpp_block_inline(_cpp_exponent0, checked=checked)) <= 28
 
-    def test_inline_not_where_the_check_misses_an_element(self):
-        f = _cpp_block_inline(_cpp_exponent0, checked=3)
-        assert self._inline_prec(f) > 28
-
-    def test_not_where_one_call_is_unchecked(self):
-        """The two calls take a specialization each -- the key holds the
-        bounds, which the assumption changes -- and only the checked one
-        is aligned."""
+    def test_also_where_one_call_is_unchecked(self):
+        """Each call aligns, the unchecked one too: the sum it returns is
+        finite only where its summands are."""
         @fp.fpy(ctx=fp.REAL)
         def f(A, B):
             prods = fp.empty(4)
@@ -4510,16 +4500,7 @@ class TestTheCheckInCppShape:
                 s = _cpp_fused_sum(prods, e - 25)
             return s
 
-        precs = self._fused_precs(f)
-        assert min(precs) <= 28 < max(precs)
-
-    def test_not_where_the_check_comes_after(self):
-        f = _cpp_block(_cpp_exponent0, check_first=False)
-        assert self._fused_prec(f) > 28
-
-    def test_not_where_the_check_misses_an_element(self):
-        f = _cpp_block(_cpp_exponent0, checked=3)
-        assert self._fused_prec(f) > 28
+        assert self._fused_prec(f) <= 28
 
 
 class TestNegationOfZero:
@@ -4793,8 +4774,6 @@ _RUNS = [
 ])
 @pytest.mark.parametrize('digit_bounds', [False, True], ids=['', 'digit-bounds'])
 def test_the_returned_format_holds_a_run(fn, arg_types, args, digit_bounds):
-    if digit_bounds and fn is _callee_writes:
-        pytest.xfail('digit bounds miss what a callee stores')
     ast = monomorphize(fn, args=arg_types).ast
     (ret,) = [s.expr for s in ast.body.stmts if type(s).__name__ == 'ReturnStmt']
     fmt = FormatInfer.analyze(ast, use_digit_bounds=digit_bounds).by_expr[ret]

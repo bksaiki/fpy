@@ -10,7 +10,8 @@ out of the constraints and the store decidable.  What the variables mean is
 import math
 from collections.abc import Iterable, Sequence
 
-from .solver import Constraint, Solver, Term, Z3Solver, _Var
+from .solver import Constraint, Rel, Solver, Term, Z3Solver, _Var
+from .spaces import IndexSpaces, Key
 
 __all__ = ['DigitBoundStore']
 
@@ -24,145 +25,239 @@ class DigitBoundStore:
 
     _solver: Solver
     _constraints: list[Constraint]
-    _n_vars: int
 
     _answers: dict[tuple[Term, frozenset[int]], int | float]
-    """Each term's maximum under each assumption set, which only :meth:`_add`
-    can change."""
+    """Each term's maximum under each assumption set, which :meth:`_add` and
+    :meth:`imply` invalidate."""
 
     _decisions: dict[tuple, bool]
     """Each :meth:`reaches` question's answer, kept apart from
     :attr:`_answers`: a capped query returns an upper bound rather than the
     maximum, so the two must not be mistaken for each other."""
 
-    _constrained: set[int]
-    """Variables some constraint names; the rest are free, and a term naming
-    one is unbounded by inspection."""
-
     _n_lits: int
     """How many guard literals exist."""
 
-    _universal: set[int]
-    """Literals that hold at every index or none, so a constraint they guard
-    may be replayed onto an instance."""
+    _own: dict[tuple[int, bool], int]
+    """Each variable's literal "this is not `+inf`" (`True`, :meth:`high`) or
+    "not `-inf`" (`False`, :meth:`not_neg_inf`), for those that have one."""
 
-    _not_neg_inf: dict[int, int]
-    """Each variable's literal "this is not `-inf`", for those that have one;
-    see :meth:`not_neg_inf`."""
+    _owner: dict[int, tuple[int, bool]]
+    """Each of those literals' variable, and whether it is the `high` one: a
+    copy renaming the variable renames the literal with it."""
 
-    _envelopes: set[int]
-    """Constraints that hold at every index although they name an aggregate;
-    see :meth:`envelope`."""
+    _lit_keys: dict[int, frozenset[Key]]
+    """Every other literal's binders, which a copy renames it over."""
 
-    def __init__(self, solver: Solver | None = None):
+    _implications: list[tuple[frozenset[int], int]]
+    """Each implication's premises and conclusion, at one point; see
+    :meth:`imply`."""
+
+    _premised: dict[int, list[int]]
+    """Each literal's implications, by position: those it is a premise of."""
+
+    _imp_naming: dict[int, list[int]]
+    """Each variable's implications, by position: those naming a literal of
+    its own."""
+
+    _vars: list[_Var]
+    """Every variable, by index."""
+
+    _naming: dict[int, list[int]]
+    """Each variable's constraints, by position; a variable with none is free,
+    and a term naming one is unbounded by inspection."""
+
+    spaces: IndexSpaces
+    """Which index spaces each variable varies over, kept with the variables so
+    every walk sharing them shares it."""
+
+    def __init__(self, solver: Solver | None = None) -> None:
         self._solver = solver if solver is not None else Z3Solver()
         self._constraints = []
-        self._n_vars = 0
         self._answers = {}
         self._decisions = {}
-        self._constrained = set()
         self._n_lits = 0
-        self._universal = set()
-        self._not_neg_inf = {}
-        self._envelopes = set()
+        self._own = {}
+        self._owner = {}
+        self._lit_keys = {}
+        self._implications = []
+        self._premised = {}
+        self._imp_naming = {}
+        self._vars = []
+        self._naming = {}
+        self.spaces = IndexSpaces()
 
     def _add(self, c: Constraint) -> None:
         self._constraints.append(c)
         for t in (c.lhs, *c.rhs):
-            self._constrained.update(v.index for v, _ in t.coeffs)
+            for v, _ in t.coeffs:
+                self._naming.setdefault(v.index, []).append(len(self._constraints) - 1)
         self._solver.assume(c)
         self._answers.clear()
         self._decisions.clear()
 
-    @property
-    def n_vars(self) -> int:
-        """How many variables exist, so a caller can name a range of them."""
-        return self._n_vars
-
     def var(self, name: str) -> Term:
         """A fresh variable, as a term."""
-        v = _Var(self._n_vars, name)
-        self._n_vars += 1
+        v = _Var(len(self._vars), name)
+        self._vars.append(v)
         return Term(((v, 1),), 0)
 
     def instance(
         self,
-        elementwise: set[int],
+        moved: set[Key],
         subst: dict[int, Term],
-        mark: int,
+        lits: dict[int, int],
+        done: set[int],
         tag: str,
-    ) -> int:
-        """Replay every constraint over *elementwise* variables alone, from
-        *mark* on, with each variable renamed by *subst*.  Returns a new mark.
+    ) -> None:
+        """Replay every constraint and implication reachable from *subst*'s
+        variables through those varying with a class in *moved*, renaming those
+        by *subst* (grown with a fresh copy for each one met) and sharing the
+        rest.
 
-        Such a constraint holds at every index of the lists it is about, so
-        it holds at an index drawn from any subset -- which is how a part of
-        a list gets the facts the whole one has without *sharing* a variable
-        with it.  One naming a variable outside *elementwise* may be an
-        aggregate (``logb(sum xs) <= msb(xs) + k``), true of the list and
-        false of a part, so it is left alone -- unless it is an
-        :meth:`envelope`, which holds at every index, and then only its
-        elementwise variables are renamed.  A guarded one is replayed under
-        its guard, and only where every literal in it is universal.
+        Every constraint holds at every index of the lists it names -- an
+        aggregate's upper bound is stated only on a copy of its own -- so it
+        holds at an index drawn from any subset.  One naming this instance's
+        own copies is skipped: it already holds pointwise, and replaying it
+        would copy the copy.  A literal is renamed with its variable -- copied
+        where its literal is met first -- or, where it varies with a class in
+        *moved*, to a fresh one kept in *lits*.  Skipping only weakens.
 
-        *subst* grows in place: a second call for the same index set reuses
-        the renaming, which is what relates two parts taken over one range.
+        *done* holds what was replayed and grows; another call with the same
+        *subst* reaches what was stated since.
         """
-        end = len(self._constraints)
-        for i, c in enumerate(self._constraints[mark:end], mark):
-            vs = [v for t in (c.lhs, *c.rhs) for v, _ in t.coeffs]
-            ours = [v for v in vs if v.index in elementwise]
-            if not ours or (len(ours) < len(vs) and i not in self._envelopes):
-                continue
-            if not self._universal.issuperset(c.guard):
-                # a non-universal literal need not hold at every index
-                continue
-            for v in ours:
-                if v.index not in subst:
-                    subst[v.index] = self.var(v.name + tag)
-            # keep the guard
-            self._add(Constraint(
-                c.lhs.rename(subst), c.op,
-                tuple(t.rename(subst) for t in c.rhs), c.guard,
-            ))
-        # past the copies too: they are elementwise themselves, so a mark of
-        # *end* would replay them again on the next call for this key
-        return len(self._constraints)
+        frontier = list(subst)
+        own = {v.index for t in subst.values() for v, _ in t.coeffs}
+        seen: dict[int, bool] = {}
 
-    def literal(self, *, universal: bool = False) -> int:
+        def moves(v: int) -> bool:
+            # classes do not merge during a replay
+            if v not in seen:
+                seen[v] = bool(self.spaces.signature(v) & moved)
+            return seen[v]
+
+        def copy(v: _Var) -> None:
+            if v.index not in subst:
+                subst[v.index] = self.var(v.name + tag)
+                frontier.append(v.index)
+                own.update(x.index for x, _ in subst[v.index].coeffs)
+
+        def rename(lit: int) -> int:
+            owner = self._owner.get(lit)
+            if owner is not None:
+                v, high = owner
+                if not moves(v):
+                    return lit
+                # the variable moves, so the copy reaches it through its literal
+                copy(self._vars[v])
+                (new, _), = subst[v].coeffs
+                return self._own_literal(new.index, high)
+            keys = self._lit_keys.get(lit, frozenset())
+            if not any(self.spaces.find(k) in moved for k in keys):
+                return lit
+            if lit not in lits:
+                lits[lit] = self.literal(k for k in keys if self.spaces.find(k) not in moved)
+            return lits[lit]
+
+        while frontier:
+            v0 = frontier.pop()
+            for i in tuple(self._naming.get(v0, ())):
+                if i in done:
+                    continue
+                done.add(i)
+                c = self._constraints[i]
+                if any(v.index in own for t in (c.lhs, *c.rhs) for v, _ in t.coeffs):
+                    continue
+                for t in (c.lhs, *c.rhs):
+                    for v, _ in t.coeffs:
+                        if moves(v.index):
+                            copy(v)
+                self._add(Constraint(
+                    c.op, c.lhs.rename(subst),
+                    tuple(t.rename(subst) for t in c.rhs), tuple(map(rename, c.guard)),
+                ))
+            for k in tuple(self._imp_naming.get(v0, ())):
+                if -1 - k in done:
+                    continue
+                done.add(-1 - k)
+                premises, b = self._implications[k]
+                if any(self._owner.get(a, (None,))[0] in own for a in (*premises, b)):
+                    continue
+                self.imply(map(rename, premises), rename(b))
+
+    def literal(self, keys: Iterable[Key] = ()) -> int:
         """A fresh guard literal, for a constraint that holds only where it
-        does; see :meth:`maximum`.  *universal* where it speaks for every
-        index at once, as "every element of `xs` is finite" does."""
+        does (see :meth:`maximum`), varying with the binders *keys*: a copy
+        over one of them renames it, as it does a variable.  "Every element of
+        `xs` is finite" varies with what `xs` does, but not with its
+        elements."""
         self._n_lits += 1
-        if universal:
-            self._universal.add(self._n_lits)
+        self._lit_keys[self._n_lits] = frozenset(keys)
         return self._n_lits
 
+    def _own_literal(self, v: int, high: bool) -> int:
+        """Variable *v*'s `high` literal, or its "not `-inf`" one."""
+        lit = self._own.get((v, high))
+        if lit is None:
+            self._n_lits += 1
+            lit = self._own[v, high] = self._n_lits
+            self._owner[lit] = (v, high)
+        return lit
+
     def not_neg_inf(self, t: Term) -> tuple[int, ...]:
-        """The literals saying no variable of *t* is `-inf`, one per variable.
+        """The literals saying *t* is not `-inf`, one per variable: its "not
+        `-inf`" where the coefficient is positive, its `high` where negative.
 
         A variable may stand for `-inf` -- a zero's `logb` -- which an integer
         store represents as arbitrarily low.  So a lower bound on one holds
         only under its literal, and whatever needs *t* finite assumes these.
         """
-        out = []
-        for v, _ in t.coeffs:
-            lit = self._not_neg_inf.get(v.index)
-            if lit is None:
-                lit = self._not_neg_inf[v.index] = self.literal()
-            out.append(lit)
-        return tuple(out)
+        return tuple(self._own_literal(v.index, c < 0) for v, c in t.coeffs)
+
+    def high(self, t: Term) -> tuple[int, ...]:
+        """The literals saying *t* is not `+inf`, one per variable: its `high`
+        where the coefficient is positive, its "not `-inf`" where negative.  An
+        infinity or NaN has `logb` `+inf` (digit-bound.md), so an upper bound on one
+        that may be holds only under these."""
+        return tuple(self._own_literal(v.index, c > 0) for v, c in t.coeffs)
+
+    def imply(self, premises: int | Iterable[int], b: int) -> None:
+        """Wherever every literal in *premises* holds, *b* does, at the same
+        point -- as "a sum is finite" implies "every summand is", and finite
+        summands a finite sum.  An assumption set is closed under these
+        (:meth:`maximum`)."""
+        ps = frozenset((premises,) if isinstance(premises, int) else premises)
+        if b in ps:
+            return
+        rule = (ps, b)
+        for k in self._premised.get(min(ps), ()) if ps else ():
+            if self._implications[k] == rule:
+                return
+        k = len(self._implications)
+        self._implications.append(rule)
+        for a in ps:
+            self._premised.setdefault(a, []).append(k)
+        for lit in (*ps, b):
+            owner = self._owner.get(lit)
+            if owner is not None:
+                self._imp_naming.setdefault(owner[0], []).append(k)
+        self._answers.clear()
+        self._decisions.clear()
+
+    def _closed(self, assuming: frozenset[int]) -> frozenset[int]:
+        """*assuming* and everything it implies."""
+        out, todo = set(assuming), list(assuming)
+        while todo:
+            for k in self._premised.get(todo.pop(), ()):
+                premises, b = self._implications[k]
+                if b not in out and premises <= out:
+                    out.add(b)
+                    todo.append(b)
+        return frozenset(out)
 
     def le(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs <= rhs``, only where every literal in *guard* holds."""
-        self._add(Constraint(lhs, '<=', (_as_term(rhs),), guard))
-
-    def envelope(self, lo: Term, hi: Term) -> None:
-        """``lo <= hi`` at every index of a list, one side its aggregate: a
-        ``max`` over the list bounds each element, and a ``min`` is bounded by
-        each, so a part of the list keeps it; see :meth:`instance`."""
-        self._envelopes.add(len(self._constraints))
-        self.le(lo, hi)
+        self._add(Constraint(Rel.LE, lhs, (_as_term(rhs),), guard))
 
     def ge(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs >= rhs``."""
@@ -171,7 +266,7 @@ class DigitBoundStore:
     def eq(self, lhs: Term, rhs: Term | int) -> None:
         """``lhs == rhs``.  The walk states one-directional bounds and never
         reaches for this; it is here for a constraint set built by hand."""
-        self._add(Constraint(lhs, '==', (_as_term(rhs),)))
+        self._add(Constraint(Rel.EQ, lhs, (_as_term(rhs),)))
 
     def le_max(
         self, lhs: Term, rhs: Iterable[Term | int], *, guard: tuple[int, ...] = (),
@@ -186,7 +281,7 @@ class DigitBoundStore:
         if len(terms) == 1:
             self.le(lhs, terms[0], guard=guard)
         elif terms:
-            self._add(Constraint(lhs, '<=max', terms, guard))
+            self._add(Constraint(Rel.LE_MAX, lhs, terms, guard))
 
     def ge_min(
         self, lhs: Term, rhs: Iterable[Term | int], *, guard: tuple[int, ...] = (),
@@ -200,9 +295,9 @@ class DigitBoundStore:
         """The greatest value *term* can take where the literals *assuming*
         hold; ``inf`` when unbounded.
 
-        Memoized: the same term is asked many times over an unchanged store,
-        and :meth:`_add` is the only thing that can change an answer.
+        Memoized: the same term is asked many times over an unchanged store.
         """
+        assuming = self._closed(assuming)
         key = (term, assuming)
         answer = self._answers.get(key)
         if answer is None:
@@ -226,6 +321,7 @@ class DigitBoundStore:
         """
         if not bounds:
             return False
+        assuming = self._closed(assuming)
         key = (tuple(bounds), assuming)
         answer = self._decisions.get(key)
         if answer is None:
@@ -236,7 +332,7 @@ class DigitBoundStore:
     def _free(self, term: Term) -> bool:
         """Whether *term* names a variable no constraint mentions, which runs
         to both infinities and so leaves *term* unbounded either way."""
-        return any(v.index not in self._constrained for v, _ in term.coeffs)
+        return any(v.index not in self._naming for v, _ in term.coeffs)
 
     def _at_least(self, term: Term, k: int, assuming: frozenset[int]) -> bool:
         """Can *term* reach *k*?  A free variable reaches anything."""

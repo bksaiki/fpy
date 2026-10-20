@@ -1849,11 +1849,16 @@ class FormatAnalysis:
         """Does *of*'s format hold any finite value?"""
         return _has_finite(self._bound(of))
 
-    def has_neg_inf(self, of: 'Expr | Definition') -> bool:
-        """Can *of* be ``-inf``?  Yes, where its format does not say."""
+    def has_non_finite(self, of: 'Expr | Definition') -> bool:
+        """Can *of*, or an element of it, be an infinity or NaN?  Yes, where
+        its format does not say."""
         fmt = self._bound(of)
+        while isinstance(fmt, ListFormat):
+            fmt = fmt.elt
+        if isinstance(fmt, SetFormat):
+            return any(isinstance(v, Special) for v in fmt.values)
         af = _to_abstract(fmt) if isinstance(fmt, AbstractableFormatBound) else None
-        return af is None or af.has_neg_inf
+        return af is None or af.has_pos_inf or af.has_neg_inf or af.has_nan
 
     def int_range(self, of: 'Expr | Definition') -> tuple[int, int] | None:
         """*of*'s least and greatest values, when its format holds only

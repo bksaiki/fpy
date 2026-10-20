@@ -9,7 +9,7 @@ their difference answers the one question this analysis exists for --
     precision of v  =  max(msb(v) - lsb(v) + 1)
 
 -- which for a rounded value is the precision of the fixed-point result.  See
-``docs/todos/digit-bound-inference.md``.
+``docs/todos/digit-bound.md``.
 
 A reduced product with :class:`fpy2.analysis.FormatInfer`: that pass supplies
 the ranges this seeds from and consumes the precisions this derives.  Nothing
@@ -17,10 +17,11 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 """
 
 import math
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
+from ...ast.accessors import subblocks, subexprs
 from ...ast.fpyast import *
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -28,20 +29,25 @@ from ...interpret.value import unwrap_foreign
 from ...number import (
     Context,
     EFloatContext,
+    MPBFixedContext,
     MPBFloatContext,
     MPFloatContext,
     MPSFloatContext,
+    OverflowMode,
     RoundingMode,
 )
+from ...number.context.context import SizedContext
 from ...number.context.mp_fixed import MPFixedContext
 from ...number.context.real import RealContext
 from ...types import ListType, RealType
-from ..alias import Region
+from ..alias import Alias, Region
 from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
 from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
+from ..define_use import DefineUse, DefineUseAnalysis
 from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
 from ..value_class import ValueClass, ValueClassAnalysis, ValueClassInfer
+from .spaces import Binder, Elements, IndexSpaces, Key
 from .store import DigitBoundStore, Term
 
 __all__ = [
@@ -53,33 +59,90 @@ __all__ = [
     'Terms',
 ]
 
-_Operand: TypeAlias = tuple[Literal['c'], int] | tuple[Literal['d'], Definition]
+_Operand: TypeAlias = int | Definition
 """A range operand's identity: a literal by its value, a variable by its
 definition."""
 
-_ONE: _Operand = ('c', 1)
 
-_RangeKey: TypeAlias = tuple[_Operand, _Operand, _Operand]
-"""A range `range(a, b, s)` as `(a, b, s)`."""
+@dataclass(frozen=True)
+class _Range:
+    """`range(start, stop, step)`."""
 
-_EltKey: TypeAlias = tuple[Literal['elt'], _Operand, _Operand, _Operand]
-"""The elements `a + s * k` for `k` over `range(n)`, as `('elt', a, s, n)`."""
+    start: _Operand
+    stop: _Operand
+    step: _Operand = 1
+
+
+@dataclass(frozen=True)
+class _Elts:
+    """The elements `start + step * k` for `k` over `range(n)`."""
+
+    start: _Operand
+    step: _Operand
+    n: _Operand
+
+
+@dataclass(frozen=True)
+class _Witness:
+    """An index an existential picks -- an aggregate's worst element, a loop's
+    iteration before, an element's writer -- by the `id` of what picks it."""
+
+    of: int | tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _Last:
+    """A loop's last iteration, by the loop's `id`, or a partial write's last
+    writer, by its phi's."""
+
+    of: int
+
+
+@dataclass(frozen=True)
+class _Read:
+    """Reads at *binder*'s index of lists the invariant keeps from
+    corresponding with it (digit-bound.md, "Element reads")."""
+
+    binder: Key
+
+
+@dataclass(frozen=True)
+class _Apart:
+    """An index set enumerated by a binder nested with the one enumerating it
+    first: the *n*-th such, apart from the rest."""
+
+    of: '_Range | _Elts'
+    n: int
+
+
+_IndexKey: TypeAlias = _Range | _Elts | _Witness | _Last | _Read | _Apart
+"""An index set a copy is taken over."""
 
 
 @dataclass
 class _IndexSet:
-    """One renaming of the per-element variables, for one range."""
+    """One copy of some variables at another index: a part, an element read,
+    or a witness."""
 
     tag: str
+    binders: tuple[Key, ...] = ()
+    """The binders the copy varies with."""
+    elements: set[Key] = field(default_factory=set)
+    """The spaces the copy moves over."""
     subst: dict[int, Term] = field(default_factory=dict)
-    mark: int = 0
+    lits: dict[int, int] = field(default_factory=dict)
+    """The literals renamed onto it that no variable owns."""
+    done: set[int] = field(default_factory=set)
+    """The constraints replayed onto it."""
+    minted: int = 0
+    """How many of :attr:`subst`'s copies have their index spaces."""
 
 
 @dataclass
 class Terms:
     """What a value names in the store.
 
-    ``logb`` and ``grid`` bracket it from above and below; their difference is
+    ``msb`` and ``lsb`` bracket it from above and below; their difference is
     its precision.  ``value`` is the exact value, for the integer-valued
     expressions a rounding position is built from, and is filled lazily since a
     context expression is not part of the walk.
@@ -125,22 +188,40 @@ class DigitBoundParams:
     assume: frozenset[int] = frozenset()
     """The literals every call reaching the callee proved, which hold
     wherever its body runs."""
+    outer: tuple[Key, ...] = ()
+    """The caller's binders around the call, which the callee varies with."""
+    elements: tuple[tuple[Key, ...], ...] = ()
+    """Each list argument's element spaces, which its parameter's are."""
 
 
 @dataclass
 class DigitBoundAnalysis:
     """Result of digit-bound inference: the constraint system, and what names it."""
 
-    store: DigitBoundStore
-    args: tuple[Terms, ...] = ()
-    """The terms a caller bound this function's parameters to, so the same
-    binding can be replayed on a specialized copy of it."""
+    params: DigitBoundParams
+    """The binding this function was walked under, so the same one can be
+    replayed on a specialized copy of it."""
     by_expr: dict[Expr, Terms] = field(default_factory=dict)
     by_def: dict[Definition, Terms] = field(default_factory=dict)
     by_call: dict[Call, 'DigitBoundAnalysis'] = field(default_factory=dict)
+    ret_elements: tuple[Key, ...] = ()
+    """The element spaces of a list it returns."""
     ret: Terms = field(default_factory=Terms)
     assume_at: Callable[[Expr], frozenset[int]] = lambda _e: frozenset()
     """The guard literals that hold wherever an expression is evaluated."""
+
+    @property
+    def store(self) -> DigitBoundStore:
+        return self.params.store
+
+    def query_at(self, e: Expr) -> frozenset[int]:
+        """The literals a query about *e* assumes: what holds wherever it is
+        evaluated, and that the instance asked about is finite and non-zero
+        (digit-bound.md, section 5)."""
+        terms = self.by_expr.get(e)
+        own = () if terms is None or terms.msb is None else (
+            *self.store.high(terms.msb), *self.store.not_neg_inf(terms.msb))
+        return self.assume_at(e) | frozenset(own)
 
     def bounds(self, e: Expr) -> Bounds | None:
         """*e*'s precision, digit position and magnitude.
@@ -152,7 +233,7 @@ class DigitBoundAnalysis:
             return None
         # One open value discards all three, so each is asked only once the
         # one before it came back closed -- every query costs a solve.
-        at = self.assume_at(e)
+        at = self.query_at(e)
         prec = self.store.prec(terms.msb, terms.lsb, at)
         if not isinstance(prec, int):
             return None
@@ -191,8 +272,8 @@ class FormatView(Protocol):
         """Does *of*'s format hold any finite value?"""
         ...
 
-    def has_neg_inf(self, of: Expr | Definition) -> bool:
-        """Can *of* be `-inf`?"""
+    def has_non_finite(self, of: Expr | Definition) -> bool:
+        """Can *of* be an infinity or NaN?"""
         ...
 
     def int_range(self, of: Expr | Definition) -> tuple[int, int] | None:
@@ -212,6 +293,15 @@ _FLOAT_CTXS = (EFloatContext, MPFloatContext, MPBFloatContext, MPSFloatContext)
 """Float formats: a rounding to one keeps its operand's binade or carries."""
 
 
+_PROPAGATING = (Add, Sub, Mul, Neg, Abs, Round, Cast, Hypot, Fma, Trunc, Floor, Ceil, RoundInt, NearbyInt)
+"""Operations whose result is not finite where an operand is not, and is
+finite but for an overflow where every operand is."""
+
+_NEAREST = (RoundingMode.RNE, RoundingMode.RNA)
+"""The modes rounding to nearest: a value below half the least subnormal
+rounds to zero, so none carries further than one binade."""
+
+
 def _round_will_carry(rm: RoundingMode | None) -> bool:
     """Whether rounding under *rm* can carry out of the top binade.
 
@@ -221,6 +311,34 @@ def _round_will_carry(rm: RoundingMode | None) -> bool:
     ``TestRoundCarry``.
     """
     return rm is not RoundingMode.RTZ
+
+
+def _placed(block: StmtBlock, loops: tuple[Stmt, ...] = ()) -> Iterator[tuple[Stmt, tuple[Stmt, ...]]]:
+    """Every statement in *block*, in program order, with the loops around it."""
+    for s in block.stmts:
+        yield s, loops
+        inner = (*loops, s) if isinstance(s, WhileStmt | ForStmt) else loops
+        for _, sub in subblocks(s):
+            yield from _placed(sub, inner)
+
+
+def _stmts(block: StmtBlock) -> Iterator[Stmt]:
+    """Every statement in *block*, nested ones included."""
+    return (s for s, _ in _placed(block))
+
+
+def _exprs(node: Stmt | Expr) -> Iterator[Expr]:
+    """Every expression in *node*, not in a block it holds."""
+    for _, _, e in subexprs(node):
+        yield e
+        yield from _exprs(e)
+
+
+def _written_params(fn: FuncDef) -> frozenset[int]:
+    """The parameters whose lists *fn* may store into."""
+    def_use = DefineUse.analyze(fn)
+    alias = Alias.analyze(fn, def_use=def_use)
+    return frozenset(i for i, r in alias.param_regions(fn, def_use).items() if alias.may_write(r))
 
 
 def _is_empty_alloc(d: Definition) -> bool:
@@ -254,37 +372,59 @@ class _DigitBoundInferInstance(DefaultVisitor):
     Shares its caller's store, so a callee's rounding can cancel against a
     position the caller built.  The body is walked once: a term is per
     definition and the rules are structural, so another iteration would restate
-    the same constraints.  A loop-carried value leaves a cyclic constraint,
-    which the solver answers as unbounded.
+    the same constraints.  A loop-carried value joins the pre-loop value with a
+    copy of the body's at the iteration before (digit-bound.md, "Control").
     """
 
-    outer: Callable[[], frozenset[int]] | None
+    func: FuncDef
+    view: FormatView
+    store: DigitBoundStore
+    type_info: TypeAnalysis
+    def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
+    array_size: ArraySizeAnalysis
+    scopes: dict[ContextScope, Context | PartialContext]
+    out: DigitBoundAnalysis
+    params: DigitBoundParams
+    """The caller's binding of this function."""
+    outer: Callable[[], frozenset[int]]
     """The literals holding wherever this body runs: its call site's."""
-    arg_lit: Callable[[int], int | None] | None
-    """The caller's literal for "argument *i* is finite", which is this
-    parameter's too."""
     _loop_index: dict[Definition, int]
     _trip: tuple[Definition, _Operand] | None
     """The innermost loop's index and trip count, where it counts one: only
     its `a + s * k` is element `k` of an index set, as only the innermost
     `range`'s target is for :attr:`_gather`."""
-    _partial: dict[Definition, list[Terms] | None]
-    _fields: dict[Definition, tuple[Terms | None, ...]]
-    _elt_expr: dict[Definition, Expr]
-    _covered_write: set[Definition]
-    _elt_depth: int
-    _elt_depth_of: dict[Expr, int]
-    _elt_vars: set[int]
-    _var_level: dict[int, int]
-    """the loop nesting each variable takes a new value at"""
-    _anchor_level: dict[int, int]
-    """... and the nesting the bounds *on* it were built at"""
+    _builders: dict[Region, tuple[ForStmt, Definition, PhiDef]]
+    """Each index function a loop builds: the loop, and the `empty` it fills
+    (digit-bound.md, "Lists")."""
+    _built: dict[Region, Terms]
+    """Each built list's element terms, which every definition of it shares."""
+    _in_build: set[Definition]
+    """The definitions of built lists inside their builders' bodies, which
+    have terms of their own: the list along one path of one iteration."""
+    _built_stores: dict[Region, list[IndexedAssign]]
+    _built_fields: dict[Region, tuple[Terms | None, ...]]
+    """A built list of tuples' element, field by field."""
+    _built_expr: dict[Region, Expr]
+    """A built list's element, where one store writes it."""
     _lsb_vars: set[int]
-    _index_sets: dict[_RangeKey | _EltKey, _IndexSet]
-    _gather: tuple[_RangeKey, Definition] | None
-    _gathered: set[Expr]
+    _index_sets: dict[_IndexKey, list[_IndexSet]]
+    """Each index set's copies, one per set of classes moved (digit-bound.md, section
+    6)."""
+    _enumerators: dict[_Range | _Elts, list[Key]]
+    """The binders enumerating each index set, one per index set apart."""
+    _gather: tuple[_Range, Definition] | None
     _returns: list[tuple[Expr, Terms]]
-    _classes_cache: ValueClassAnalysis | None
+    _classes: ValueClassAnalysis
+    _unvalued_regions: set[Region]
+    """The regions whose lists are region summaries; see :meth:`_unvalued`."""
+    _written_args: list[Expr]
+    """The arguments of calls whose callee may store into them."""
+    _read_phis: set[PhiDef]
+    """The phis something reads, directly or through another phi."""
+    _summary_reads: list[tuple[Terms, Expr | Definition, Region | None]]
+    """Each read of a list that is not an index function: its terms, what
+    they are of, and the region of the elements it reads."""
     _guards: dict[Definition, int]
     """The literal "this definition is finite", for each one a guard names."""
     _elt_guards: dict[Region, int]
@@ -292,12 +432,28 @@ class _DigitBoundInferInstance(DefaultVisitor):
     elements a guard names."""
     _loops: tuple[Stmt, ...]
     """The loops enclosing the walk, outermost first."""
+    _binders: tuple[Key, ...]
+    """The binders enclosing the walk, outermost first; see :mod:`.spaces`."""
+    _binders_of: dict[Expr | Stmt, tuple[Key, ...]]
+    _list_keys: set[Key]
+    """The element keys opened so far."""
+    _arms: tuple[int, ...]
+    """The literals of the `if` arms around the walk."""
+    _arms_of: dict[Expr | Stmt, tuple[int, ...]]
+    _dropped: bool
+    """Whether a return producing no finite value was left out."""
+    _index_binder: dict[Definition, Key]
+    """The binder whose index each loop target is."""
+    _callees: list['_DigitBoundInferInstance']
+    """The walks of the calls this one made, whose copies it replays last."""
+    _walk: int
+    """This walk's identity in its keys."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
     _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
     _scope_of: dict[ContextStmt, ContextScope]
     _established: frozenset[tuple[int, int]]
     """What every `with` dominating the walk's position makes true: each
-    variable it needs not `-inf`, with the literal saying so."""
+    variable of its position finite, with the literals saying so."""
     _established_at: dict[Expr, frozenset[tuple[int, int]]]
     _summaries: set[int] | None
     """:meth:`_summary_vars`, once the walk is over."""
@@ -306,44 +462,53 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self,
         func: FuncDef,
         view: FormatView,
-        store: DigitBoundStore,
-        args: tuple[Terms, ...] = (),
-        arg_lit: Callable[[int], int | None] | None = None,
+        params: DigitBoundParams,
         classes: ValueClassAnalysis | None = None,
         outer: Callable[[], frozenset[int]] | None = None,
-    ):
+    ) -> None:
         self.func = func
-        self.outer = outer
-        self.arg_lit = arg_lit
+        self.params = params
+        self.outer = outer if outer is not None else lambda: params.assume
         self.view = view
-        self.store = store
-        self.args = args
+        self.store = params.store
         self.type_info = view.type_info
         self.def_use = view.type_info.def_use
         self.ctx_use = view.ctx_use
         self.array_size = view.array_size
         self.scopes = view.scopes
-        self.out = DigitBoundAnalysis(store, args)
+        self.out = DigitBoundAnalysis(params)
         self._loop_index = {}
         self._trip = None
-        self._partial = {}
-        self._fields = {}
-        self._elt_expr = {}
-        self._covered_write = set()
-        self._elt_depth = 0
-        self._elt_depth_of = {}
-        self._elt_vars = set()
-        self._var_level = {}
-        self._anchor_level = {}
+        self._builders = {}
+        self._built = {}
+        self._in_build = set()
+        self._built_stores = {}
+        self._built_fields = {}
+        self._built_expr = {}
         self._lsb_vars = set()
         self._index_sets = {}
+        self._enumerators = {}
         self._gather = None
-        self._gathered = set()
         self._returns = []
-        self._classes_cache = classes
+        self._classes = classes if classes is not None else ValueClassInfer.analyze(
+            func, def_use=self.def_use, type_info=self.type_info, ctx_use=self.ctx_use)
+        self._unvalued_regions = set()
+        self._written_args = []
+        self._read_phis = set()
+        self._summary_reads = []
         self._guards = {}
         self._elt_guards = {}
         self._loops = ()
+        # a callee varies with the caller's binders around the call
+        self._binders = params.outer
+        self._binders_of = {}
+        self._list_keys = set()
+        self._arms = ()
+        self._arms_of = {}
+        self._dropped = False
+        self._index_binder = {}
+        self._walk = self.store.spaces.walk()
+        self._callees = []
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
         self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
@@ -352,28 +517,31 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._summaries = None
 
     def analyze(self) -> DigitBoundAnalysis:
-        # positional, so params that do not match the signature would bind
-        # every later parameter to the term before it -- and `zip` would hide
-        # it.  A caller passes one term per parameter or none at all.
-        if self.args and len(self.args) != len(self.func.args):
+        # one term per parameter, or none: `zip` would hide a mismatch
+        args = self.params.args
+        if args and len(args) != len(self.func.args):
             raise RuntimeError(
-                f'digit-bound params for `{self.func.name}` have {len(self.args)} '
+                f'digit-bound params for `{self.func.name}` have {len(args)} '
                 f'terms for {len(self.func.args)} parameters'
             )
-        for arg, src in zip(self.func.args, self.args):
+        for arg, src in zip(self.func.args, args):
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
                 self._share(d, src)
-                # the caller minted these, and `_share` skips the seeding
-                # `_fresh_interval` does -- but a list is a list in both
-                # frames, so its summary describes an element here too
-                self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
+        # a list parameter is the argument's list, element for element
+        for arg, keys in zip(self.func.args, self.params.elements):
+            if isinstance(arg.name, NamedId):
+                d = self.def_use.find_def_from_site(arg.name, arg)
+                for k, key in enumerate(keys):
+                    self.store.spaces.unify(self._elements(d, k), key)
+        self._unvalued_regions = self._unvalued()    # and which loops build index functions
         self._visit_block(self.func.body, None)
+        self._bound_summaries()
         # a fact stated after a part was read, such as a `max` over the whole
         # list, still holds of the part
-        for inst in self._index_sets.values():
-            self._replay(inst)
+        self._replay_all()
         self.out.ret = self._merge_returns()
+        self.out.ret_elements = self._return_elements()
         self._summaries = self._summary_vars()
         self.out.assume_at = self._assumed
         return self.out
@@ -381,31 +549,106 @@ class _DigitBoundInferInstance(DefaultVisitor):
     # -- terms ---------------------------------------------------------
 
     def _var(self, name: str) -> Term:
-        """A fresh variable, per-element where the walk is inside a loop."""
+        """A fresh variable, varying with the binders around the walk."""
         t = self.store.var(name)
-        if self._elt_depth:
-            self._elt_vars.update(v.index for v, _ in t.coeffs)
-            for v, _ in t.coeffs:
-                self._var_level[v.index] = self._elt_depth
+        for v, _ in t.coeffs:
+            self.store.spaces.mint(v.index, self._binders)
         return t
 
-    def _mark_elt(
-        self, of: Expr | Definition, *ts: Term | None, lsb: Term | None = None,
-    ) -> None:
-        """Record *ts* as per-element where *of* is a list, whoever minted
-        them: a list's summary describes an element wherever it came from, so
-        it moves with that list's index -- one nesting in from where the list
-        itself sits.  An *lsb* is the exception, being already at or below
-        every element's."""
+    def _mark_elt(self, of: Expr | Definition, *ts: Term | None) -> None:
+        """Record *ts* as varying with the list *of*'s index, whoever minted
+        them: a list's terms describe an element wherever it came from.  Its
+        lsb is not among them, being already at or below every element's --
+        unless what bounds it varies (`_grid_ge`)."""
         if not isinstance(self._type_of(of), ListType):
             return
-        for t in (*ts, lsb):
-            if t is not None:
-                self._elt_vars.update(v.index for v, _ in t.coeffs)
+        keys = self._all_elements(of)
         for t in ts:
-            if t is not None:
-                for v, _ in t.coeffs:
-                    self._raise_anchor(v.index, self._elt_depth + 1)
+            for v, _ in (t.coeffs if t is not None else ()):
+                self.store.spaces.bound(v.index, keys)
+
+    def _binder(self, node: Stmt | Expr, clause: int = 0) -> Key:
+        """A loop's, or a comprehension clause's, key: this walk's own, so two
+        calls to one function keep theirs apart."""
+        return Binder(self._walk, id(node), clause)
+
+    def _elements(self, of: Expr | Definition | FuncDef, depth: int = 0) -> Key:
+        """The key of the list *of*'s element space at index *depth*, opened
+        inside the binders the list varies with and its outer indices, so that
+        no equation puts it with one of them.
+
+        A list that only names another -- a use, a parameter, a row -- has
+        no binders of its own: its class takes them from what it names.  Every
+        definition of a built list has the `empty`'s."""
+        if isinstance(of, Definition) and (r := self._built_of(of)) is not None:
+            of = self._builders[r][1]
+        key = Elements(self._walk, id(of), depth=depth)
+        if key not in self._list_keys:
+            self._list_keys.add(key)
+            around = self._list_binders_of(of) or ()
+            outer = (self._elements(of, depth - 1),) if depth else ()
+            self.store.spaces.open(key, (*around, *outer))
+        return key
+
+    def _depth(self, of: Expr | Definition) -> int:
+        """How many indices the list *of* has: 0 for what is not a list."""
+        t, n = self._type_of(of), 0
+        while isinstance(t, ListType):
+            t, n = t.elt, n + 1
+        return n
+
+    def _all_elements(self, of: Expr | Definition) -> tuple[Key, ...]:
+        """The keys of every index of the list *of*, outermost first."""
+        return tuple(self._elements(of, k) for k in range(self._depth(of)))
+
+    def _list_binders_of(self, of: Expr | Definition | FuncDef) -> tuple[Key, ...] | None:
+        """The binders the list *of* is made under, or `None` where it names
+        another list."""
+        if isinstance(of, FuncDef):
+            return self.params.outer
+        if isinstance(of, Definition):
+            site = of.site
+            if isinstance(site, Argument | FuncDef):
+                return None
+            if isinstance(site, Assign) and isinstance(site.expr, Var):
+                return None
+            return self._def_binders(of)
+        if isinstance(of, Var):
+            return None
+        return self._binders_of.get(of, self._binders)
+
+    def _unify_elements(self, a: Expr | Definition, b: Expr | Definition, shift: int = 0) -> None:
+        """*a*'s index `k` is *b*'s index `k + shift`, where they are lists --
+        one list, at `0`; a row of *b*, at `1` -- where the invariant lets the
+        two be one index."""
+        n = self._depth(b)
+        for k in range(self._depth(a)):
+            if 0 <= k + shift < n:
+                self.store.spaces.correspond(self._elements(a, k), self._elements(b, k + shift))
+
+    def _index_of(self, idx: Expr) -> Key | None:
+        """The binder whose index *idx* is, if any."""
+        return self._index_binder.get(self.def_use.find_def_from_use(idx)) if isinstance(idx, Var) else None
+
+    def _reads_summary(self, d_lst: Definition, binder: Key | None) -> bool:
+        """Make *binder* correspond with *d_lst*'s elements where the invariant
+        allows; whether the read is the representative."""
+        return binder is None or self.store.spaces.correspond(binder, self._elements(d_lst))
+
+    def _read_apart(self, t: Terms, d_lst: Definition, binder: Key) -> Terms:
+        """*t*, of the list *d_lst*'s element, at *binder*'s index: a copy
+        every list read apart there shares."""
+        around = (*self.store.spaces.around(binder), binder)
+        return self._copy(t, (self._elements(d_lst),), _Read(binder), around)
+
+    def _element(self, d_lst: Definition, binder: Key | None) -> Terms:
+        """The list *d_lst*'s element at *binder*'s index: its representative, or
+        where the binder cannot correspond with it, a copy."""
+        src = self._def(d_lst)
+        if self._reads_summary(d_lst, binder):
+            return src
+        assert binder is not None
+        return self._read_apart(src, d_lst, binder)
 
     def _fresh_interval(self, terms: Terms, of: Expr | Definition, tag: str) -> tuple[Term, Term]:
         """Give *terms* a bracketing pair, seeded from *of*'s inferred range.
@@ -418,12 +661,33 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms.msb = self._var(f'msb{tag}')
         terms.lsb = self._var(f'lsb{tag}')
         self._lsb_vars.update(v.index for v, _ in terms.lsb.coeffs)
-        self._mark_elt(of, terms.msb, lsb=terms.lsb)
-        if hi is not None:
-            self.store.le(terms.msb, hi)
-        if lo is not None:
-            self.store.ge(terms.lsb, lo)
+        self._mark_elt(of, terms.msb)
+        self._seed(terms.msb, of, None, hi)
+        self._seed(terms.lsb, of, lo, None)
         return terms.msb, terms.lsb
+
+    def _seed(
+        self, t: Term, of: Expr | Definition, lo: int | None, hi: int | None,
+        low: tuple[int, ...] = (),
+    ) -> None:
+        """Bound *t* by *of*'s format range, the one place a format bounds a
+        term (digit-bound.md, "Pointwise facts"): its finite values -- above
+        under `high` where *of* may not be finite, below under *low* -- and
+        only where the arms around *of* run."""
+        arms = self._arms_at(of)
+        if hi is not None:
+            self.store.le(t, hi, guard=(*self._high_if(of, t), *arms))
+        if lo is not None:
+            self.store.ge(t, lo, guard=(*low, *arms))
+
+    def _high_if(self, of: Expr | Definition, t: Term) -> tuple[int, ...]:
+        """*t*'s `high` literals, where *of* may be non-finite."""
+        return self.store.high(t) if self.view.has_non_finite(of) else ()
+
+    def _arms_at(self, of: Expr | Definition) -> tuple[int, ...]:
+        """The literals of the `if` arms around *of*."""
+        site = of if isinstance(of, Expr) else of.site
+        return self._arms_of.get(site, ()) if isinstance(site, Expr | Stmt) else ()
 
     def _def(self, d: Definition) -> Terms:
         """*d*'s terms, minted on first reference.
@@ -433,10 +697,67 @@ class _DigitBoundInferInstance(DefaultVisitor):
         on the same variable or nothing cancels.
         """
         terms = self.out.by_def.get(d)
+        if terms is None and (r := self._built_region(d)) is not None:
+            terms = self.out.by_def[d] = self._built_terms(r)
         if terms is None:
             terms = self.out.by_def[d] = Terms()
+            # minted where it is first read, but varying as its definition does
+            binders, self._binders = self._binders, self._def_binders(d)
             self._fresh_interval(terms, d, f'd{len(self.out.by_def)}')
+            self._binders = binders
         return terms
+
+    def _built_of(self, d: Definition) -> Region | None:
+        """The region of the built list *d* is a definition of, if it is one."""
+        if not self._builders or not isinstance(self._type_of(d), ListType):
+            return None
+        r = self._classes.alias.region_of(d)
+        return r if r in self._builders else None
+
+    def _built_region(self, d: Definition) -> Region | None:
+        """The region of the built list *d* is a definition of, outside its
+        builder's body: the list as a whole, which shares the built terms."""
+        return None if d in self._in_build else self._built_of(d)
+
+    def _mid_build(self, e: Var | ListRef) -> bool:
+        """Does *e* read a built list inside the loop building it, anywhere but
+        at the loop's own index?  Its builder states its terms as the loop
+        ends, so a read before that names none of them."""
+        lst = e if isinstance(e, Var) else e.value
+        assert isinstance(lst, Var)
+        r = self._built_of(self.def_use.find_def_from_use(lst))
+        if r is None or (loop := self._builders[r][0]) not in self._loops:
+            return False
+        return not (isinstance(e, ListRef) and self._index_of(e.index) == self._binder(loop))
+
+    def _built_terms(self, r: Region) -> Terms:
+        """The element terms of the list built into region *r*: one value per
+        index wherever a read sees it, so every definition shares them.  Seeded
+        by the list as its loop leaves it; bounded by its stores there."""
+        terms = self._built.get(r)
+        if terms is None:
+            _, alloc, done = self._builders[r]
+            terms = self._built[r] = Terms()
+            binders, self._binders = self._binders, self._def_binders(alloc)
+            self._fresh_interval(terms, done, f'B{len(self._built)}')
+            self._binders = binders
+        return terms
+
+    def _def_binders(self, d: Definition) -> tuple[Key, ...]:
+        """The binders *d* varies over: those around its site, and the site's
+        own where it binds per iteration -- a loop's target and phis, a
+        comprehension's targets."""
+        site = d.site
+        match site:
+            case Argument() | FuncDef():
+                return self.params.outer
+            case ListComp():
+                outer = self._binders_of.get(site, self._binders)
+                return (*outer, *(self._binder(site, k) for k in range(len(site.targets))))
+            case ForStmt() | WhileStmt():
+                return (*self._binders_of.get(site, self._binders), self._binder(site))
+            case _:
+                return self._binders_of.get(site, self._binders)
 
     def _share(self, d: Definition, src: Terms) -> None:
         """Adopt *src*'s terms for *d*, field by field, where *d* has none.
@@ -444,32 +765,64 @@ class _DigitBoundInferInstance(DefaultVisitor):
         States nothing.  The two end up naming the *same* store variables, so
         every constraint on either binds both -- which is what lets a callee's
         rounding cancel against a position its caller built, and is a stronger
-        claim than `_join`'s one-directional bracket.
+        claim than `_bracket`'s one-directional one.
 
-        A field *d* already has is kept and *src*'s dropped, leaving the two
-        unrelated -- so the lookup mints nothing, since `_fresh_interval`
-        would seed a `logb` and the share could never fire.
+        A field *d* already has is kept, so the lookup mints nothing.
         """
         dst = self.out.by_def.setdefault(d, Terms())
         dst.msb = dst.msb if dst.msb is not None else src.msb
         dst.lsb = dst.lsb if dst.lsb is not None else self._elt_lsb(d, src)
         dst.value = dst.value if dst.value is not None else src.value
+        # a list's terms vary with its own elements, a row's as well as its
+        # matrix's
+        self._mark_elt(d, dst.msb, dst.value)
 
-    def _join(self, d: Definition, srcs: list[Terms] | None) -> None:
-        """Bracket *d* by every source at once, where `_share` hands over one.
-
-        One source without a term leaves the join unstated: the bound is a
-        claim about all of them.
-        """
-        if not srcs:
-            return
-        terms = self._def(d)
+    def _bracket(
+        self, terms: Terms, d: Expr | Definition, srcs: list[Terms], *, finite: bool = False,
+    ) -> None:
+        """Bound *terms*, *d*'s, by every one of *srcs*."""
+        srcs = self._aligned(d, srcs)
         msbs = [s.msb for s in srcs if s.msb is not None]
         lsbs = [t for s in srcs if (t := self._elt_lsb(d, s)) is not None]
         if terms.msb is not None and len(msbs) == len(srcs):
-            self.store.le_max(terms.msb, msbs)
+            guard = self.store.high(terms.msb) if finite else ()
+            self.store.le_max(terms.msb, msbs, guard=guard)
+            if not finite:
+                # one of them, so finite wherever every one is
+                self._implied_high(terms.msb, msbs)
         if terms.lsb is not None and len(lsbs) == len(srcs):
             self._grid_ge(terms.lsb, *lsbs)
+
+    def _aligned(
+        self, d: Expr | Definition | FuncDef, srcs: list[Terms], keys: tuple[Key, ...] | None = None,
+    ) -> list[Terms]:
+        """*srcs* as sources of the list *d*'s element.  One varying with
+        another element space is read at a witness element of it, varying
+        with *d*'s: a constraint over two element spaces is read for every
+        pair (digit-bound.md, "The abstract domain"), and an element is one
+        source's at some index of it, not every."""
+        if keys is None:
+            if isinstance(d, FuncDef) or not isinstance(self._type_of(d), ListType):
+                return srcs
+            keys = self._all_elements(d)
+        spaces = self.store.spaces
+        own = {spaces.find(k) for k in keys}
+        out = []
+        for i, src in enumerate(srcs):
+            moved = {
+                k for t in (src.msb, src.lsb, src.value) if t is not None
+                for k in self._varies(t) if isinstance(k, Elements) and spaces.find(k) not in own
+            }
+            if moved:
+                src = self._copy(src, moved, _Witness((id(d), i)), (*self._binders, *keys))
+            out.append(src)
+        return out
+
+    def _one_space(self, *of: Expr | Definition) -> bool:
+        """Are the lists *of* one index, element for element?  Trivially, for
+        what is not a list."""
+        find = self.store.spaces.find
+        return len({tuple(find(k) for k in self._all_elements(x)) for x in of}) == 1
 
     def _type_of(self, of: Expr | Definition) -> Any:
         return (self.type_info.by_def if isinstance(of, Definition)
@@ -486,7 +839,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _msbs(self, *es: Expr) -> list[Term] | None:
         """Every operand's `logb`, or `None` where any lacks one.
 
-        All-or-nothing, as `_join` is: a bound over a strict subset of the
+        All-or-nothing, as `_bracket` is: a bound over a strict subset of the
         operands is one the dropped operand never had to satisfy.  No
         operands at all is a list of none, which the store reads as no claim.
         """
@@ -499,8 +852,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     # -- emission ------------------------------------------------------
 
-    def _visit_expr(self, e: Expr, ctx):
-        self._elt_depth_of[e] = self._elt_depth
+    def _visit_expr(self, e: Expr, ctx: Any) -> None:
+        self._binders_of[e] = self._binders
+        self._arms_of[e] = self._arms
         self._loops_of_expr[e] = self._loops
         self._established_at[e] = self._established
         super()._visit_expr(e, ctx)
@@ -513,24 +867,42 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # A variable reads what its definition wrote, and `xs[i]` over the
         # whole list *is* an element, so both share terms rather than
         # getting their own.
+        match e:
+            case ListRef(value=Var() as lst) if self._depth(e):
+                # a row: its indices are the list's inner ones
+                self._unify_elements(e, self.def_use.find_def_from_use(lst), 1)
+            case ListExpr() | ListComp() if self._depth(e) > 1:
+                for el in (e.elts if isinstance(e, ListExpr) else (e.elt,)):
+                    self._unify_elements(el, e, 1)
         src: Terms | None
         match e:
+            case Var() | ListRef(value=Var()) if self._mid_build(e):
+                src = None      # what other iterations wrote, or nothing yet: seeded alone
+            case Var() if self._is_unvalued(self.def_use.find_def_from_use(e)):
+                src = None      # a region summary: bounded by what enters it, once the walk is over
+                self._summary_reads.append((terms, e, self._inner_region(e)))
             case Var():
-                src = self._def(self.def_use.find_def_from_use(e))
+                d = self.def_use.find_def_from_use(e)
+                src = self._def(d)
+                self._unify_elements(e, d)
+            case ListRef(value=Var() as lst) if self._is_unvalued(self.def_use.find_def_from_use(lst)):
+                src = None
+                self._summary_reads.append((terms, e, self._inner_region(lst)))
             case ListRef(value=Var() as lst, index=idx) if self._covers(
                 idx, self._len_of(lst)
             ):
-                src = self._def(self.def_use.find_def_from_use(lst))
+                src = self._element(self.def_use.find_def_from_use(lst), self._index_of(idx))
             case ListRef(value=Var() as lst, index=idx) if (
                 inst := self._at_index(lst, idx)
             ) is not None:
                 # an element of a *part* of the list: the value comes too,
                 # since what a gathered exponent goes on to build cancels
                 # against it
-                self._gathered.add(e)
                 terms.msb, terms.lsb, terms.value = inst.msb, inst.lsb, inst.value
                 return
-            case ListComp():
+            case ListComp() if len(e.targets) == 1 and self.store.spaces.correspond(
+                self._elements(e), self._binder(e),
+            ):
                 src = self.out.by_expr.get(e.elt)
             case _:
                 src = None
@@ -539,114 +911,161 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return
 
         logb, grid = self._fresh_interval(terms, e, f'e{len(self.out.by_expr)}')
-        self._emit_logb(e, self._active(e, logb, grid))
-        self._emit_grid(e, grid)
+        if self._summary_reads and self._summary_reads[-1][0] is terms:
+            # a summary read's grid is bounded per read, at a witness of its own
+            for v, _ in grid.coeffs:
+                self.store.spaces.bound(v.index, self._binders)
+        if isinstance(e, IfExpr) and isinstance(self._type_of(e), ListType):
+            # one of the arm lists, element for element -- where it can be
+            for arm in self._live_arms(e):
+                self._unify_elements(e, arm)
+            if not self._one_space(e, *self._live_arms(e)):
+                return
+        if isinstance(e, ListComp):
+            # several clauses, or one whose index is not the list's: element
+            # `k` is built at a point of them, which is no clause's index
+            if (src := self.out.by_expr.get(e.elt)) is not None:
+                over = [self._binder(e, k) for k in range(len(e.targets))]
+                w = self._copy(src, over, _Witness(id(e)), (*self._binders, *self._all_elements(e)))
+                self._bracket(terms, e, [w])
+            return
+        exact, exact_grid = self._active(e, logb, grid)
+        if exact is logb and (guard := self._finite_guard(e, logb)):
+            # an exact rule bounds the result only where it is finite
+            exact = self._var(f'X{len(self.out.by_expr)}')
+            self.store.le(logb, exact, guard=guard)
+        self._emit_logb(e, exact)
+        self._emit_grid(e, exact_grid)
+        self._emit_finite(e, logb)
 
-    def _grid_ge(self, grid: Term, *ts: Term) -> None:
+    def _grid_ge(self, grid: Term, *ts: Term, guard: tuple[int, ...] = ()) -> None:
         """Bound *grid* below by the least of *ts*, noting what that costs.
 
         Every such bound is true of the value in hand.  It stays true of a
         whole *list* only while nothing it was built from moves with that
-        list's index, so *grid* inherits the deepest nesting its bounds came
-        from: see :meth:`_elt_lsb`.
+        list's index, so *grid* inherits what its bounds vary over: see
+        :meth:`_elt_lsb`.
         """
-        self.store.ge_min(grid, ts)
-        level = max((self._term_level(t) for t in ts), default=0)
+        self.store.ge_min(grid, ts, guard=guard)
+        keys = {k for t in ts for k in self._varies(t)}
         for v, _ in grid.coeffs:
-            self._raise_anchor(v.index, level)
+            self.store.spaces.bound(v.index, keys)
 
-    def _raise_anchor(self, index: int, level: int) -> None:
-        if level > self._anchor_level.get(index, 0):
-            self._anchor_level[index] = level
-
-    def _moves_at(self, index: int, c: int) -> int:
-        """The nesting a variable moves with, entering a bound with
-        coefficient *c*.
-
-        Where it was minted, and where whatever bounds it was -- except that
-        an lsb of its own is already at or below every element's, so only
-        what bounds it counts.  Negated it is a ceiling, not a floor, and
-        that exception lapses.
-        """
-        level = self._anchor_level.get(index, 0)
-        if c > 0 and index in self._lsb_vars:
-            return level
-        return max(level, self._var_level.get(index, 0))
-
-    def _term_level(self, t: Term) -> int:
-        return max((self._moves_at(v.index, c) for v, c in t.coeffs), default=0)
+    def _varies(self, t: Term) -> set[Key]:
+        """What *t* varies over, entering a bound: where its variables were
+        minted and what bounds them -- except that an lsb of its own is already
+        at or below every element's, so only what bounds it counts.  Negated it
+        is a ceiling, not a floor, and that exception lapses."""
+        return {k for v, c in t.coeffs for k in self.store.spaces.keys(
+            v.index, minted=not (c > 0 and v.index in self._lsb_vars))}
 
     def _elt_lsb(self, of: Expr | Definition, src: Terms) -> Term | None:
         """*src*'s grid, as *of*'s -- dropped where *of* is a list and the
         grid moves with its index.
 
-        A list's summary is read as uniform: at or below *every* element's
+        A list's terms are read as uniform: at or below *every* element's
         grid.  One that moves with the index is at or below one element's,
         and reading it uniformly would claim the smallest element sits as
         high as the widest.  No grid at all is the weaker, true reading.
         """
-        if (src.lsb is not None and isinstance(self._type_of(of), ListType)
-                and self._term_level(src.lsb) > self._elt_depth):
+        if src.lsb is None or not isinstance(self._type_of(of), ListType):
+            return src.lsb
+        spaces = self.store.spaces
+        here = {spaces.find(b) for b in self._binders}
+        if any(spaces.find(k) not in here for k in self._varies(src.lsb)):
             return None
         return src.lsb
 
-    def _active(self, e: Expr, logb: Term, grid: Term) -> Term:
-        """Account for the context *e* is evaluated under, and return the term
-        the exact rules should bound.
+    def _active(self, e: Expr, logb: Term, grid: Term) -> tuple[Term, Term]:
+        """Account for the context *e* is evaluated under: the terms the exact
+        rules bound, for its `logb` and its grid.
 
         The rules below bound the *exact* result, but an expression denotes
-        it rounded at the active context, and a carrying mode reaches one
-        binade further -- so the rules bound a fresh term and the expression
-        reaches past it.  The same context floors the grid: a rounded value
-        is a multiple of the quantum, which is what pays for the carry.
+        it rounded at the active context (digit-bound.md, "Pointwise facts").  A
+        carrying mode reaches past the exact binade, so the rules bound a
+        fresh term the result reaches past; the context floors the grid,
+        which is what pays for the carry.  A context this does not model
+        leaves the result unrelated to the exact one: the rules bound fresh
+        terms nothing reads.
 
-        `Round`/`Cast` model that context themselves, a selection or a
-        projection hands an operand back unrounded, and `Sum` rounds each step
-        of its fold, not its result, so all are excluded.
+        `Round`/`Cast` model their context themselves; a selection, a
+        projection or a call hands back a value it did not round, as does a
+        `sum` of one element or unknown length.
         """
-        if isinstance(e, Round | Cast | Sum | Min | Max | AMin | AMax | Fst | Snd):
-            return logb
+        if isinstance(e, Round | Cast | Min | Max | AMin | AMax | Fst | Snd | Call):
+            return logb, grid
+        if e not in self.ctx_use.use_to_scope:
+            return logb, grid
+        # a fold's length, `None` for a single rounding
+        n = self._len_of(e.arg) if isinstance(e, Sum) else None
+        if isinstance(e, Sum) and (n is None or n < 2):
+            # one element comes back unrounded, and an unknown length may be one
+            return logb, grid
+        tag = len(self.out.by_expr)
         found = self._rounding(e)
-        if found is None:
-            return self._active_float(e, logb, grid)
-        pos, rm = found
-        self._grid_ge(grid, pos + 1)
-        if not _round_will_carry(rm):
-            return logb
-        exact = self._var(f'X{len(self.out.by_expr)}')
-        self.store.le_max(logb, [exact + 1, pos + 1])
-        return exact
-
-    def _may_carry(self, e: Expr) -> bool:
-        """Whether a rounding under *e*'s context may carry."""
-        found = self._rounding(e)
+        ctx = self._active_ctx(e)
         if found is not None:
-            return _round_will_carry(found[1])
-        ctx = self._active_ctx(e)
-        if isinstance(ctx, _FLOAT_CTXS):
-            return _round_will_carry(None if ctx.is_stochastic() else ctx.rm)
-        return not isinstance(ctx, RealContext)
+            pos, rm = found
+            self._grid_ge(grid, pos + 1)
+            if not _round_will_carry(rm):
+                return logb, grid
+            exact = self._var(f'X{tag}')
+            # each of a fold's `n - 1` roundings moves it by under a quantum
+            steps = 0 if n is None else math.ceil(math.log2(n))
+            self.store.le_max(logb, [exact + 1, pos + 1 + steps], guard=self._finite_guard(e, logb))
+            return exact, grid
+        if isinstance(ctx, RealContext):
+            return logb, grid
+        if isinstance(ctx, _FLOAT_CTXS) and isinstance(ctx.pmax, int):
+            p = ctx.pmax
+            self._grid_ge(grid, logb - (p - 1))
+            rm = None if ctx.is_stochastic() else ctx.rm
+            if not _round_will_carry(rm):
+                return logb, grid
+            expmin = getattr(ctx, 'expmin', None)
+            exact = self._var(f'X{tag}')
+            if n is None:
+                # a tiny result rounds up to the least subnormal, unless to
+                # nearest, which reaches it from at most one binade below
+                floor = [] if expmin is None or rm in _NEAREST else [expmin]
+                self.store.le_max(logb, [exact + 1, *floor], guard=self._finite_guard(e, logb))
+                return exact, grid
+            # A fold's `n - 1` roundings grow it by at most a factor
+            # `(1 + 2 ** (1 - p)) ** (n - 1)`, under 2 while `n - 1 <= 2 ** (p - 2)`,
+            # and each by under the least subnormal besides.
+            if n - 1 > 2 ** (p - 2):
+                return exact, self._var(f'Y{tag}')
+            if expmin is None:
+                self.store.le(logb, exact + 1, guard=self._finite_guard(e, logb))
+            else:
+                self.store.le_max(logb, [exact + 2, expmin + 1 + math.ceil(math.log2(n))],
+                                  guard=self._finite_guard(e, logb))
+            return exact, grid
+        if isinstance(ctx, MPBFixedContext):
+            # wraps or saturates: neither keeps the exact result's binade or grid
+            self._grid_ge(grid, Term((), ctx.nmin + 1))
+        return self._var(f'X{tag}'), self._var(f'Y{tag}')
 
-    def _active_float(self, e: Expr, logb: Term, grid: Term) -> Term:
-        """:meth:`_active` for a context with no absolute position.
-
-        A floating-point context rounds too, so the carry applies just the
-        same; what it has instead of a position is a *precision*, which puts
-        the floor under the grid relative to the result rather than at a
-        fixed digit.  Both are sound for a subnormal, where the true grid is
-        coarser still.
-        """
+    def _exact_int(self, e: Expr) -> bool:
+        """Does *e*'s context represent its integer result exactly?  A
+        rounded result outside what the context represents was rounded from
+        outside it too, so its range answers for the exact one."""
+        if e not in self.ctx_use.use_to_scope:
+            return True
         ctx = self._active_ctx(e)
-        pmax = getattr(ctx, 'pmax', None)
-        if not isinstance(pmax, int):
-            return logb
-        self._grid_ge(grid, logb - (pmax - 1))
-        rm = getattr(ctx, 'rm', None)
-        if not _round_will_carry(rm if isinstance(rm, RoundingMode) else None):
-            return logb
-        exact = self._var(f'X{len(self.out.by_expr)}')
-        self.store.le(logb, exact + 1)
-        return exact
+        if isinstance(ctx, RealContext):
+            return True
+        if isinstance(ctx, MPFixedContext):
+            return ctx.nmin < 0
+        rng = self.view.int_range(e)
+        if rng is None:
+            return False
+        mag = max(abs(rng[0]), abs(rng[1]))
+        if isinstance(ctx, MPBFixedContext):
+            return ctx.nmin < 0 and ctx.overflow is not OverflowMode.WRAP and mag < ctx.maxval()
+        if isinstance(ctx, _FLOAT_CTXS) and isinstance(ctx.pmax, int):
+            return mag < 2 ** ctx.pmax and (not isinstance(ctx, SizedContext) or mag < ctx.maxval())
+        return False
 
     def _active_ctx(self, e: Expr) -> object:
         """The context *e* is evaluated under, resolved, or `None`."""
@@ -681,10 +1100,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         store = self.store
         match e:
             case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
-                  | Min() | Max() | AMin() | AMax()
+                  | Min() | Max()
                   | Mod() | Fmod() | Remainder()):
                 if (ts := self._msbs(*self._operands(e))) is not None:
                     store.le_max(t, ts)
+            case AMin() | AMax():
+                # one element, and not every element: the worst one
+                if (w := self._witness(e)) is not None:
+                    store.le(t, w)
             case Mul():
                 lhs, rhs = self._msb_of(e.first), self._msb_of(e.second)
                 if lhs is not None and rhs is not None:
@@ -711,12 +1134,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     store.le_max(t, [v + 1 for v in ts] + [0])
             case Sum():
                 # `n` terms below `2 ** (L + 1)` sum below `2 ** (L + 1 + ceil(log2 n))`,
-                # unless a step carries: the seed alone is unrounded
-                elt, n = self._msb_of(e.arg), self._len_of(e.arg)
-                if elt is not None and n is not None and (
-                    n == 1 or (n > 1 and not self._may_carry(e))
-                ):
-                    store.le(t, elt + math.ceil(math.log2(n)))
+                # `L` the worst term's
+                w, n = self._witness(e), self._len_of(e.arg)
+                if w is not None and n is not None and n > 0:
+                    store.le(t, w + math.ceil(math.log2(n)))
             case Round() | Cast():
                 src, found = self._msb_of(e.args[0]), self._rounding(e)
                 if src is not None and found is not None:
@@ -729,14 +1150,107 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     else:
                         store.le(t, src)
                 elif src is not None and isinstance(ctx := self._active_ctx(e), _FLOAT_CTXS):
-                    # a float format keeps the binade, or carries out of it; an
-                    # overflow is an infinity, or the bound, which is smaller
+                    # a float format keeps the binade, or carries out of it --
+                    # a tiny value as far as the least subnormal; an overflow
+                    # is an infinity, or the bound, which is smaller
                     rm = None if ctx.is_stochastic() else ctx.rm
-                    store.le(t, src + 1 if _round_will_carry(rm) else src)
+                    if not _round_will_carry(rm):
+                        store.le(t, src)
+                    elif rm not in _NEAREST and (expmin := getattr(ctx, 'expmin', None)) is not None:
+                        store.le_max(t, [src + 1, expmin])
+                    else:
+                        store.le(t, src + 1)
             case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
                 store.le(t, k)
             case _:
                 pass    # no rule: the term keeps whatever its seed gave it
+
+    def _emit_finite(self, e: Expr, logb: Term) -> None:
+        """Relate *e*'s finiteness to its operands': *e* finite implies each
+        strict operand is; under a context that never overflows, finite total
+        operands imply *e* is."""
+        match e:
+            case Sum() | AMin() | AMax() if (every := self._every_finite(e.arg)) is not None:
+                for h in self.store.high(logb):
+                    if isinstance(e, Sum):
+                        self.store.imply(h, every)
+                    if self._never_overflows(e):
+                        self.store.imply(every, h)
+            case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
+                # `2 ** inf` is `inf`, and `2 ** k` finite for finite `k`
+                self._implied_high(k, [logb])
+                if self._never_overflows(e):
+                    self._implied_high(logb, [k])
+        for op in self._strict_operands(e):
+            if (t := self._msb_of(op)) is not None:
+                self._implied_high(t, [logb])
+        total = self._total_operands(e)
+        if total and self._never_overflows(e) and (msbs := self._msbs(*total)) is not None:
+            self._implied_high(logb, msbs)
+
+    @staticmethod
+    def _strict_operands(e: Expr) -> tuple[Expr, ...]:
+        """The operands of *e* that make it not finite where they are not."""
+        if isinstance(e, (*_PROPAGATING, Sqrt)):
+            return tuple(e.args)
+        match e:
+            case Div() | Copysign():
+                return (e.first,)
+        return ()
+
+    def _total_operands(self, e: Expr) -> tuple[Expr, ...] | None:
+        """The operands that, finite, make *e* finite but for an overflow;
+        ``None`` for an operation that can fail on finite ones (a division, a
+        root, a remainder) or has no rule here."""
+        if isinstance(e, (*_PROPAGATING, Min, Max, Fdim)):
+            return tuple(e.args)
+        match e:
+            case Copysign():
+                return (e.first,)
+            case IfExpr():
+                return tuple(self._live_arms(e))
+            case ListExpr():
+                return tuple(e.elts)
+        return None
+
+    def _finite_guard(self, e: Expr, logb: Term) -> tuple[int, ...]:
+        """What *e*'s exact rules hold under: nothing, where the result is
+        finite or is not only because an operand is not -- then its `logb` is
+        `+inf` and so is the rule's bound; else *e*'s `high`."""
+        if self._total_operands(e) is not None and self._never_overflows(e):
+            return ()
+        return self._high_if(e, logb)
+
+    def _never_overflows(self, e: Expr) -> bool:
+        """Does *e*'s context leave a finite result finite?"""
+        if e not in self.ctx_use.use_to_scope:
+            return True
+        ctx = self._active_ctx(e)
+        if isinstance(ctx, PartialContext):
+            return ctx.cls is MPFixedContext
+        if isinstance(ctx, MPBFixedContext):
+            return ctx.overflow in (OverflowMode.WRAP, OverflowMode.SATURATE)
+        return isinstance(ctx, RealContext | MPFixedContext | MPFloatContext | MPSFloatContext)
+
+    def _implied_high(self, of: Term, by: Sequence[Term]) -> None:
+        """Every one of *by* finite implies *of* is."""
+        premises = [lit for t in by for lit in self.store.high(t)]
+        for b in self.store.high(of):
+            self.store.imply(premises, b)
+
+    def _every_finite(self, lst: Expr) -> int | None:
+        """A literal for "every element of *lst* is finite"."""
+        match lst:
+            case Var():
+                d = self.def_use.find_def_from_use(lst)
+                elt, keys = self._def(d), self._list_binders(d, lst)
+            case ListComp() if (found := self.out.by_expr.get(lst)) is not None:
+                elt, keys = found, self._binders_of.get(lst, self._binders)
+            case _:
+                return None
+        lit = self.store.literal(keys)
+        self._every(lit, elt)
+        return lit
 
     def _emit_grid(self, e: Expr, g: Term) -> None:
         """Bound *e*'s least significant digit from its operands'."""
@@ -774,14 +1288,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         terms = self.out.by_expr.setdefault(e, Terms())
         if terms.value is None:
-            # Under the depth *e* sits at, not the one that happened to ask
-            # first: a value is minted once and memoized, and a position
-            # built outside a loop is no less shared for being demanded
-            # inside one.
-            outer = self._elt_depth
-            self._elt_depth = self._elt_depth_of.get(e, outer)
+            # under *e*'s own binders, not the asker's: a value is memoized,
+            # and one built outside a loop is shared by uses inside it
+            outer = self._binders
+            self._binders = self._binders_of.get(e, outer)
             terms.value = self._value_uncached(e)
-            self._elt_depth = outer
+            self._binders = outer
         return terms.value
 
     def _value_uncached(self, e: Expr) -> Term | None:
@@ -796,6 +1308,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # variables may have no recorded term of their own.
             case Integer():
                 return Term((), int(e.as_rational()))
+            case Logb() | Neg() | Add() | Sub() if not self._exact_int(e):
+                # rounded: no longer the exact integer the rules below give
+                return self._fresh_value(e) if self.view.int_range(e) else None
             case Logb():
                 t = self._msb_of(e.arg)
                 of: Expr | Definition = e.arg
@@ -806,9 +1321,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # What anchors the term absolutely -- where the argument is
                 # non-zero, since `logb(0)` is `-inf`.  A `with` at a position
                 # built from it establishes so (`_visit_context`).
-                lo, _ = self.view.logb_range(of)
-                if t is not None and lo is not None:
-                    store.ge(t, lo, guard=store.not_neg_inf(t))
+                if t is not None:
+                    self._seed(t, of, self.view.logb_range(of)[0], None, low=store.not_neg_inf(t))
                 return t
             case Neg():
                 inner = self.value_of(e.arg)
@@ -818,11 +1332,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if lhs is None or rhs is None:
                     return None
                 return lhs + rhs if isinstance(e, Add) else lhs - rhs
-            case IfExpr():
-                return self._merge_arms(
+            case IfExpr() if self._one_space(e, *self._live_arms(e)):
+                m = self._merge_arms(
                     f'V{len(self.out.by_expr)}', e.cond,
                     self.value_of(e.ift), self.value_of(e.iff),
                 )
+                self._mark_elt(e, m)
+                return m
             case AMax() | AMin() | Max() | Min():
                 # `max(...) >= every operand` is the whole content; the value
                 # itself is never needed.  An operand with no term contributes
@@ -832,17 +1348,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
-                    if isinstance(e, AMax):
-                        store.envelope(t, m)    # every element, so every part
-                    elif isinstance(e, AMin):
-                        store.envelope(m, t)
-                    elif isinstance(e, Max):
+                    if isinstance(e, AMax | Max):
                         store.ge(m, t)
                     else:
                         store.le(m, t)
                 return m
             case ListComp():
-                return self.value_of(e.elt)
+                return self.value_of(e.elt) if len(e.targets) == 1 else None
+            case Var() if self._is_unvalued(self.def_use.find_def_from_use(e)):
+                return self._fresh_value(e) if self.view.int_range(e) else None
             case Var():
                 # a list built by a loop has no defining expression at all
                 return self._def_value(self.def_use.find_def_from_use(e))
@@ -982,8 +1496,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return out
             case AllOf():
                 # `_zero_paths` already reads both shapes an `all` takes --
-                # over a comprehension, and over the list a loop filled
-                return {t for ts in (self._zero_paths(cond) or ()) for t in ts}
+                # over a comprehension, and over the list a loop filled.  Only
+                # one path is every element's: `all(a or b)` is not `all(a)`.
+                paths = self._zero_paths(cond)
+                return paths[0] if paths is not None and len(paths) == 1 else set()
             case Var():
                 return self._universal_zeros_of(
                     self.def_use.find_def_from_use(cond)
@@ -1024,15 +1540,40 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return self._zero_paths_all(cond.args, exact)
             case AllOf(arg=ListComp() as comp):
                 # every element true, so whatever the element tests is zero
-                return self._zero_paths(comp.elt, exact)
+                return self._every_element(
+                    comp, self._zero_paths(comp.elt, exact),
+                    [self._binder(comp, k) for k in range(len(comp.targets))])
             case AllOf(arg=Var() as xs):
                 # ... and the same after the comprehension became a loop
-                elt = self._elt_expr.get(self.def_use.find_def_from_use(xs))
-                return None if elt is None else self._zero_paths(elt, exact)
+                d = self.def_use.find_def_from_use(xs)
+                r = self._built_region(d)
+                elt = self._built_expr.get(r) if r is not None else None
+                return None if elt is None else self._every_element(
+                    xs, self._zero_paths(elt, exact), [self._elements(d)])
             case Var():
                 return self._zero_paths_of(self.def_use.find_def_from_use(cond), exact)
             case _:
                 return None
+
+    def _every_element(
+        self, lst: Expr, paths: list[set[Term]] | None, over: list[Key],
+    ) -> list[set[Term]] | None:
+        """*paths*, an element's, as `all` over the list *lst* reads them.  An
+        empty list makes `all` true and zeroes nothing, so where *lst* may be
+        empty a path keeps only values varying with its element (*over*), which
+        an empty list has none of; one keeping nothing leaves no paths."""
+        n = self._len_of(lst)
+        if paths is None or (n is not None and n > 0):
+            return paths
+        spaces = self.store.spaces
+        classes = {spaces.find(k) for k in over}
+        out = []
+        for atoms in paths:
+            kept = {t for t in atoms if any(spaces.find(k) in classes for k in self._varies(t))}
+            if not kept:
+                return None
+            out.append(kept)
+        return out
 
     def _zero_paths_of(self, d: Definition, exact: bool = False) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""
@@ -1064,7 +1605,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         const = self.view.int_value(d)
         if const is not None:
             return Term((), const)
-        known = self.out.by_def.get(d)
+        r = self._built_region(d)
+        known = self._built_terms(r) if r is not None else self.out.by_def.get(d)
         if known is not None and known.value is not None:
             return known.value
         return self.value_of(d.site.expr) if isinstance(d.site, Assign) else None
@@ -1080,30 +1622,41 @@ class _DigitBoundInferInstance(DefaultVisitor):
             ift, iff = self.def_use.defs[phi.rhs], self.def_use.defs[phi.lhs]
             if isinstance(stmt, IfStmt):
                 ift, iff = iff, ift
+            self._unify_elements(phi, ift)
+            self._unify_elements(phi, iff)
             # An arm with no digits -- zero, or only infinities and NaN --
             # states nothing, so it is dropped rather than joined, as
             # `_visit_return` drops a path returning only infinities.
+            # So is an arm leaving a built element unwritten: it is uninitialized.
+            unwritten = {d for d in (ift, iff) if phi in self._in_build and d not in self._in_build}
             live = [
                 self.out.by_def.get(d)
                 for d in (ift, iff)
-                if self.view.int_value(d) != 0 and self.view.has_finite(d)
+                if self.view.int_value(d) != 0 and self.view.has_finite(d) and d not in unwritten
             ]
             if live and all(t is not None for t in live):
-                self._join(phi, live)  # type: ignore[arg-type]
-            value = self._merge_arms(
-                f'V{len(self.out.by_def)}', cond,
-                self._def_value(ift), self._def_value(iff),
-            )
+                # where an arm left out is not finite, so is the phi
+                dropped = not all(self.view.has_finite(d) for d in (ift, iff))
+                self._bracket(self._def(phi), phi, live, finite=dropped)  # type: ignore[arg-type]
+            if unwritten:
+                value = next((self._def_value(d) for d in (ift, iff) if d not in unwritten), None)
+            else:
+                value = self._merge_arms(
+                    f'V{len(self.out.by_def)}', cond,
+                    self._def_value(ift), self._def_value(iff),
+                ) if self._one_space(phi, ift, iff) else None
             if value is not None:
                 self.out.by_def.setdefault(phi, Terms()).value = value
+                self._mark_elt(phi, value)
             for lit in then_lits:
                 self._untaken(phi, iff, (lit,))
             for lit in else_lits:
                 self._untaken(phi, ift, (lit,))
 
     def _arm_non_finite(self, stmt: If1Stmt | IfStmt, arm: int) -> list[int]:
-        """A literal for each definition *arm* of *stmt* (`then`, `else`) is
-        reached only where it is non-finite: where one holds, it is not."""
+        """The literals "*d* is finite" for each *d* that arm *arm* (0 `then`, 1
+        `else`) of *stmt* runs only where non-finite: where one holds, that
+        arm is untaken."""
         out: list[int] = []
         for d, cls in self._classes.arm_facts.get(stmt, ((), ()))[arm]:
             if not cls & (ValueClass.ZERO | ValueClass.FINITE):
@@ -1114,72 +1667,264 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _finite_lits(self, d: Definition) -> list[int]:
         """Literals each implying "*d* is finite": its own, and where *d*
-        reads an element over the whole list, "every element is finite"."""
+        reads an element over the whole of a list nothing changes, "every
+        element is finite", at whatever index and in whatever iteration."""
         out = [self._lit(d)]
         if isinstance(d, AssignDef) and isinstance(d.site, Assign) and (
             isinstance(ref := d.site.expr, ListRef)
-            and isinstance(ref.value, Var)
-            and self._covers(ref.index, self._len_of(ref.value))
-            and (lit := self._lit_of(ref)) is not None
+            and isinstance(lst := ref.value, Var)
+            and isinstance(self._type_of(ref), RealType)
+            and self._covers(ref.index, self._len_of(lst))
         ):
-            out.append(lit)
+            d_lst = self.def_use.find_def_from_use(lst)
+            region = self._classes.alias.region_of(d_lst)
+            if region is not None and not self._classes.alias.may_change(d_lst):
+                lit = self._elt_guards.get(region)
+                if lit is None:
+                    lit = self._elt_guards[region] = self.store.literal(self._list_binders(d_lst, ref))
+                self._every(lit, self._def(d_lst))
+                out.append(lit)
         return out
 
     def _lit(self, d: Definition) -> int:
-        """The literal "*d* is finite"; a parameter's is its argument's."""
+        """The literal "*d* is finite": its `msb`'s `high`, which a parameter
+        shares with its argument along with the variable."""
         lit = self._guards.get(d)
         if lit is None:
-            if self.arg_lit is not None and isinstance(d.site, Argument):
-                i = next(i for i, a in enumerate(self.func.args) if a is d.site)
-                lit = self.arg_lit(i)
-            if lit is None:
-                lit = self.store.literal()
+            msb = self._def(d).msb
+            if msb is not None and len(msb.coeffs) == 1:
+                (lit,) = self.store.high(msb)
+            else:
+                lit = self.store.literal(self._def_binders(d))
             self._guards[d] = lit
         return lit
 
-    def _lit_of(self, e: Expr) -> int | None:
-        """The literal "*e* is finite", where *e* names a definition or reads
-        an element of a list nothing changes -- then every element being
-        finite covers it, at whatever index and in whatever iteration."""
-        if not isinstance(self._type_of(e), RealType):
-            return None
-        match e:
-            case Var():
-                return self._lit(self.def_use.find_def_from_use(e))
-            case ListRef(value=Var() as lst):
-                d = self.def_use.find_def_from_use(lst)
-                region = self._classes.alias.region_of(d)
-                if region is None or self._classes.alias.may_change(d):
-                    return None
-                lit = self._elt_guards.get(region)
-                if lit is None:
-                    lit = self._elt_guards[region] = self.store.literal(universal=True)
-                return lit
-        return None
+    def _list_binders(self, d: Definition, at: Expr) -> tuple[Key, ...]:
+        """The binders the list *d*, read at *at*, is one value for: those
+        around the read but its own elements', which a literal about every
+        element does not vary with."""
+        spaces = self.store.spaces
+        own = {spaces.find(k) for k in self._all_elements(d)}
+        return tuple(k for k in self._binders_of.get(at, self._binders) if spaces.find(k) not in own)
+
+    def _every(self, lit: int, elt: Terms) -> None:
+        """*lit* says every element is finite, so each one's `high`."""
+        for h in self.store.high(elt.msb) if elt.msb is not None else ():
+            self.store.imply(lit, h)
 
     def _untaken(self, phi: Definition, other: Definition, guard: tuple[int, ...]) -> None:
         """*phi* is *other* wherever *guard* holds, the arm untaken."""
         src = self.out.by_def.get(other)
-        if src is None:
-            return
-        dst = self._def(phi)
-        if dst.msb is not None and src.msb is not None:
-            self.store.le(dst.msb, src.msb, guard=guard)
-        if dst.lsb is not None and src.lsb is not None:
-            self.store.ge(dst.lsb, src.lsb, guard=guard)
-        value = self._def_value(other)
-        if dst.value is not None and value is not None:
-            self.store.le(dst.value, value, guard=guard)
-            self.store.ge(dst.value, value, guard=guard)
+        if src is not None and self._one_space(phi, other):
+            self._one_of(self._def(phi), [replace(src, value=self._def_value(other))], guard)
 
-    @property
-    def _classes(self) -> ValueClassAnalysis:
-        if self._classes_cache is None:
-            self._classes_cache = ValueClassInfer.analyze(
-                self.func, def_use=self.def_use, type_info=self.type_info,
-                ctx_use=self.ctx_use,
-            )
-        return self._classes_cache
+    def _unvalued(self) -> set[Region]:
+        """The regions whose lists are region summaries (digit-bound.md,
+        "Lists"): stored into while another name's definition may be live, or
+        through a row; stored into by a loop iterating them; not index
+        functions (:meth:`_not_index_functions`); or handed to a callee that
+        may store into them.  Drops those regions' builders, and records the
+        definitions inside a builder."""
+        alias = self._classes.alias
+        placed = dict(_placed(self.func.body))
+        order = {s: k for k, s in enumerate(placed)}
+
+        def later(d: Definition, w: Stmt) -> bool:
+            # defined only past *w*, in no loop around it: dead wherever *w* runs
+            site = d.site
+            return (isinstance(site, Stmt) and site in order and order[site] > order[w]
+                    and not set(placed[site]) & set(placed[w]))
+
+        out: set[Region] = set()
+        for stmt in placed:
+            match stmt:
+                case IndexedAssign():
+                    r = alias.region_of(self.def_use.find_def_from_use(stmt), len(stmt.indices) - 1)
+                    if r is not None and any(
+                        len(stmt.indices) > 1 or (d.name != stmt.var and not later(d, stmt))
+                        for d in alias.defs_in(r)
+                    ):
+                        out.add(r)
+                case ForStmt(iterable=Var() as xs):
+                    r = alias.region_of(self.def_use.find_def_from_use(xs))
+                    if r is not None and any(
+                        isinstance(s, IndexedAssign)
+                        and alias.region_of(self.def_use.find_def_from_use(s)) == r
+                        for s in _stmts(stmt.body)
+                    ):
+                        out.add(r)
+        out |= self._not_index_functions(placed)
+        calls = (e for stmt in placed for e in _exprs(stmt) if isinstance(e, Call))
+        writes: dict[FuncDef, frozenset[int]] = {}
+        for e in calls:
+            if isinstance(e.fn, Function):
+                if e.fn.ast not in writes:
+                    writes[e.fn.ast] = _written_params(e.fn.ast)
+                for i in writes[e.fn.ast]:
+                    self._written_args.append(e.args[i])
+                    r = alias.region_of_expr(e.args[i])
+                    while r is not None:
+                        out.add(r)
+                        r = alias.region_at(r)
+        self._builders = {
+            r: b for r, b in self._builders.items()
+            if not any(alias.region_of(b[1], k) in out for k in range(self._depth(b[1])))
+        }
+        for d in self.def_use.defs:
+            r = alias.region_of(d) if isinstance(self._type_of(d), ListType) else None
+            site = d.site
+            if r in self._builders and isinstance(site, Stmt) and self._builders[r][0] in placed.get(site, ()):
+                self._in_build.add(d)
+        return out
+
+    def _not_index_functions(self, placed: dict[Stmt, tuple[Stmt, ...]]) -> set[Region]:
+        """The regions whose lists are not index functions (digit-bound.md,
+        "Lists"): stored into other than by a :meth:`_builder`, or carried by
+        another loop.  Records each builder, and the phis that are read."""
+        alias = self._classes.alias
+        stores: dict[Region, list[IndexedAssign]] = {}
+        for stmt in placed:
+            if isinstance(stmt, IndexedAssign):
+                r = alias.region_of(self.def_use.find_def_from_use(stmt))
+                if r is not None:
+                    stores.setdefault(r, []).append(stmt)
+        # A phi is read where something uses it, or a phi that is read takes it:
+        # an iteration then sees what an earlier one left.  A list built anew
+        # in each iteration has a phi nothing reads.
+        read = {d for d, us in self.def_use.uses.items() if isinstance(d, PhiDef) and us}
+        todo = list(read)
+        while todo:
+            p = todo.pop()
+            for q in (self.def_use.defs[p.lhs], self.def_use.defs[p.rhs]):
+                if isinstance(q, PhiDef) and q not in read:
+                    read.add(q)
+                    todo.append(q)
+        self._read_phis = read
+        out: set[Region] = set()
+        for d in self.def_use.defs:
+            r = alias.region_of(d) if isinstance(self._type_of(d), ListType) else None
+            if r is None or r in out:
+                continue
+            built = self._builder(r, stores.get(r, []), placed)
+            loop = built[0] if built is not None else None
+            carried = isinstance(d, PhiDef) and d.is_loop and d.site is not loop and d in read
+            if carried or (stores.get(r) and built is None):
+                out.add(r)
+            elif built is not None:
+                self._builders[r] = built
+        return out
+
+    def _builder(
+        self, r: Region, stores: list[IndexedAssign], placed: dict[Stmt, tuple[Stmt, ...]],
+    ) -> tuple[ForStmt, Definition, PhiDef] | None:
+        """The loop building the list of region *r*, the `empty` it fills and
+        the loop's phi of it,
+        where every store into it writes element `k` at the `k`-th iteration
+        of that loop, the innermost around it, for every `k`, and the region
+        holds no other object."""
+        loops = {placed[stmt][-1] if placed[stmt] else None for stmt in stores}
+        if len(loops) != 1 or not isinstance(loop := loops.pop(), ForStmt):
+            return None
+        for stmt in stores:
+            if len(stmt.indices) != 1:
+                return None
+            idx = stmt.indices[0]
+            # the loop's own index, or a count of its iterations (a gather)
+            target = isinstance(idx, Var) and isinstance(loop.iterable, Range1) and isinstance(loop.target, NamedId) and (
+                self.def_use.find_def_from_use(idx) == self.def_use.find_def_from_site(loop.target, loop))
+            if not target and not self._counts(loop, idx):
+                return None
+        alias = self._classes.alias
+        phis = [p for p in self.def_use.phis.get(loop, ()) if alias.region_of(p) == r]
+        if len(phis) != 1 or not _is_empty_alloc(alloc := self.def_use.defs[phis[0].lhs]):
+            return None
+        n = _size(self.array_size.by_def.get(alloc))
+        if n is None or self._len_of(loop.iterable) != n:
+            return None
+        # the `empty` is the region's one object: another put in it later is not built
+        for d in alias.defs_in(r):
+            site = d.site
+            if site is not alloc.site and (isinstance(site, Argument) or (
+                    isinstance(site, Assign) and not isinstance(site.expr, Var | ListRef | IfExpr))):
+                return None
+        return loop, alloc, phis[0]
+
+    def _inner_region(self, of: Expr | Definition) -> Region | None:
+        """The region holding the innermost elements of the list *of*."""
+        alias = self._classes.alias
+        r = alias.region_of(of) if isinstance(of, Definition) else alias.region_of_expr(of)
+        for _ in range(self._depth(of) - 1):
+            r = alias.region_at(r) if r is not None else None
+        return r
+
+    def _bound_summaries(self) -> None:
+        """Each read of a list that is not an index function is one of the
+        values entering its region, at some index and iteration (digit-bound.md,
+        "Lists")."""
+        entries, made = self._region_entries()
+        spaces = self.store.spaces
+        for terms, of, r in self._summary_reads:
+            if r is None or not (srcs := entries.get(r)) or terms.msb is None:
+                continue
+            # what a read is one of is at its own iteration of every loop the
+            # region's objects are all made in, and at some point of the rest
+            here = (*self.params.outer, *made.get(r, ()))
+            kept = {spaces.find(k) for k in here}
+            at = self._binders_of.get(of, self._binders) if isinstance(of, Expr) else self._def_binders(of)
+            anywhere = []
+            for i, src in enumerate(srcs):
+                moved = {k for t in (src.msb, src.lsb, src.value) if t is not None
+                         for k in self._varies(t) if spaces.find(k) not in kept}
+                # each read is its own value: a witness of its own, varying with it
+                anywhere.append(self._copy(src, moved, _Witness((id(terms), i)), at) if moved else src)
+            self._bracket(terms, of, anywhere)
+
+    def _region_entries(self) -> tuple[dict[Region, list[Terms]], dict[Region, tuple[Key, ...]]]:
+        """What enters each region of innermost list elements: a parameter's
+        or an allocation's elements, and every value stored.  A region with
+        an entry nothing bounds -- a callee's store, an unmodeled list -- has
+        none: nothing bounds what it holds.  And the binders every object in
+        the region is made inside, where no phi carries one past an
+        iteration: a read there sees that iteration's objects alone."""
+        out: dict[Region, list[Terms]] = {}
+        unknown: set[Region] = set()
+        made: dict[Region, set[Key]] = {}
+        carried: dict[Region, set[Key]] = {}
+        for d in self.def_use.defs:
+            if not self._depth(d) or (r := self._inner_region(d)) is None:
+                continue
+            match d.site:
+                case Argument():
+                    made[r] = set()
+                    t = self.out.by_def.get(d)
+                case IndexedAssign() as w:
+                    t = self.out.by_expr.get(w.expr)
+                case Assign(expr=Var() | ListRef() | IfExpr()):
+                    continue    # names a list in the region
+                case Assign(expr=x) as site:
+                    around = set(self._binders_of.get(site, ())) - set(self.params.outer)
+                    made[r] = around if r not in made else made[r] & around
+                    if isinstance(x, Empty):
+                        continue    # holds nothing yet
+                    t = self.out.by_expr.get(x)
+                case ForStmt() | WhileStmt() as loop if d in self._read_phis:
+                    carried.setdefault(r, set()).add(self._binder(loop))
+                    continue
+                case _:
+                    continue    # a phi or a loop target: names a list in the region
+            if t is None or t.msb is None:
+                unknown.add(r)
+            else:
+                out.setdefault(r, []).append(t)
+        unknown.update(r for a in self._written_args if (r := self._inner_region(a)) is not None)
+        fixed = {r: tuple(made.get(r, set()) - carried.get(r, set())) for r in out}
+        return {r: ts for r, ts in out.items() if r not in unknown}, fixed
+
+    def _is_unvalued(self, d: Definition) -> bool:
+        """Is *d* a region summary at any depth (:meth:`_unvalued`)?  A list
+        holding such rows is."""
+        alias = self._classes.alias
+        return any(alias.region_of(d, k) in self._unvalued_regions for k in range(self._depth(d)))
 
     def _assumed(self, e: Expr) -> frozenset[int]:
         """The guard literals *e* may assume: each definition
@@ -1189,7 +1934,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
         And what every `with` dominating *e* makes true; see
         :meth:`_visit_context`."""
-        outer = self.outer() if self.outer is not None else frozenset()
+        outer = self.outer()
+        outer |= frozenset(self._arms_of.get(e, ()))
         summaries = self._summaries if self._summaries is not None else self._summary_vars()
         outer |= frozenset(
             lit for v, lit in self._established_at.get(e, ()) if v not in summaries
@@ -1226,8 +1972,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         found = self._position(scope) if scope is not None else None
         if found is not None:
             pos = found[0]
-            lits = self.store.not_neg_inf(pos)
-            self._established |= {(v.index, lit) for (v, _), lit in zip(pos.coeffs, lits)}
+            for lits in (self.store.not_neg_inf(pos), self.store.high(pos)):
+                self._established |= {(v.index, lit) for (v, _), lit in zip(pos.coeffs, lits, strict=True)}
         self._visit_block(stmt.body, ctx)
 
     def _summary_vars(self) -> set[int]:
@@ -1249,34 +1995,53 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._established = established
 
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
+        self._arms_of[stmt] = self._arms
         self._loops_of_stmt[stmt] = self._loops
+        self._binders_of[stmt] = self._binders
         return super()._visit_statement(stmt, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any) -> None:
+        # A binder no copy moves and no equation names, so its phis are not
+        # joined: what the body computes varies with its iterations, and past
+        # it a phi has terms of its own (digit-bound.md, "Control").
+        w = self._binder(stmt)
+        self.store.spaces.open(w, self._binders)
         loops, self._loops = self._loops, (*self._loops, stmt)
+        binders, self._binders = self._binders, (*self._binders, w)
         super()._visit_while(stmt, ctx)
-        self._loops = loops
+        self._binders, self._loops = binders, loops
+        for phi in self.def_use.phis[stmt]:
+            if isinstance(self._type_of(phi), RealType | ListType):
+                terms = Terms()
+                self._fresh_interval(terms, phi, f'x{len(self.out.by_def)}')
+                self.out.by_def[phi] = terms
 
-    def _visit_if1(self, stmt: If1Stmt, ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any) -> None:
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.body, ctx)
+        self._visit_arm(stmt.body, ctx)
         self._visit_branches(stmt, stmt.cond)
 
-    def _visit_if(self, stmt: IfStmt, ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: Any) -> None:
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.ift, ctx)
-        self._visit_block(stmt.iff, ctx)
+        self._visit_arm(stmt.ift, ctx)
+        self._visit_arm(stmt.iff, ctx)
         self._visit_branches(stmt, stmt.cond)
+
+    def _visit_arm(self, block: StmtBlock, ctx: Any) -> None:
+        """*block* under a literal "this arm runs", which guards what holds
+        only there and every expression in it assumes."""
+        arms, self._arms = self._arms, (*self._arms, self.store.literal(self._binders))
+        self._visit_block(block, ctx)
+        self._arms = arms
 
     def _fresh_value(self, e: Expr) -> Term:
         """A value variable for *e*, bounded by the range its format gives."""
         v = self._var(f'V{len(self.out.by_expr)}')
         rng = self.view.int_range(e)
         if rng is not None:
-            # the range is of the finite values, and `min(logb(0), 5)` is not one
-            guard = self.store.not_neg_inf(v) if self.view.has_neg_inf(e) else ()
-            self.store.ge(v, rng[0], guard=guard)
-            self.store.le(v, rng[1])
+            # `min(logb(0), 5)` is not finite
+            low = self.store.not_neg_inf(v) if self.view.has_non_finite(e) else ()
+            self._seed(v, e, *rng, low=low)
         return v
 
     def _exp2_arg(self, e: Expr) -> Term | None:
@@ -1310,7 +2075,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         ctx = self.scopes.get(scope, scope.ctx)
         pos: object
         rm: object
-        if isinstance(ctx, MPFixedContext):
+        if isinstance(ctx, MPFixedContext) or (
+            # a bounded one, where an overflow does not wrap or saturate
+            isinstance(ctx, MPBFixedContext)
+            and ctx.overflow in (OverflowMode.OVERFLOW, OverflowMode.ASSERT)
+        ):
             pos = ctx.nmin
             # a stochastic context rounds away from zero whatever `rm` says,
             # so it reports no mode and is assumed to carry
@@ -1334,11 +2103,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     # -- index sets ------------------------------------------------------
     #
-    # A list has one set of terms -- its *summary* -- describing an arbitrary
-    # element, so a fact stated about it is a claim about every element.  Two
-    # comprehensions over the same list may share that summary; sound only
-    # while both range over the *same* elements, so every rule below checks
-    # that, and a subset gets its own terms and no relation.
+    # A list has one set of terms, its *representative*, describing an
+    # arbitrary element.  A part gets a copy, with every fact replayed onto it
+    # (`DigitBoundStore.instance`).
     #
     def _len_of(self, e: Expr) -> int | None:
         return _size(self.array_size.by_expr.get(e))
@@ -1356,12 +2123,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return False
         return self._loop_index.get(self.def_use.find_def_from_use(index)) == length
 
-    def _range_key(self, e: Expr) -> _RangeKey | None:
+    def _range_key(self, e: Expr) -> _Range | None:
         """An identity for a range, so two loops over the same one land on
         the same index set."""
         match e:
             case Range2():
-                step: _Operand | None = _ONE
+                step: _Operand | None = 1
             case Range3():
                 step = self._part_key(e.third)
             case _:
@@ -1369,25 +2136,25 @@ class _DigitBoundInferInstance(DefaultVisitor):
         start, stop = self._part_key(e.first), self._part_key(e.second)
         if start is None or stop is None or step is None:
             return None
-        return (start, stop, step)
+        return _Range(start, stop, step)
 
     def _part_key(self, e: Expr) -> _Operand | None:
         """*e* as an :data:`_Operand`, or `None`."""
         const = self.view.int_value(e)
         if const is not None:
-            return ('c', const)
+            return const
         if isinstance(e, Var):
-            return ('d', self.def_use.find_def_from_use(e))
+            return self.def_use.find_def_from_use(e)
         return None
 
-    def _elt_key(self, d: Definition) -> _EltKey | None:
+    def _elt_key(self, d: Definition) -> _Elts | None:
         """The index set of *d* if it is `a + s * k` for `k` over
         `range(n)`."""
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return None
         return self._elt_key_of(d.site.expr)
 
-    def _elt_key_of(self, e: Expr) -> _EltKey | None:
+    def _elt_key_of(self, e: Expr) -> _Elts | None:
         """The index set of *e* if it is `a + s * k` for `k` over
         `range(n)`."""
         if not isinstance(e, Add):
@@ -1401,25 +2168,25 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     continue
                 if self.def_use.find_def_from_use(k) is not self._trip[0]:
                     continue
-                b = _ONE if s is None else self._part_key(s)
+                b = 1 if s is None else self._part_key(s)
                 if b is not None:
-                    return ('elt', a, b, self._trip[1])
+                    return _Elts(a, b, self._trip[1])
         return None
 
     def _at_index(self, lst: Var, idx: Expr) -> Terms | None:
-        """*lst*'s element summary at *idx*: an index set (:meth:`_at_index_set`),
+        """*lst*'s element terms at *idx*: an index set (:meth:`_at_index_set`),
         a constant `k`, the set ``range(k, k + 1)``, or `a + s * k` written
         inline."""
         if isinstance(idx, Var):
             return self._at_index_set(lst, idx)
         k = self.view.int_value(idx)
         if k is not None:
-            return self._instance(lst, (('c', k), ('c', k + 1), _ONE))
+            return self._instance(lst, _Range(k, k + 1))
         key = self._elt_key_of(idx)
-        return None if key is None else self._instance(lst, key)
+        return None if key is None else self._instance(lst, key, self._trip_binder())
 
     def _at_index_set(self, lst: Var, idx: Var) -> Terms | None:
-        """*lst*'s element summary restricted to the index set *idx* covers:
+        """*lst*'s element terms restricted to the index set *idx* covers:
         the enclosing loop's range, or `a + s * k` over a trip count
         (:meth:`_elt_key`); ``None`` where there is no such set.
 
@@ -1431,152 +2198,248 @@ class _DigitBoundInferInstance(DefaultVisitor):
         ``prods`` gathered over the evens keep their pairing.
         """
         d_idx = self.def_use.find_def_from_use(idx)
-        key: _RangeKey | _EltKey | None = self._elt_key(d_idx)
+        key: _Range | _Elts | None = self._elt_key(d_idx)
         if key is None:
             if self._gather is None or d_idx is not self._gather[1]:
                 return None
             key = self._gather[0]
-        return self._instance(lst, key)
+            return self._instance(lst, key, self._index_binder.get(d_idx))
+        return self._instance(lst, key, self._trip_binder())
 
-    def _instance(self, lst: Var, key: '_RangeKey | _EltKey') -> Terms | None:
-        """*lst*'s element summary renamed for the index set *key*; see
-        :meth:`_at_index_set`."""
+    def _trip_binder(self) -> Key | None:
+        """The binder of the trip count an `a + s * k` index counts by."""
+        return None if self._trip is None else self._index_binder.get(self._trip[0])
+
+    def _enumerated(self, key: _Range | _Elts, binder: Key | None) -> _Range | _Elts | _Apart:
+        """The index set *key*, as *binder* enumerates it: one with the binders
+        that enumerate it already, where *binder* corresponds with theirs --
+        both run over it in order, so their indices are one -- else one apart."""
+        if binder is None:
+            return key
+        firsts = self._enumerators.setdefault(key, [])
+        n = next((n for n, b in enumerate(firsts) if b == binder or self.store.spaces.correspond(binder, b)), None)
+        if n is None:
+            n = len(firsts)
+            firsts.append(binder)
+        return key if n == 0 else _Apart(key, n)
+
+    def _instance(self, lst: Var, key: _Range | _Elts, binder: Key | None = None) -> Terms:
+        """*lst*'s element terms renamed for the index set *key*, as *binder*
+        enumerates it; see :meth:`_at_index_set`."""
         d_lst = self.def_use.find_def_from_use(lst)
         src = self._def(d_lst)
         if src.value is None:
             # the part is what a rounding position is built from, and the
             # whole list's value is minted lazily, so force it here
             src.value = self._def_value(d_lst)
-        fields = (src.msb, src.lsb, src.value)
-        names = [v for t in fields if t is not None for v, _ in t.coeffs]
-        if any(v.index not in self._elt_vars for v in names):
-            # a variable this frame cannot vouch for as per-element would be
-            # left shared rather than copied, which is the two-way claim
+        return self._copy(src, (self._elements(d_lst),), self._enumerated(key, binder))
+
+    def _witness(self, e: AMax | AMin | Sum) -> Term | None:
+        """The `msb` of the worst element of the list *e* reduces: a copy of
+        its element at an index of *e*'s own, so two aggregates over one list
+        need not share their worst element."""
+        src = self.out.by_expr.get(e.arg)
+        if src is None or src.msb is None:
             return None
-        inst = self._index_sets.get(key)
+        return self._copy(src, (self._elements(e.arg),), _Witness(id(e))).msb
+
+    def _copy(
+        self,
+        src: Terms,
+        elements: Iterable[Key],
+        key: _IndexKey,
+        binders: tuple[Key, ...] | None = None,
+    ) -> Terms:
+        """*src* renamed onto the index set *key*: at another index of
+        *elements*' spaces, varying with *binders* (by default, the walk's)."""
+        fields = (src.msb, src.lsb, src.value)
+        spaces = self.store.spaces
+        elements = set(elements)
+        classes = {spaces.find(k) for k in elements}
+        insts = self._index_sets.setdefault(key, [])
+        inst = next((i for i in insts if {spaces.find(k) for k in i.elements} == classes), None)
         if inst is None:
-            inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}')
-        for v in names:
-            if v.index not in inst.subst:
-                inst.subst[v.index] = self._var(v.name + inst.tag)
+            inst = _IndexSet(
+                f'@{sum(map(len, self._index_sets.values()))}',
+                self._binders if binders is None else binders)
+            insts.append(inst)
+        inst.elements.update(elements)
+        # a variable that does not vary with the index is the part's too
+        for t in fields:
+            for v, _ in (t.coeffs if t is not None else ()):
+                if spaces.signature(v.index) & classes and v.index not in inst.subst:
+                    inst.subst[v.index] = self.store.var(v.name + inst.tag)
         self._replay(inst)
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
+    def _replay_all(self) -> None:
+        """Every index set's facts stated since, its callees' included: a
+        caller states some after the call returns."""
+        for insts in self._index_sets.values():
+            for inst in insts:
+                self._replay(inst)
+        for walk in self._callees:
+            walk._replay_all()
+
     def _replay(self, inst: _IndexSet) -> None:
         """Every fact stated since *inst* was last replayed, renamed onto it."""
-        inst.mark = self.store.instance(self._elt_vars, inst.subst, inst.mark, inst.tag)
+        spaces = self.store.spaces
+        classes = {spaces.find(k) for k in inst.elements}
+        self.store.instance(classes, inst.subst, inst.lits, inst.done, inst.tag)
+        for old, new in list(inst.subst.items())[inst.minted:]:
+            for v, _ in new.coeffs:
+                spaces.copy(v.index, old, classes)
+                spaces.mint(v.index, inst.binders)
+        inst.minted = len(inst.subst)
 
-    def _carried(self, d: Definition) -> list[Terms] | None:
-        """What bounds an arbitrary element of the list *d*, if anything does.
+    def _counts(self, loop: ForStmt, idx: Expr) -> bool:
+        """Does *idx* count *loop*'s iterations: a phi of it entering at 0 and
+        stepping by 1?"""
+        d = self.def_use.find_def_from_use(idx) if isinstance(idx, Var) else None
+        if not isinstance(d, PhiDef) or d not in self.def_use.phis.get(loop, ()):
+            return False
+        if self.view.int_value(self.def_use.defs[d.lhs]) != 0:
+            return False
+        # the step, through any names it is copied by
+        step = self.def_use.defs[d.rhs].site
+        while isinstance(step, Assign) and isinstance(step.expr, Var):
+            step = self.def_use.find_def_from_use(step.expr).site
+        if not isinstance(step, Assign) or not isinstance(step.expr, Add):
+            return False
+        add = step.expr
+        return any(isinstance(a, Var) and self.def_use.find_def_from_use(a) is d and self.view.int_value(b) == 1
+                   for a, b in ((add.first, add.second), (add.second, add.first)))
 
-        A partial write leaves the rest of a list alone, so the reach of the
-        writes that came before it is part of the answer.  An `empty` is
-        bounded by nothing at all -- every element of one is uninitialized, so
-        a read that gets there is undefined and no bound has to cover it.
-        """
-        if _is_empty_alloc(d):
-            return []
-        if d in self._partial:
-            return self._partial[d]
-        terms = self.out.by_def.get(d)
-        return None if terms is None else [terms]
-
-    def _bind_elt(self, target: NamedId, site, source: Var) -> None:
+    def _bind_elt(self, target: NamedId, site: ListComp | ForStmt, source: Var, binder: Key) -> None:
         d_src = self.def_use.find_def_from_use(source)
-        self._share(self.def_use.find_def_from_site(target, site), self._def(d_src))
+        d = self.def_use.find_def_from_site(target, site)
+        self._unify_elements(d, d_src, 1)    # a row: the list's inner indices
+        if self._is_unvalued(d_src):
+            t = self._def(d)
+            for v, _ in (t.lsb.coeffs if t.lsb is not None else ()):
+                self.store.spaces.bound(v.index, self._def_binders(d))
+            self._summary_reads.append((t, d, self._inner_region(source)))
+            return
+        self._share(d, self._element(d_src, binder))
 
-    def _bind_iter(self, target: Id | TupleBinding, iterable: Expr, site) -> None:
-        """What iterating *iterable* as *target* binds, at *site*.
-
-        Shared by the comprehension and the loop it lowers to, which is where
-        the two forms of every rule here have drifted apart before.
-        """
+    def _bind_iter(self, target: Id | TupleBinding, iterable: Expr, site: ListComp | ForStmt, binder: Key) -> None:
+        """What iterating *iterable* as *target* binds, at *site*: shared by a
+        comprehension and the loop it lowers to."""
         if not isinstance(target, NamedId):
             return
+        d = self.def_use.find_def_from_site(target, site)
         match iterable:
             case Var():
                 # iterating a list directly binds the target to its element
-                self._bind_elt(target, site, iterable)
+                self._bind_elt(target, site, iterable, binder)
             case Range1():
                 # ... while `range(len(xs))` makes the target an index.  Only
                 # `Range1`: a range with a start or a step does not visit
                 # every index from zero, and covering is the claim that it
                 # does ...
-                n = self._len_of(iterable)
-                if n is not None:
-                    self._loop_index[self.def_use.find_def_from_site(target, site)] = n
+                self._index_binder[d] = binder
+                if (n := self._len_of(iterable)) is not None:
+                    self._loop_index[d] = n
                 # ... and a trip count, whose `a + s * k` the body may index by
-                trip = self._part_key(iterable.arg)
-                if trip is not None:
-                    self._trip = (self.def_use.find_def_from_site(target, site), trip)
+                if (trip := self._part_key(iterable.arg)) is not None:
+                    self._trip = (d, trip)
             case Range2() | Range3():
                 # ... it visits a *part*, which `_at_index_set` gives
                 # variables of its own.
-                key = self._range_key(iterable)
-                if key is not None:
-                    self._gather = (key, self.def_use.find_def_from_site(target, site))
+                self._index_binder[d] = binder
+                if (key := self._range_key(iterable)) is not None:
+                    self._gather = (key, d)
             case _:
                 pass    # anything else binds the target to nothing
 
-    def _visit_list_comp(self, e: ListComp, ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: Any) -> None:
         outer = self._gather, self._trip
         self._trip = None
-        for target, iterable in zip(e.targets, e.iterables):
+        clauses = tuple(self._binder(e, k) for k in range(len(e.targets)))
+        for k, c in enumerate(clauses):
+            self.store.spaces.open(c, (*self._binders, *clauses[:k]))
+        for target, iterable, binder in zip(e.targets, e.iterables, clauses):
             self._visit_expr(iterable, ctx)
             # a `zip` has no counterpart in the lowered loop, so it stays here
             if isinstance(target, TupleBinding) and isinstance(iterable, Zip):
                 for sub, part in zip(target.elts, iterable.args):
                     if isinstance(sub, NamedId) and isinstance(part, Var):
-                        self._bind_elt(sub, e, part)
+                        self._bind_elt(sub, e, part, binder)
             else:
-                self._bind_iter(target, iterable, e)
-        self._elt_depth += 1
+                self._bind_iter(target, iterable, e, binder)
+        binders, self._binders = self._binders, (*self._binders, *clauses)
         self._visit_expr(e.elt, ctx)
-        self._elt_depth -= 1
+        self._binders = binders
         self._gather, self._trip = outer
 
-    def _visit_for(self, stmt: ForStmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: Any) -> None:
         self._visit_expr(stmt.iterable, ctx)
         outer = self._gather, self._trip
         self._trip = None
-        self._bind_iter(stmt.target, stmt.iterable, stmt)
-        # A list the body fills enters the loop holding whatever it already
-        # does, which a partial write leaves in place.
-        for phi in self.def_use.phis[stmt]:
-            self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
-        self._elt_depth += 1
+        b = self._binder(stmt)
+        self.store.spaces.open(b, self._binders)
+        self._bind_iter(stmt.target, stmt.iterable, stmt, b)
+        # a built list's element is the iteration that wrote it
+        built = {r: self.store.spaces.correspond(b, self._elements(alloc))
+                 for r, (loop, alloc, _) in self._builders.items() if loop is stmt}
         loops, self._loops = self._loops, (*self._loops, stmt)
+        binders, self._binders = self._binders, (*self._binders, b)
         self._visit_block(stmt.body, ctx)
+        self._binders = binders
         self._loops = loops
-        self._elt_depth -= 1
         self._gather, self._trip = outer
+        for r, paired in built.items():
+            self._build(r, stmt, paired)
+        # A carried value starts an iteration as the pre-loop value or the
+        # iteration before's, and leaves the loop as the last iteration's (or
+        # the pre-loop one, where it never runs).  A list's phi states nothing:
+        # a built list's shares its terms, and any other is a region summary.
         for phi in self.def_use.phis[stmt]:
-            body_def = self.def_use.defs[phi.rhs]
-            body = self.out.by_def.get(body_def)
+            if isinstance(self._type_of(phi), ListType):
+                continue
+            body = self.out.by_def.get(self.def_use.defs[phi.rhs])
             pre = self.out.by_def.get(self.def_use.defs[phi.lhs])
-            if body is None:
-                self._join(phi, self._partial.get(body_def))
-            elif (_is_empty_alloc(self.def_use.defs[phi.lhs])
-                  or body_def in self._covered_write):
-                # Every iteration writes the same expression, so the body's
-                # terms describe the loop's element too.  Zero trips is
-                # vacuous in both these cases and only these: an `empty` has
-                # no element to describe, and a *covering* write runs as many
-                # times as the list is long, so no trips means no elements.
-                self._share(phi, body)
-            elif pre is not None:
-                # Otherwise the phi is what an iteration *starts* from -- the
-                # pre-loop value on the first pass, and on every pass if the
-                # loop never runs -- so only the join covers both.  A list
-                # that arrived with elements keeps them.
-                self._join(phi, [pre, body])
-            self._partial[phi] = self._partial.get(body_def)
-            if body_def in self._fields:
-                self._fields[phi] = self._fields[body_def]
-            if body_def in self._elt_expr:
-                self._elt_expr[phi] = self._elt_expr[body_def]
+            terms = Terms()
+            self._fresh_interval(terms, phi, f'x{len(self.out.by_def)}')
+            if body is not None and pre is not None:
+                self._bracket(self._def(phi), phi, [pre, self._copy(body, (b,), _Witness(id(stmt)), (*self._binders, b))])
+                self._bracket(terms, phi, [pre, self._copy(body, (b,), _Last(id(stmt)))])
+            self.out.by_def[phi] = terms
 
-    def _visit_assign(self, stmt: Assign, ctx):
+    def _build(self, r: Region, loop: ForStmt, paired: bool) -> None:
+        """The list *loop* builds into region *r*: element `k` is what
+        iteration `k` leaves it -- or, where the invariant refuses the loop the
+        list's index, what some iteration does."""
+        stores = self._built_stores.get(r, [])
+        if len(stores) == 1:
+            # a list of booleans has no terms, but zero paths read its element
+            self._built_expr[r] = stores[0].expr
+            if paired and isinstance(stores[0].expr, TupleExpr):
+                # a list of tuples has no element term of its own: its fields
+                self._built_fields[r] = tuple(self.out.by_expr.get(el) for el in stores[0].expr.elts)
+        terms = self._built_terms(r)
+        phi = self._builders[r][2]
+        left = self.def_use.defs[phi.rhs]
+        src = self.out.by_def.get(left) if left in self._in_build else None
+        if src is None or src.msb is None:
+            return      # no path writes, or nothing bounds what one does
+        src = replace(src, value=self._def_value(left))
+        alloc = self._builders[r][1]
+        if not paired:
+            # each element is what some iteration wrote: a witness of its own
+            src = self._copy(src, (self._binder(loop),), _Witness((id(loop), id(alloc))),
+                             (*self._binders, *self._all_elements(alloc)))
+        if src.value is not None:
+            terms.value = self._var(f'VB{len(self._built)}')
+            self._mark_elt(alloc, terms.value)
+        assert src.msb is not None and terms.msb is not None
+        self._one_of(terms, [src], ())
+        self._implied_high(terms.msb, [src.msb])
+        if paired:
+            self.store.ge(terms.msb, src.msb)
+            self._implied_high(src.msb, [terms.msb])
+
+    def _visit_assign(self, stmt: Assign, ctx: Any) -> None:
         self._visit_expr(stmt.expr, ctx)
         if isinstance(stmt.target, TupleBinding):
             # Unpacking an element of a materialized `zip` is what puts the
@@ -1587,34 +2450,40 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if not isinstance(stmt.target, NamedId):
             return
         d = self.def_use.find_def_from_site(stmt.target, stmt)
+        if isinstance(stmt.expr, Zip):
+            # a `zip`'s element `k` holds each operand's element `k`
+            for a in stmt.expr.args:
+                if isinstance(a, Var):
+                    self._unify_elements(d, self.def_use.find_def_from_use(a))
         match stmt.expr:
             case ListRef(value=Var() as lst, index=Var() as idx) if self._covers(
                 idx, self._len_of(lst)
-            ):
+            ) and not self._is_unvalued(self.def_use.find_def_from_use(lst)) and not self._mid_build(stmt.expr):
+                # a region summary's read, or one mid-build, is bounded as an expression
                 d_src = self.def_use.find_def_from_use(lst)
                 if isinstance(d_src.site, Assign) and isinstance(d_src.site.expr, Range1):
                     # `range(n)[i] == i`, so indexing a materialized range with
                     # a full index yields another one.  Comprehension
                     # elimination emits exactly this for a `zip`.
-                    self._loop_index[d] = self._loop_index[
-                        self.def_use.find_def_from_use(idx)
-                    ]
+                    d_idx = self.def_use.find_def_from_use(idx)
+                    self._loop_index[d] = self._loop_index[d_idx]
+                    self._index_binder[d] = self._index_binder[d_idx]
                 else:
-                    self._share(d, self._def(d_src))
+                    self._share(d, self._element(d_src, self._index_of(idx)))
             case _:
                 src = self.out.by_expr.get(stmt.expr)
                 if src is None:
                     return
                 terms = self._def(d)
-                # One-directional, not an equality.  `_def` seeds this
-                # definition from *its* format, which branch refinement
-                # narrows to the path the assignment sits on -- and the
-                # expression's terms are shared by every use of it, so an
-                # equality would state that narrower bound everywhere.  The
-                # useful direction survives: the definition reaches no
-                # further than the expression, and is no finer.
+                self._unify_elements(d, stmt.expr)
+                (src,) = self._aligned(d, [src])
+                # One-directional: `_def` seeds *d* from its path-refined
+                # format, and an equality would export that bound to every
+                # use of the expression.
                 if terms.msb is not None and src.msb is not None:
                     self.store.le(terms.msb, src.msb)
+                    self._implied_high(src.msb, [terms.msb])
+                    self._implied_high(terms.msb, [src.msb])
                 if terms.lsb is not None and src.lsb is not None:
                     self._grid_ge(terms.lsb, src.lsb)
                 terms.value = terms.value if terms.value is not None else src.value
@@ -1627,8 +2496,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         if not isinstance(d.site, Assign) or not isinstance(d.site.expr, Zip):
             return None
+        # a field is its operand's element only where the two are one index
+        own = self.store.spaces.find(self._elements(d))
         return tuple(
-            self._def(self.def_use.find_def_from_use(a)) if isinstance(a, Var) else None
+            self._def(d_a) if isinstance(a, Var) and not self._is_unvalued(
+                d_a := self.def_use.find_def_from_use(a))
+            and self.store.spaces.find(self._elements(d_a)) == own else None
             for a in d.site.expr.args
         )
 
@@ -1638,114 +2511,142 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 idx, self._len_of(lst)
             ):
                 d_lst = self.def_use.find_def_from_use(lst)
+                binder = self._index_of(idx)
             case _:
                 return
-        fields = self._fields.get(d_lst) or self._zip_fields(d_lst)
+        if self._is_unvalued(d_lst):
+            return      # a region summary: its fields are seeded alone
+        r = self._built_region(d_lst)
+        fields = (self._built_fields.get(r) if r is not None else None) or self._zip_fields(d_lst)
         if fields is None:
             return
+        here = self._reads_summary(d_lst, binder)
         for sub, part in zip(target.elts, fields):
             if isinstance(sub, NamedId) and part is not None:
+                if not here:
+                    assert binder is not None
+                    part = self._read_apart(part, d_lst, binder)
                 self._share(self.def_use.find_def_from_site(sub, stmt), part)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any) -> None:
         for s in stmt.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
-        d_in = self.def_use.find_def_from_use(stmt)
+        r = self._built_of(self.def_use.find_def_from_use(stmt))
+        if r is None:
+            return      # a region summary's store: an entry of its region (`_region_entries`)
         d = self.def_use.find_def_from_site(stmt.var, stmt)
-        src = self.out.by_expr.get(stmt.expr)
-        length = _size(self.array_size.by_def.get(d_in))
-        covers = len(stmt.indices) == 1 and self._covers(stmt.indices[0], length)
-        # A gather covers too: every element it writes is an element of the
-        # source at an index in the loop's range, and one it never writes is
-        # uninitialized, so no bound has to reach it.
-        gathers = stmt.expr in self._gathered and self._carried(d_in) == []
-        if not covers and not gathers:
-            prior = self._carried(d_in)
-            self._partial[d] = None if src is None or prior is None else [*prior, src]
-            return
-        if src is not None:
-            self._share(d, src)
-        self._covered_write.add(d)
-        self._elt_expr[d] = stmt.expr
-        if isinstance(stmt.expr, TupleExpr):
-            # A list of tuples has no element term of its own, so the fields
-            # are kept beside it for whatever destructures them.
-            self._fields[d] = tuple(
-                self.out.by_expr.get(el) for el in stmt.expr.elts
-            )
-        # A list of exponents needs its element's *value*, not its `logb`: that
-        # is what a rounding position built from it cancels against.
-        val = self.value_of(stmt.expr)
-        if val is not None:
-            self.out.by_def.setdefault(d, Terms()).value = val
+        self._unify_elements(stmt.expr, d, 1)    # a row stored whole
+        # at the builder's index, the list is the value stored
+        if (src := self.out.by_expr.get(stmt.expr)) is not None:
+            self._share(d, Terms(src.msb, src.lsb, self.value_of(stmt.expr)))
+        self._built_stores.setdefault(r, []).append(stmt)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any) -> None:
         self._visit_expr(stmt.expr, ctx)
         # A caller can use the result as a rounding position, and `value_of`
         # is lazy, so the value has to be named before the walk leaves.
         self.value_of(stmt.expr)
         # A path returning nothing but infinities and NaNs states no
         # magnitude: `logb` bounds the finite values, and this one has none.
-        if self.view.has_finite(stmt.expr):
-            self._returns.append((stmt.expr, self.out.by_expr.get(stmt.expr) or Terms()))
+        if not self.view.has_finite(stmt.expr):
+            self._dropped = True
+        else:
+            t = self.out.by_expr.get(stmt.expr) or Terms()
+            # the result is this return's value at the iterations it ran at,
+            # which do not vary with the binders it ran in
+            inner = self._binders[len(self.params.outer):]
+            if inner:
+                t = self._copy(t, inner, _Witness(id(stmt)), self.params.outer)
+            self._returns.append((stmt.expr, t))
 
     def _merge_returns(self) -> Terms:
         """The result is one of the returns: as far as the widest reaches, no
         finer than the coarsest, and valued as one of them.  A return reached
         only where some definition is non-finite is not taken where it is
         finite, so the rest bound the result there too."""
-        if len(self._returns) <= 1:
+        if len(self._returns) <= 1 and not self._dropped:
             return replace(self._returns[0][1]) if self._returns else Terms()
         tag = len(self.out.by_expr)
         terms = [t for _, t in self._returns]
+        if any(isinstance(self._type_of(e), ListType) for e, _ in self._returns):
+            # several lists, at one index only where they are one
+            terms = self._aligned(self.func, terms, self._merged_elements())
         merged = Terms()
         msbs, lsbs, values = (
             _all(getattr(t, f) for t in terms) for f in ('msb', 'lsb', 'value'))
-        if msbs is not None:
+        # where a return left out ran, the result is not finite
+        if msbs:
             merged.msb = self._var(f'msbR{tag}')
-            self.store.le_max(merged.msb, msbs)
-        if lsbs is not None:
+            high = self.store.high(merged.msb) if self._dropped else ()
+            self.store.le_max(merged.msb, msbs, guard=high)
+            if not self._dropped:
+                self._implied_high(merged.msb, msbs)
+            elif len(msbs) == 1:
+                # finite only where the one return that can be ran
+                self._implied_high(msbs[0], [merged.msb])
+        if lsbs:
             merged.lsb = self._var(f'lsbR{tag}')
             self._lsb_vars.update(v.index for v, _ in merged.lsb.coeffs)
             self._grid_ge(merged.lsb, *lsbs)
-        if values is not None:
+        if values:
             merged.value = self._var(f'VR{tag}')
-            self.store.le_max(merged.value, values)
-            self.store.ge_min(merged.value, values)
+            guard = (*self.store.high(merged.value), *self.store.not_neg_inf(merged.value)) if self._dropped else ()
+            self.store.le_max(merged.value, values, guard=guard)
+            self.store.ge_min(merged.value, values, guard=guard)
         for d in self._non_finite_defs():
             taken = [t for e, t in self._returns
                      if self._classes.class_at(d, e) & (ValueClass.ZERO | ValueClass.FINITE)]
             if taken and len(taken) < len(terms):
                 for lit in self._finite_lits(d):
-                    self._untaken_returns(merged, taken, (lit,))
+                    self._one_of(merged, taken, (lit,))
         return merged
+
+    def _merged_elements(self) -> tuple[Key, ...]:
+        """The element spaces of the list several returns merge into, each one
+        with each return's where it can be."""
+        keys = tuple(self._elements(self.func, k) for k in range(self._depth(self._returns[0][0])))
+        for e, _ in self._returns:
+            for k, key in enumerate(keys):
+                self.store.spaces.correspond(key, self._elements(e, k))
+        return keys
+
+    def _return_elements(self) -> tuple[Key, ...]:
+        """The element spaces of the list the function returns: one return's,
+        or, for several, their merge's."""
+        lists = [e for e, _ in self._returns if isinstance(self._type_of(e), ListType)]
+        if not lists:
+            return ()
+        if len(self._returns) == 1 and not self._dropped:
+            return self._all_elements(lists[0])
+        keys = self._merged_elements()
+        ret = self.out.ret
+        for t in (ret.msb, ret.value):
+            for v, _ in (t.coeffs if t is not None else ()):
+                self.store.spaces.bound(v.index, keys)
+        return keys
 
     def _non_finite_defs(self) -> list[Definition]:
         """Every definition some arm is reached only where it is non-finite."""
-        if not any(isinstance(s, If1Stmt | IfStmt) for s in self._loops_of_stmt):
-            return []
         return list(dict.fromkeys(
             d for arms in self._classes.arm_facts.values()
             for facts in arms for d, cls in facts
             if not cls & (ValueClass.ZERO | ValueClass.FINITE)
         ))
 
-    def _untaken_returns(
-        self, merged: Terms, taken: list[Terms], guard: tuple[int, ...],
-    ) -> None:
-        """*merged* is one of *taken* wherever *guard* holds."""
+    def _one_of(self, dst: Terms, srcs: list[Terms], guard: tuple[int, ...]) -> None:
+        """*dst* is one of *srcs* wherever *guard* holds."""
         msbs, lsbs, values = (
-            _all(getattr(t, f) for t in taken) for f in ('msb', 'lsb', 'value'))
-        if merged.msb is not None and msbs is not None:
-            self.store.le_max(merged.msb, msbs, guard=guard)
-        if merged.lsb is not None and lsbs is not None:
-            self.store.ge_min(merged.lsb, lsbs, guard=guard)
-        if merged.value is not None and values is not None:
-            self.store.le_max(merged.value, values, guard=guard)
-            self.store.ge_min(merged.value, values, guard=guard)
+            _all(getattr(t, f) for t in srcs) for f in ('msb', 'lsb', 'value'))
+        if dst.msb is not None and msbs is not None:
+            self.store.le_max(dst.msb, msbs, guard=guard)
+        if dst.lsb is not None and lsbs is not None:
+            self._grid_ge(dst.lsb, *lsbs, guard=guard)
+        if dst.value is not None and values is not None:
+            self.store.le_max(dst.value, values, guard=guard)
+            self.store.ge_min(dst.value, values, guard=guard)
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: Any) -> None:
         for arg in e.args:
             self._visit_expr(arg, ctx)
         for _, kwarg in e.kwargs:
@@ -1760,17 +2661,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
             Terms(self._msb_of(a), self._lsb_of(a), self.value_of(a))
             for a in e.args
         )
-        before = self.store.n_vars
-        sub = _DigitBoundInferInstance(
-            e.fn.ast, view, self.store, args,
-            lambda i: self._lit_of(e.args[i]),
+        elements = tuple(self._all_elements(a) for a in e.args)
+        walk = _DigitBoundInferInstance(
+            e.fn.ast, view, DigitBoundParams(self.store, args, outer=self._binders, elements=elements),
             outer=lambda: self._assumed(e),
-        ).analyze()
-        if self._elt_depth:
-            # called once per element, so everything it minted is per-element
-            self._elt_vars.update(range(before, self.store.n_vars))
-            for i in range(before, self.store.n_vars):
-                self._raise_anchor(i, self._elt_depth)
+        )
+        sub = walk.analyze()
+        self._callees.append(walk)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows
@@ -1780,11 +2677,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # caller's own variable, shared by every use of that name, and
             # this site's bound may hold only on the path reaching the call.
             passed = {a.msb for a in args if a.msb is not None}
-            _, hi = self.view.logb_range(e)
-            if (sub.ret.msb is not None and hi is not None
-                    and sub.ret.msb not in passed):
-                self.store.le(sub.ret.msb, hi)
+            if sub.ret.msb is not None and sub.ret.msb not in passed:
+                self._seed(sub.ret.msb, e, None, self.view.logb_range(e)[1])
             self.out.by_expr[e] = Terms(sub.ret.msb, sub.ret.lsb, sub.ret.value)
+            for k, key in enumerate(sub.ret_elements):
+                # the result is the returned list, element for element
+                self.store.spaces.unify(self._elements(e, k), key)
 
 
 class DigitBoundInfer:
@@ -1812,8 +2710,4 @@ class DigitBoundInfer:
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
         if params is None:
             params = DigitBoundParams(DigitBoundStore(), ())
-        assume = params.assume
-        return _DigitBoundInferInstance(
-            func, view, params.store, params.args, classes=classes,
-            outer=(lambda: assume) if assume else None,
-        ).analyze()
+        return _DigitBoundInferInstance(func, view, params, classes).analyze()

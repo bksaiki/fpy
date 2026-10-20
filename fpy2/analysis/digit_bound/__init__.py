@@ -2,7 +2,7 @@
 
 Answers one question -- how many binades separate a value from the position it
 is rounded at -- which is the precision of the resulting fixed-point value.
-See ``docs/todos/digit-bound-inference.md``.
+See ``docs/todos/digit-bound.md``.
 
 :mod:`solver` is the constraint language and its backend, :mod:`store` the
 domain and its queries, and :mod:`infer` the pass over a program.
