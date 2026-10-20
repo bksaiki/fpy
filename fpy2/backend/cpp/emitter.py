@@ -2912,13 +2912,11 @@ class CppEmitter(Visitor):
         is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there --
         except where a non-zero length in the type has already settled it.
 
-        The accumulator is the active context's own type, which needs a ``+``
-        rounding as each step does, as ``+`` alone would; ``REAL`` accumulates in
-        the result's.  It may be *wider* than the element but not narrower:
-        ``init + *first`` converts to the common type, which is the accumulator only
-        when the element fits it exactly, making the fold uni-precision there as the
-        interpreter is.  Otherwise the seed would round.  The result's type holds
-        the unrounded seed too, so it may be wider than the accumulator.
+        The accumulator is the active context's type, with each step its ``+``;
+        ``REAL`` accumulates in the result's.  It may be *wider* than the element
+        but not narrower: ``init + *first`` converts to the common type, which is
+        the accumulator only when the element fits it exactly, making the fold
+        uni-precision there as the interpreter is.  Otherwise the seed would round.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2934,7 +2932,7 @@ class CppEmitter(Visitor):
             acc_ty = self._scalar_for_ctx(active, at=e)
         except CppEmitError:
             acc_ty = result_ty
-        # each step rounds as `+` under the context does: refused where `+` is
+        # each step must be `+` under `active`
         if active is not REAL and not any(
             sig.in_tys == (acc_ty, acc_ty) and sig.out_ctx == active
             for sig in self.op_table.binary.get(Add, ())
@@ -2954,12 +2952,6 @@ class CppEmitter(Visitor):
                 f'format.',
                 at=e,
             )
-        if not scalar_fits_in(acc_ty, result_ty):
-            raise CppEmitError(
-                f'unsupported: `sum` accumulating in `{acc_ty.format()}` into a '
-                f'`{result_ty.format()}` result, which cannot hold it exactly.',
-                at=e,
-            )
         # A prvalue operand (a list literal) would otherwise give begin() and
         # end() into *different* temporaries; binding also keeps the three uses
         # below to one evaluation.
@@ -2973,8 +2965,7 @@ class CppEmitter(Visitor):
             f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
             f'{self._list_end(arg_ty, src)}, {seed})'
         )
-        if acc_ty != result_ty:
-            fold = self._explicit_cast(fold, result_ty)
+        fold = self._maybe_cast(fold, acc_ty, result_ty, at=e, bound_of=e)
         if isinstance(arg_ty, CppList) and arg_ty.size:
             # a *non-zero* length settles the guard; `size == 0` is falsy here
             # and keeps it, which is the case a `std::array<T, 0>` needs

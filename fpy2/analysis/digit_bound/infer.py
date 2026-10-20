@@ -34,6 +34,7 @@ from ...number import (
     RoundingMode,
 )
 from ...number.context.mp_fixed import MPFixedContext
+from ...number.context.real import RealContext
 from ...types import ListType, RealType
 from ..alias import Region
 from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
@@ -599,10 +600,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         reaches past it.  The same context floors the grid: a rounded value
         is a multiple of the quantum, which is what pays for the carry.
 
-        `Round`/`Cast` model that context themselves, and a selection or a
-        projection hands an operand back unrounded, so both are excluded.
+        `Round`/`Cast` model that context themselves, a selection or a
+        projection hands an operand back unrounded, and `Sum` rounds each step
+        of its fold, not its result, so all are excluded.
         """
-        if isinstance(e, Round | Cast | Min | Max | AMin | AMax | Fst | Snd):
+        if isinstance(e, Round | Cast | Sum | Min | Max | AMin | AMax | Fst | Snd):
             return logb
         found = self._rounding(e)
         if found is None:
@@ -614,6 +616,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
         exact = self._var(f'X{len(self.out.by_expr)}')
         self.store.le_max(logb, [exact + 1, pos + 1])
         return exact
+
+    def _may_carry(self, e: Expr) -> bool:
+        """Whether a rounding under *e*'s context may carry."""
+        found = self._rounding(e)
+        if found is not None:
+            return _round_will_carry(found[1])
+        ctx = self._active_ctx(e)
+        if isinstance(ctx, _FLOAT_CTXS):
+            return _round_will_carry(None if ctx.is_stochastic() else ctx.rm)
+        return not isinstance(ctx, RealContext)
 
     def _active_float(self, e: Expr, logb: Term, grid: Term) -> Term:
         """:meth:`_active` for a context with no absolute position.
@@ -698,9 +710,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if (ts := self._msbs(e.arg)) is not None:
                     store.le_max(t, [v + 1 for v in ts] + [0])
             case Sum():
-                # `n` terms below `2 ** (L + 1)` sum below `2 ** (L + 1 + ceil(log2 n))`
+                # `n` terms below `2 ** (L + 1)` sum below `2 ** (L + 1 + ceil(log2 n))`,
+                # unless a step carries: the seed alone is unrounded
                 elt, n = self._msb_of(e.arg), self._len_of(e.arg)
-                if elt is not None and n is not None and n > 0:
+                if elt is not None and n is not None and (
+                    n == 1 or (n > 1 and not self._may_carry(e))
+                ):
                     store.le(t, elt + math.ceil(math.log2(n)))
             case Round() | Cast():
                 src, found = self._msb_of(e.args[0]), self._rounding(e)

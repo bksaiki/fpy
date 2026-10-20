@@ -2753,7 +2753,6 @@ class _FormatInferInstance(Visitor):
         """
         n = self._known_iter_count(e.arg)
         if n is None:
-            # the length may be one, and the first element is not rounded
             return _join_bounds(arg_fmt.elt, self._op_bound(e))
 
         # ``sum([])`` is conventionally 0 — fits trivially in any scope.
@@ -2777,11 +2776,7 @@ class _FormatInferInstance(Visitor):
         af_acc = af_elt
         for _ in range(n - 1):
             af_acc = af_acc + af_elt
-        # Where the accumulator fits, every step rounds to itself.  Where it
-        # does not, each of the `n - 1` roundings may carry, which one
-        # rounding of the total (`_bound_if_fits`'s overlap) misses.
-        resolved = self._resolve_active_ctx(e)
-        if resolved is not None and (resolved is REAL or round_is_identity(af_acc, resolved)):
+        if round_is_identity(af_acc, self._resolve_active_ctx(e)):
             fitted = self._bound_if_fits(e, af_acc)
             if fitted is not None:
                 return fitted
@@ -2967,7 +2962,7 @@ class _FormatInferInstance(Visitor):
             return sub.fn_fmt.ret_fmt
         return _bound_of_type(self.type_info.by_expr[e])
 
-    def _callee_stores(self, e: Call, sub: 'FormatAnalysis') -> None:
+    def _callee_stores(self, e: Call, sub: FormatAnalysis) -> None:
         """What the callee may leave in a list argument, recorded as a store
         here: the caller's list is the object it writes.  The callee's
         definitions in its parameter's region describe that object at every
@@ -2981,7 +2976,7 @@ class _FormatInferInstance(Visitor):
                 self._record_region_insert(
                     self.alias.region_of_expr(e.args[i]), 1, held.elt, already=set())
 
-    def _analyze_callee(self, e: Call) -> 'FormatAnalysis | None':
+    def _analyze_callee(self, e: Call) -> FormatAnalysis | None:
         """Recursive sub-analysis on the callee at this site.
 
         The callee's structural pre-analyses (def-use, types, context

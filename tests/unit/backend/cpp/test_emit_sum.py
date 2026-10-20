@@ -166,3 +166,15 @@ def test_a_sum_without_a_native_add_is_refused():
     step as FP16 does, which the interpreter does ([2048, 1, 1] is 2048)."""
     with pytest.raises(CppCompileError, match='no `\\+`'):
         CppCompiler().compile(_fp16_sum, arg_types=[ListType(RealType(fp.FP16), 4)])
+
+
+@fp.fpy(ctx=fp.REAL)
+def _sint64_sum(xs):
+    with fp.SINT64:
+        return sum(xs)
+
+
+def test_a_fold_narrows_to_a_result_its_values_fit():
+    """Four `int8_t`s sum within `int16_t`, though accumulated in `int64_t`."""
+    out = CppCompiler().compile(_sint64_sum, arg_types=[ListType(RealType(fp.SINT8), 4)])
+    assert 'static_cast<int16_t>(std::accumulate(' in out
