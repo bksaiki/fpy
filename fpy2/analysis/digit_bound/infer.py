@@ -373,7 +373,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._guards = {}
         self._elt_guards = {}
         self._loops = ()
-        self._binders = ()
+        # a callee varies with the caller's binders around the call
+        self._binders = outer_binders
         self._opened = set()
         self._binders_of = {}
         self._binders_of_stmt = {}
@@ -508,7 +509,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         site = d.site
         match site:
             case Argument() | FuncDef():
-                return ()
+                return self._outer_binders
             case ListComp():
                 outer = self._binders_of.get(site, self._binders)
                 return (*outer, *(self._binder(site, k) for k in range(len(site.targets))))
@@ -1954,16 +1955,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             Terms(self._msb_of(a), self._lsb_of(a), self.value_of(a))
             for a in e.args
         )
-        before = self.store.n_vars
         sub = _DigitBoundInferInstance(
             e.fn.ast, view, self.store, args,
             lambda i: self._lit_of(e.args[i]),
             outer=lambda: self._assumed(e),
             outer_binders=self._binders,
         ).analyze()
-        # called once per iteration, so everything it minted varies with them
-        for i in range(before, self.store.n_vars):
-            self.store.spaces.bound(i, self._binders)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows

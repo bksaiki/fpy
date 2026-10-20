@@ -1182,7 +1182,7 @@ premise holds there.  An audit reads the premises off this table.
 | element reads at a binder's target | `_visit_expr`'s covering `ListRef`, `_visit_assign`, `_unpack_elt`; `_indexed_at` | holds |
 | element reads elsewhere | `_at_index`, `_at_index_set`, `_instance`, `_copy`, `_replay` | holds |
 | correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`) | **departs**: a second binder at one point; index sets reached without correspondence (Phase 14) |
-| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: exits on some paths only (Phase 15); a callee's variables lack the caller's binders during its walk (Phase 13) |
+| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: exits on some paths only (Phase 15) |
 | writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | **departs**: a covering write that is not the only one (Phase 15) |
 | branches | `_visit_branches`, `_merge_arms`, `_untaken`, guards | holds |
 | loops | `_visit_for`'s joins, `_before` | holds (Phase 5); a `while` states nothing |
@@ -1711,7 +1711,7 @@ Phase 8 checker, found more, each confirmed by a run and compared with `main`:
 | **II. one index set for parts read under different binders** | two comprehensions over `range(1, 3)`; a loop and a comprehension over `range(1, 4)` | `main` | **a format excludes the value**: `p + p` below 8, the value about `2**121` |
 | **III. a covering write's premise unchecked** | another write to the list in the same iteration; an `empty` refilled by an inner loop under an outer one; tuple fields past the exit | `main`; one gather form the branch | store: `out[i]` claimed `xs[i]`, 286 apart |
 | **IV. exits incomplete** | a list's and a scalar's exit sharing one `last`; the share path, a phi read in its loop, and an unknown prior keeping iteration-start terms; `_partial` passing the body's sources past the loop | `main` | store: 20 to 277 |
-| **V. a callee's variables lack the caller's binders during its walk** | `g(xs, y)` called in `for i` | **the branch** (Phase 2) | store: a callee's round at precision 12 where 24 |
+| **V. a callee's variables lack the caller's binders during its walk** | `g(xs, y)` called in `for i` | **the branch** (Phase 2) | store: a callee's round at precision 12 where 24.  Fixed in Phase 13 |
 
 And the checker misses classes: `while` iterations are not counted (false
 violations); an outer value is never paired with an inner one; each claim is
@@ -1792,9 +1792,10 @@ pinned bugs and the generated programs, 64 tests in 8.4 s at `-n 8`.
   aggregates, parts, a list paired with a scalar, and a call.  Three to five
   blocks made one program take over a minute (a thousand solver calls at 39 ms
   on a large store); every bug found involves one or two blocks.  32 seeds run
-  in the suite (`DIGIT_BOUND_SEEDS` for more); 13 fail, all of known classes --
-  11 of class I, one of II, one of V -- pinned in `KNOWN_SEEDS` by phase.  Of 64
-  seeds, 19 fail, all of the same classes: nothing new beyond the review.
+  in the suite (`DIGIT_BOUND_SEEDS` for more); 12 fail, all of known classes --
+  11 of class I, one of II -- pinned in `KNOWN_SEEDS` by phase.  (A thirteenth,
+  seed 30, was pinned as class V; Phase 13 found it a false violation, below.)
+  Of 64 seeds, 18 fail, all of the same classes: nothing new beyond the review.
 
 Measured: every xfail fails on its assertion; against the code before Phase 4,
 the paired sums, the carried value, the reversed write, the inner-loop write
@@ -1805,13 +1806,24 @@ and the product are all still caught.
 
 #### Phase 13 - A callee's variables vary with the caller's binders
 
-- A callee walk starts with the caller's binders around it, so every variable
-  it mints, copies included, carries them while the callee's copies are made
-  -- not added once `analyze` has returned.
+**Done.**  A callee walk starts with the caller's binders (`self._binders =
+outer_binders`), and its parameters vary with them (`_def_binders`), so every
+variable it mints -- its copies' included -- carries them while its copies are
+made.  The loop `_visit_call` ran once the callee returned, adding the caller's
+binders to everything minted since, is gone.
 
-Separate because it is the branch's own regression, and small.
+- **A checker bug, found here:** it keyed its claims and its memo by a term's
+  *text*, and variable names repeat across walks -- a callee's `msbd7` is not its
+  caller's -- so it merged unrelated terms.  Generator seed 30, pinned to this
+  phase as class V, was that: it passes on Phase 12's code once the checker keys
+  by the `Term` itself.  Unpinned; no other seed or shape changed.
 
-Tests: class V's shapes pass; the corpus hash against Phase 11's.
+Measured: the callee case (`callee-in-loop`, now a shape) fails on Phase 12's
+code and passes; the analysis tests pass (360, 25 strict xfails).  All 141
+corpus outputs byte for byte Phase 11's, the same 6 refused; of 64 seeds the
+same 18 fail as before, less seed 30.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
 
 #### Phase 14 - One index per space at a point
 

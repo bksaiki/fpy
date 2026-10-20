@@ -231,6 +231,25 @@ def _after_loop(xs):
     return rs
 
 
+@fp.fpy(ctx=fp.REAL)
+def _g(zs, y):
+    t = y * 2
+    e0 = fp.logb(zs[0])
+    with fp.MPFixedContext(e0 - 10, fp.RM.RTZ):
+        r = fp.round(t)
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_in_loop(xs):
+    out = fp.empty(4)
+    for i in range(4):
+        y = xs[i]
+        r = _g(xs, y)
+        out[i] = r + y
+    return out
+
+
 SHAPES = {
     'paired-sums': (_paired_sums, [ListType(RealType(fp.FP32), 2)]),
     'carried': (_carried, _L4),
@@ -250,31 +269,13 @@ SHAPES = {
     'gather-one-index': (_gather_one_index, _L4),
     'gather-inner': (_gather_inner, _L4),
     'after-loop': (_after_loop, _L4),
+    'callee-in-loop': (_callee_in_loop, _L4),
 }
 
 
 # -- the bugs known, each a strict xfail naming the phase that fixes it --------
 
 _L3 = [ListType(RealType(fp.FP32), 3)]
-
-
-@fp.fpy(ctx=fp.REAL)
-def _g(zs, y):
-    t = y * 2
-    e0 = fp.logb(zs[0])
-    with fp.MPFixedContext(e0 - 10, fp.RM.RTZ):
-        r = fp.round(t)
-    return r
-
-
-@fp.fpy(ctx=fp.REAL)
-def _callee_in_loop(xs):
-    out = fp.empty(4)
-    for i in range(4):
-        y = xs[i]
-        r = _g(xs, y)
-        out[i] = r + y
-    return out
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -449,7 +450,6 @@ def _partial_leak(xs):
 
 
 KNOWN = {
-    'callee-in-loop': (_callee_in_loop, _L4, 13),
     'nested-cover': (_nested_cover, _L4, 14),
     'product-of-one': (_product_of_one, _L4, 14),
     'comp-in-loop': (_comp_in_loop, _L4, 14),
@@ -490,7 +490,6 @@ KNOWN_SEEDS = {
     0: 14, 5: 14, 7: 14, 9: 14, 12: 14, 16: 14, 17: 14, 19: 14, 20: 14,
     27: 14, 28: 14,             # I: two binders at one point in one space
     24: 14,                     # II: two comprehensions over one range
-    30: 13,                     # V: a callee in a loop
 }
 """The generated programs a known bug shows in, by the phase that fixes it."""
 

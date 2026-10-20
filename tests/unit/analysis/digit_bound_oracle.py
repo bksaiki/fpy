@@ -209,12 +209,12 @@ def check(fn: fp.Function, arg_types: list[Type]) -> list[str]:
 
     store, bad = db.store, []
     # per term and literals, the most it is known to reach and the least not
-    known: dict[tuple[str, frozenset[int]], tuple[float, float]] = {}
+    known: dict[tuple[Term, frozenset[int]], tuple[float, float]] = {}
 
     def reaches(t: Term, d: int, lits: frozenset[int]) -> bool:
         """Can *t* be at least *d* where *lits* hold?  A decision, cheaper
         than the maximum, and all a check compares."""
-        key = (str(t), lits)
+        key = (t, lits)
         yes, no = known.get(key, (-math.inf, math.inf))
         if d <= yes or d >= no:
             return d <= yes
@@ -256,10 +256,10 @@ def check(fn: fp.Function, arg_types: list[Type]) -> list[str]:
     # each term the store bounds, what was observed of it under each set of
     # literals, and where -- one question per term and literals, however many
     # sites share the variables
-    claims: dict[str, tuple[Term, dict[frozenset[int], tuple[int, str]]]] = {}
+    claims: dict[Term, dict[frozenset[int], tuple[int, str]]] = {}
 
     def claim(t: Term, d: int, lits: frozenset[int], where: str) -> None:
-        groups = claims.setdefault(str(t), (t, {}))[1]
+        groups = claims.setdefault(t, {})
         if lits not in groups or d > groups[lits][0]:
             groups[lits] = (d, where)
 
@@ -293,7 +293,7 @@ def check(fn: fp.Function, arg_types: list[Type]) -> list[str]:
                                   holding(kd, deep, ea, eb), f'{na}({ea.format()}) - {nb}({eb.format()})')
 
     # the literal sets observing the most, at most `_GROUPS` per term
-    for t, groups in claims.values():
+    for t, groups in claims.items():
         ranked = sorted(groups.items(), key=lambda g: -g[1][0])[:_GROUPS]
         for lits, (d, where) in ranked:
             if not reaches(t, d, lits):
