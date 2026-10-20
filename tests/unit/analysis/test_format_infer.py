@@ -4615,8 +4615,65 @@ def _iterate_written(xs):
     return rs
 
 
+@fp.fpy(ctx=fp.REAL)
+def _row_alias(xss):
+    row = xss[0]
+    row[1] = xss[1][0] * 1024
+    return xss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_iterated(xss):
+    for row in xss:
+        row[1] = row[0] * 1024
+    return xss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_shared(xs):
+    a = [x for x in xs]
+    xss = [a, a]
+    a[1] = xs[0] * 1024
+    return xss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_held(xss):
+    r = xss[0]
+    xss[0][1] = xss[1][0] * 1024
+    return r[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _same(xs):
+    return xs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _returned_alias(xs):
+    r = _same(xs)
+    r[1] = xs[0] * 1024
+    return xs[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _iterate_written_row(xss):
+    rs = fp.empty(4)
+    k = 0
+    for x in xss[0]:
+        xss[0][3] = x * 1024
+        rs[k] = x * 2
+        with fp.INTEGER:
+            k = k + 1
+    return rs
+
+
 def _fp32s(n: int) -> list[ListType]:
     return [ListType(RealType(fp.FP32), n)]
+
+
+def _fp32_rows(m: int, n: int) -> list[ListType]:
+    return [ListType(ListType(RealType(fp.FP32), n), m)]
 
 
 _BIG = fp.FP32.maxval()
@@ -4632,7 +4689,18 @@ _BIG = fp.FP32.maxval()
     (_callee_writes, _fp32s(4), [[_BIG] * 4]),
     # a loop over a list reads what its body stored into it
     (_iterate_written, _fp32s(4), [[_BIG] * 4]),
-], ids=['sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written'])
+    # a store through one reference reaches every other reference to the list
+    (_row_alias, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_row_iterated, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_row_shared, _fp32s(4), [[_BIG] * 4]),
+    (_row_held, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_returned_alias, _fp32s(4), [[_BIG] * 4]),
+    (_iterate_written_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+], ids=[
+    'sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written',
+    'row-alias', 'row-iterated', 'row-shared', 'row-held', 'returned-alias',
+    'iterate-written-row',
+])
 def test_the_returned_format_holds_a_run(fn, arg_types, args):
     ast = monomorphize(fn, args=arg_types).ast
     (ret,) = [s.expr for s in ast.body.stmts if type(s).__name__ == 'ReturnStmt']

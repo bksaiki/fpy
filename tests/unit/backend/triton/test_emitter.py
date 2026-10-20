@@ -1053,8 +1053,9 @@ def test_an_exact_sum_over_a_tile_no_storage_holds_is_refused():
         _rows(f, 3, 1, elt=fp.FP64, out=fp.FP64)
 
 
-def test_a_store_that_rounds_is_refused():
-    """`tl.store` converts to the pointer's `f16`, which rounds an `f32`."""
+def test_a_store_through_a_row_widens_its_pointer():
+    """`tl.store` converts to the pointer's type, so an `f32` stored into `f16`
+    rows makes them `f32`."""
     @fp.fpy(ctx=fp.REAL)
     def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
         for j in range(len(out)):
@@ -1064,13 +1065,12 @@ def test_a_store_that_rounds_is_refused():
                 row[0] = xs[0] * 1.5
         return out
 
-    with pytest.raises(TritonEmitError, match='would round'):
-        _rows(f, 1, 1, out=FP16)
+    assert _rows(f, 1, 1, out=FP16).dtypes[1] == (1, 'tl.float32')
 
 
-def test_a_store_that_overflows_is_refused():
+def test_a_store_past_the_range_widens_its_pointer():
     """Every `f32` value times `2 ** 200` has `f32`'s precision but not its
-    range, so `tl.store` would overflow it."""
+    range, so the rows it is stored into are `f64`."""
     @fp.fpy(ctx=fp.REAL)
     def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
         for j in range(len(out)):
@@ -1079,8 +1079,7 @@ def test_a_store_that_overflows_is_refused():
             row[0] = xs[0] * 2 ** 200
         return out
 
-    with pytest.raises(TritonEmitError, match='would round'):
-        _rows(f, 1, 1)
+    assert _rows(f, 1, 1).dtypes[1] == (1, 'tl.float64')
 
 
 def test_a_reduction_over_a_row_in_memory_is_refused():

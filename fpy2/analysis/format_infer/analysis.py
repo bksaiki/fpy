@@ -1971,10 +1971,28 @@ class _FormatInferInstance(Visitor):
         return self.type_info.def_use
 
     def _set_def_bound(self, d: Definition, fmt: FormatBound):
-        self.by_def[d] = self._with_region_inserts(d, fmt)
+        self.by_def[d] = self._with_region_inserts(self.alias.region_of(d), fmt, d)
 
-    def _with_region_inserts(self, d: Definition, fmt: FormatBound) -> FormatBound:
-        """*fmt*, widened by every store recorded against *d*'s alias region.
+    def _store_depth(self, region: Region, written: Region, depth: int) -> int | None:
+        """How deep in a list in *region* a store *depth* levels into *written*
+        lands: deeper where *region* holds *written*, shallower where it is held
+        inside it, ``None`` where neither."""
+        r: Region | None = region
+        k = 0
+        while r is not None:
+            if r is written:
+                return k + depth
+            r, k = self.alias.region_at(r), k + 1
+        for k in range(1, depth):
+            if self.alias.region_at(written, k) is region:
+                return depth - k
+        return None
+
+    def _with_region_inserts(
+        self, region: Region | None, fmt: FormatBound, d: Definition | None = None,
+    ) -> FormatBound:
+        """*fmt*, widened by every store recorded that may reach a list in
+        *region*, the region of *d* where it names one.
 
         Replaying the record on each write, rather than editing bounds in place,
         makes this order-independent: a def computed after the store picks the
@@ -1982,25 +2000,20 @@ class _FormatInferInstance(Visitor):
         :meth:`_record_region_insert`.  Widening only raises a bound, so a loop
         fixpoint still converges.
         """
-        if not self._region_inserts:
-            return fmt
-        region = self.alias.region_of(d)
         if region is None:
             return fmt
-        for depth, insert_fmt, already in self._region_inserts.get(region, ()):
-            if d in already:
-                # `reaching_defs` accounts for these two itself: the def the
-                # store reads is the list's state *before* it, and the def it
-                # creates already carries the widening.  Skipping them is what
-                # keeps this flow-sensitive -- a read before the store still
-                # sees the narrow bound.
-                continue
-            if not _has_list_depth(fmt, depth):
-                # A region can hold defs of differing nesting -- a row and the
-                # matrix that holds it -- and a store at one depth says nothing
-                # about a def shallower than that.
-                continue
-            fmt = _list_set_widen(fmt, depth, insert_fmt, widen=self._widen)
+        for written, record in self._region_inserts.items():
+            for depth, insert_fmt, already in record:
+                if d in already:
+                    # `reaching_defs` accounts for these two itself: the def the
+                    # store reads is the list's state *before* it, and the def it
+                    # creates already carries the widening.  Skipping them is what
+                    # keeps this flow-sensitive -- a read before the store still
+                    # sees the narrow bound.
+                    continue
+                at = self._store_depth(region, written, depth)
+                if at is not None and _has_list_depth(fmt, at):
+                    fmt = _list_set_widen(fmt, at, insert_fmt, widen=self._widen)
         return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
@@ -2962,13 +2975,11 @@ class _FormatInferInstance(Visitor):
         assert isinstance(e.fn, Function)
         pre = self._pre_cache.get(e.fn.ast)
         for i, region in pre.alias.written_params(sub.func, pre.def_use).items():
-            if not isinstance(arg := e.args[i], Var):
-                continue
             fmts = [sub.by_def[d] for d in pre.alias.defs_in(region) if d in sub.by_def]
             held = reduce(self._join, fmts)
             if isinstance(held, ListFormat):
                 self._record_region_insert(
-                    self.def_use.find_def_from_use(arg), 1, held.elt, already=set())
+                    self.alias.region_of_expr(e.args[i]), 1, held.elt, already=set())
 
     def _analyze_callee(self, e: Call) -> 'FormatAnalysis | None':
         """Recursive sub-analysis on the callee at this site.
@@ -3098,7 +3109,8 @@ class _FormatInferInstance(Visitor):
         d_def = self.def_use.find_def_from_site(stmt.var, stmt)
         self._set_def_bound(d_def, new_fmt)
         self._record_region_insert(
-            d_use, len(stmt.indices), insert_fmt, already={d_use, d_def},
+            self.alias.region_of(d_use), len(stmt.indices), insert_fmt,
+            already={d_use, d_def},
         )
 
     def _insert_count(self) -> int:
@@ -3106,17 +3118,16 @@ class _FormatInferInstance(Visitor):
         return sum(map(len, self._region_inserts.values()))
 
     def _record_region_insert(
-        self, base: Definition, depth: int, insert_fmt: FormatBound,
+        self, region: Region | None, depth: int, insert_fmt: FormatBound,
         *, already: set[Definition],
     ) -> None:
-        """Note that a store put *insert_fmt* into *base*'s list at *depth*.
+        """Note that a store put *insert_fmt* into a list in *region* at *depth*.
 
         ``reaching_defs`` refreshes only the name written through, but the list is
         one object: ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding ``y``.  Without
         this, ``xs`` keeps its old element format and the analysis reports a bound
         the program exceeds -- see ``docs/todos/backend-cpp.md``.
         """
-        region = self.alias.region_of(base)
         if region is None:
             return
         record = self._region_inserts.setdefault(region, [])
@@ -3131,8 +3142,13 @@ class _FormatInferInstance(Visitor):
         # Defs already computed do not get another write on their own, so
         # re-widen them here.  Monotone, so this cannot cycle.
         for d in list(self.by_def):
-            if d not in already and self.alias.region_of(d) == region:
-                self.by_def[d] = self._with_region_inserts(d, self.by_def[d])
+            d_region = self.alias.region_of(d)
+            if (
+                d not in already
+                and d_region is not None
+                and self._store_depth(d_region, region, depth) is not None
+            ):
+                self.by_def[d] = self._with_region_inserts(d_region, self.by_def[d], d)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -3268,15 +3284,14 @@ class _FormatInferInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_fmt, ListFormat)
-        self._visit_binding(stmt, stmt.target, iter_fmt.elt)
 
         def iterate():
-            if isinstance(stmt.iterable, Var):
-                # the loop reads the live list, so what the body stores into
-                # it reaches a later iteration's target
-                live = self._bound_of_def(self.def_use.find_def_from_use(stmt.iterable))
-                if isinstance(live, ListFormat):
-                    self._visit_binding(stmt, stmt.target, live.elt)
+            # the loop reads the live list, so what the body stores into it
+            # reaches a later iteration's target
+            live = self._with_region_inserts(
+                self.alias.region_of_expr(stmt.iterable), iter_fmt)
+            assert isinstance(live, ListFormat)
+            self._visit_binding(stmt, stmt.target, live.elt)
             self._visit_block(stmt.body, ctx)
 
         # If the iterable's length is statically known, drive the phi

@@ -7,7 +7,7 @@ distinguished from a shared one.
 
 import fpy2 as fp
 
-from fpy2.analysis import Alias, DefineUse
+from fpy2.analysis import Alias, DefineUse, Escape
 from fpy2.ast.fpyast import Var
 from fpy2.transform.path import walk_exprs
 
@@ -359,6 +359,62 @@ class TestMayAlias:
         al = Alias.analyze(f.ast, def_use=du)
         defs = {str(d.name): d for d in du.defs}
         assert not al.may_alias(defs['a'], defs['b'])
+
+
+class TestCallResults:
+    """A call's result may be any list the callee retains, at matching shape."""
+
+    @staticmethod
+    def _defs(f: fp.Function, callees: tuple[fp.Function, ...] = ()):
+        summaries = {g.ast: Escape.analyze(g.ast) for g in callees}
+        du = DefineUse.analyze(f.ast)
+        al = Alias.analyze(f.ast, def_use=du, summaries=summaries)
+        return al, {str(d.name): d for d in du.defs}
+
+    def test_result_aliases_a_retained_argument(self):
+        @fp.fpy
+        def same(xs: list[fp.Real]) -> list[fp.Real]:
+            return xs
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                r = same(xs)
+                return r[0]
+
+        for callees in ((), (same,)):
+            al, d = self._defs(f, callees)
+            assert al.may_alias(d['r'], d['xs'])
+
+    def test_result_aliases_a_retained_row(self):
+        @fp.fpy
+        def first(xss: list[list[fp.Real]]) -> list[fp.Real]:
+            return xss[0]
+
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                row = xss[1]
+                r = first(xss)
+                return r[0] + row[0]
+
+        al, d = self._defs(f, (first,))
+        assert al.may_alias(d['r'], d['row'])
+        assert not al.may_alias(d['r'], d['xss'])
+
+    def test_result_does_not_alias_an_argument_not_retained(self):
+        @fp.fpy
+        def copy(xs: list[fp.Real]) -> list[fp.Real]:
+            return [x for x in xs]
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                r = copy(xs)
+                return r[0]
+
+        al, d = self._defs(f, (copy,))
+        assert not al.may_alias(d['r'], d['xs'])
 
 
 class TestCapturedByNonLists:

@@ -47,6 +47,8 @@ elements part, ``fld(c, i)`` field *i*):
 ``for row in xss``         ``reg(row) ≡ elts(xss)``
 ``xs if c else ys``        ``reg(result) ≡ reg(xs) ≡ reg(ys)``
 ``enumerate``/``zip``      ``elts(result) ≡ elts(arg)``
+``f(xs)``                  each list in ``result`` ≡ each one in ``xs``
+                           of the same shape, if ``f`` may retain ``xs``
 =========================  ==========================================
 
 Equality rather than inclusion is deliberate.  Each place denotes exactly one
@@ -85,6 +87,7 @@ retains it.  Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three
 cost precision, not soundness.
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, overload
 
@@ -165,6 +168,17 @@ def _carries_list(ty: Type | None) -> bool:
             return any(_carries_list(elt) for elt in ty.elts)
         case _:
             return False
+
+
+def _shape(ty: Type | None) -> object:
+    """*ty*'s list and tuple nesting, without sizes or scalar types."""
+    match ty:
+        case ListType():
+            return ('list', _shape(ty.elt))
+        case TupleType():
+            return tuple(_shape(elt) for elt in ty.elts)
+        case _:
+            return None
 
 
 class AllocSite:
@@ -843,8 +857,14 @@ class _Builder(DefaultVisitor):
                         )
                 return region
             case Call():
+                # the result may be any list the callee keeps
                 region = self._alloc('call', e, deep=True)
-                self._escape_args(e)
+                held = list(self._lists_in(region, self.types.by_expr.get(e)))
+                for a, ac in self._retained_args(e):
+                    for q, aty in list(self._lists_in(ac, self.types.by_expr.get(a))):
+                        for r, ty in held:
+                            if _shape(ty) == _shape(aty):
+                                self.regions.merge(r, q)
                 return region
             case Range1() | Range2() | Range3() | Empty():
                 # A fresh sequence over *integer* arguments: there is nothing
@@ -894,8 +914,8 @@ class _Builder(DefaultVisitor):
                 for i, elt in enumerate(target.elts):
                     self._bind(elt, self._part(region, i), site)
 
-    def _escape_args(self, e: Call) -> None:
-        """A list handed to a call may be kept by the callee.
+    def _retained_args(self, e: Call) -> Iterator[tuple[Expr, Region]]:
+        """The arguments the callee may keep, with their regions.
 
         Unless its summary says otherwise: a callee that only reads or writes
         its argument holds nothing once it returns, so the caller's list is no
@@ -907,10 +927,20 @@ class _Builder(DefaultVisitor):
             summary = self.summaries.get(e.fn.ast)
         for i, a in enumerate(e.args):
             ac = self._region_for(a)
-            if ac is None:
-                continue
-            if summary is None or summary.retains(i):
-                self.regions.mark_shared_out(ac)
+            if ac is not None and (summary is None or summary.retains(i)):
+                yield a, ac
+
+    def _lists_in(self, region: Region, ty: Type | None) -> Iterator[tuple[Region, Type]]:
+        """Every list *region* holds, itself included, with its type."""
+        match ty:
+            case ListType():
+                yield region, ty
+                if _carries_list(ty.elt):
+                    yield from self._lists_in(self._part(region), ty.elt)
+            case TupleType():
+                for i, elt in enumerate(ty.elts):
+                    if _carries_list(elt):
+                        yield from self._lists_in(self._part(region, i), elt)
 
     # -- constraint-generating hooks ---------------------------------------
     #
@@ -926,7 +956,8 @@ class _Builder(DefaultVisitor):
     def _visit_call(self, e: Call, ctx):
         """A list handed to a call escapes: whether the callee retains it is not
         decidable here."""
-        self._escape_args(e)
+        for _, ac in self._retained_args(e):
+            self.regions.mark_shared_out(ac)
         super()._visit_call(e, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
