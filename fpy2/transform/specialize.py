@@ -30,7 +30,8 @@ from ..analysis.array_size import (
     concrete_size,
 )
 from ..analysis.define_use import AssignDef, DefineUse
-from ..analysis.digit_bound import DigitBoundParams
+from ..analysis.digit_bound import DigitBoundParams, DigitBoundStore, Terms
+from ..analysis.digit_bound.spaces import Key
 from ..analysis.escape import EscapeSummary
 from ..analysis.format_infer import (
     FormatAnalysis,
@@ -270,7 +271,7 @@ def _is_trivial_bound(f: FormatBound) -> bool:
             return _is_trivial_fmt(f)
 
 
-def _terms(p: DigitBoundParams | None) -> tuple | None:
+def _terms(p: DigitBoundParams | None) -> tuple[DigitBoundStore, tuple[Terms, ...], tuple[Key, ...]] | None:
     """What a call passes a spec: two calls passing the same share it."""
     return None if p is None else (p.store, p.args, p.outer)
 

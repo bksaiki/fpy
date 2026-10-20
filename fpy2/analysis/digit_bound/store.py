@@ -25,7 +25,6 @@ class DigitBoundStore:
 
     _solver: Solver
     _constraints: list[Constraint]
-    _n_vars: int
 
     _answers: dict[tuple[Term, frozenset[int]], int | float]
     """Each term's maximum under each assumption set, which :meth:`_add` and
@@ -72,10 +71,9 @@ class DigitBoundStore:
     """Which index spaces each variable varies over, kept with the variables so
     every walk sharing them shares it."""
 
-    def __init__(self, solver: Solver | None = None):
+    def __init__(self, solver: Solver | None = None) -> None:
         self._solver = solver if solver is not None else Z3Solver()
         self._constraints = []
-        self._n_vars = 0
         self._answers = {}
         self._decisions = {}
         self._n_lits = 0
@@ -98,16 +96,10 @@ class DigitBoundStore:
         self._answers.clear()
         self._decisions.clear()
 
-    @property
-    def n_vars(self) -> int:
-        """How many variables exist, so a caller can name a range of them."""
-        return self._n_vars
-
     def var(self, name: str) -> Term:
         """A fresh variable, as a term."""
-        v = _Var(self._n_vars, name)
+        v = _Var(len(self._vars), name)
         self._vars.append(v)
-        self._n_vars += 1
         return Term(((v, 1),), 0)
 
     def instance(
@@ -150,7 +142,7 @@ class DigitBoundStore:
                 frontier.append(v.index)
                 own.update(x.index for x, _ in subst[v.index].coeffs)
 
-        def rename(lit: int) -> int | None:
+        def rename(lit: int) -> int:
             owner = self._owner.get(lit)
             if owner is not None:
                 v, high = owner
@@ -180,13 +172,9 @@ class DigitBoundStore:
                     for v, _ in t.coeffs:
                         if moves(v.index):
                             copy(v)
-                renamed = [rename(g) for g in c.guard]
-                if any(g is None for g in renamed):
-                    continue
-                guard = tuple(g for g in renamed if g is not None)
                 self._add(Constraint(
                     c.op, c.lhs.rename(subst),
-                    tuple(t.rename(subst) for t in c.rhs), guard,
+                    tuple(t.rename(subst) for t in c.rhs), tuple(map(rename, c.guard)),
                 ))
             for k in tuple(self._imp_naming.get(v0, ())):
                 if -1 - k in done:
@@ -195,10 +183,7 @@ class DigitBoundStore:
                 premises, b = self._implications[k]
                 if any(self._owner.get(a, (None,))[0] in own for a in (*premises, b)):
                     continue
-                ends = [rename(a) for a in premises]
-                end = rename(b)
-                if end is not None and all(a is not None for a in ends):
-                    self.imply([a for a in ends if a is not None], end)
+                self.imply(map(rename, premises), rename(b))
 
     def literal(self, keys: Iterable[Key] = ()) -> int:
         """A fresh guard literal, for a constraint that holds only where it

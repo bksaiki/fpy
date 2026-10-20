@@ -2,11 +2,12 @@
 Index spaces: which loops and lists each store variable is a summary over.
 
 A variable minted inside a binder -- a loop, a comprehension clause -- stands
-for any of its iterations, and a list's element terms for any element.  A
-binder *corresponds* with a list it reads or builds at its own index, and the
-classes of that correspondence are the index spaces; a variable's
+for any of its iterations, and a list's element terms for any element.  Two
+dimensions *correspond* where the program makes their indices equal -- a
+binder and a list it reads or builds at its own index, a list and its uses --
+and the classes of that correspondence are the index spaces; a variable's
 *signature* is the set of them it varies over.  See
-``docs/todos/digit-bound.md``, "Dimensions".
+``docs/todos/digit-bound.md``, "The abstract domain".
 """
 
 from collections.abc import Container, Iterable
@@ -33,8 +34,6 @@ class Elements:
     walk: int
     of: int
     """The list expression's or definition's `id`."""
-    exit: bool = False
-    """A loop phi's past its loop, where it no longer varies with it."""
     depth: int = 0
     """Which index, outermost first: a list of lists has two."""
 
@@ -71,16 +70,16 @@ class IndexSpaces:
         self._classes.union(self._classes.add(a), self._classes.add(b))
 
     def open(self, binder: Key, around: tuple[Key, ...]) -> None:
-        """*binder* runs inside the binders *around*, outermost first."""
+        """*binder* is nested in the keys *around*, outermost first."""
         self._around[binder] = around
 
     def around(self, binder: Key) -> tuple[Key, ...]:
-        """The binders *binder* runs inside, outermost first."""
+        """The keys *binder* is nested in, outermost first."""
         return self._around.get(binder, ())
 
     def correspond(self, a: Key, b: Key) -> bool:
         """Unify *a* and *b* unless that puts two dimensions, one nested in the
-        other, in one class (digit-bound.md, "Dimensions"); returns
+        other, in one class (digit-bound.md, "The abstract domain"); returns
         whether it did.  A binder is nested in those around it, a list's
         elements in the binders it was opened inside."""
         ca = self._classes.component(self._classes.add(a))

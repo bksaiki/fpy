@@ -53,7 +53,7 @@ dimensions where the program makes their indices equal:
 | construct | equation |
 |---|---|
 | `for x in xs`; `xs[i]`, `i` binder `b`'s target | `b` = `xs`'s element |
-| an index function's covering write `out[i] = v` (Lists) | `b` = `out`'s element after `b` |
+| a builder's store `out[k] = v` (Lists) | `b` = `out`'s element |
 | a comprehension of one clause | the clause = the result's element |
 | `zip(xs, ys)` | its element = each operand's |
 | a use, a branch phi of lists | the element = the definition's, each arm's |
@@ -101,7 +101,7 @@ Exact operations, each a theorem about the exact result `z`:
 | `a + b`, `a - b` | `E(z) <= max(E(a), E(b)) + 1`; `G(z) >= min(G(a), G(b))` |
 | `logb(x)` | `z = E(x)` |
 | `2 ** n` | `E(z) = n`, `G(z) = n` |
-| `max(a, b)` of integers | `z >= a`, `z >= b`; `z <= max(a, b)` |
+| `max(a, b)` of integers | `z >= a`, `z >= b` |
 
 Rounding `y = rnd_C(z)`; `c = 0` for deterministic `RTZ`, else `1`:
 
@@ -154,30 +154,31 @@ the worst element, stated on a copy of the element at a witness of its own.
 
 ### Lists
 
-A list is an **index function** where its region holds no store but one -- a
-write `out[k] = v` at the `k`-th iteration of the innermost loop around it,
-for every `k` (the loop's own index, or a count of its iterations), into a
-list that entered that loop `empty` -- and no loop but that one carries it,
-a loop carrying a list where something reads its phi: a list made anew in
-each iteration is carried by none.  A list holding rows that are not index
-functions is not one either.
+A list is an **index function** where every store into its region writes
+`out[k] = v` at the `k`-th iteration of one loop, the innermost around it, for
+every `k` (the loop's own index, or a count of its iterations), into the
+region's one object, an `empty` that entered that loop; and no other loop
+carries it, that is, reads its phi: a list made anew in each iteration is
+carried by none.  A list holding rows that are not index functions is not one.
 Comprehensions, literals, parameters the function does not write, call
 results, their rows, and the loops normalization lowers comprehensions to are
 index functions, wherever they are defined.
 
 - **An index function** relates element for element: its uses share its
   terms, the equations of section 3 hold, and reads follow Element reads.  A
-  built list's element `k` is the value one store wrote at iteration `k`,
-  wherever a read sees it -- an element not yet written is uninitialized --
-  so every definition of it shares one set of terms, its builder's index is
-  its element, and as the loop ends the element is stated to be one of the
-  values stored: `msb` between theirs, `val` one of theirs, `lsb` at least
-  their least.  With one store, the element finite implies the store is.  A
-  read inside the builder anywhere but at its own index is seeded alone: it
-  is stated before the builder's terms are.
+  built list's element `k` is what iteration `k` stored, wherever a read sees
+  it -- an element not yet written is uninitialized -- so the definitions
+  outside the builder's body share one set of terms, its builder's index is
+  its element, and as the loop ends the element is stated to be what the body
+  leaves (inside it, each path's definition is the value stored, merged as
+  branches merge): `msb` equal, `val` equal, `lsb` at least.  Where the
+  invariant refuses the builder's index the list's element, it is what some
+  iteration left, bounded above only.  A read inside the builder anywhere but
+  at its own index is seeded alone: it is stated before the builder's terms
+  are.
 - **Any other list** -- written in place, written by a callee, built in pieces,
-  carried by a loop, aliased and written -- has a **summary**.  Each read of it
-  is bounded by every value entering its region: each allocation's elements (a
+  carried by a loop, aliased and written -- is a **region summary**.  Each
+  read of it is bounded by every value entering its region: each allocation's elements (a
   parameter's, a comprehension's, a literal's, a call's) and every value
   stored, each a copy at a witness of the read's own over every dimension the
   value varies with -- but the loops every object in the region is made in,
@@ -186,14 +187,14 @@ index functions, wherever they are defined.
   seed.
 
 Obligation: an index function's definition denotes its object at every use
--- its one store builds it, and an element read before it is written is
-uninitialized, which no bound has to cover.  A summary read's value is one of
+-- its stores build it, and an element read before it is written is
+uninitialized, which no bound has to cover.  A region summary's read is one of
 the values that entered its region, at some point and index: every element of
 every object in a region was put there by an allocation or a store into it.
 
 ### Element reads
 
-An index function `xs[e]` reads its **summary** where `e` is the target of a
+An index function `xs[e]` reads its representative where `e` is the target of a
 binder the invariant lets correspond with `xs`'s element, and a **copy** at one
 index anywhere else: a constant, `a + s * k`, a part `range(a, b, s)` (one copy
 per index set as one binder enumerates it), or a binder's target the invariant
@@ -210,7 +211,8 @@ share a copy.  Obligation: the copy's point is the index read (section 6).
   `high(d)`.
 - **A `for` loop** is one generic iteration.  A carried scalar's phi joins the
   pre-loop value with the body's at a copy over the loop, the iteration
-  before; past the loop it is a copy at the last iteration.  A list it carries
+  before; past the loop it is the pre-loop value or a copy at the last
+  iteration.  A list it carries
   is a summary (Lists).
 - **A `while` loop** is a binder no copy moves: its phis are fresh, seeded.
 
@@ -230,7 +232,8 @@ site's arguments satisfy what it assumed.
 
 `A(y)`: `low(msb y)` and `high(msb y)` (the instance is finite and non-zero),
 what each `with` around `y` establishes, the literals of the arms around it,
-and what follows by the implications.
+the definitions value-class inference proves finite there, what its call
+sites assume, and what follows by the implications.
 
 **Theorem.**  For any execution on inputs in their declared formats and any
 instance `y[i]` of a rounding with a finite non-zero value, if format
@@ -240,8 +243,9 @@ inference's bounds contain every finite value, `P(y[i]) <= prec(y)`.
 
 A summary is one set of variables, its **representative**; a copy (an element
 read, a witness) is another, renaming the variables -- and literals -- whose
-signature meets a moved class, with every constraint over them replayed.  A literal of a variable that moves renames with it, the variable
-copied where the literal is met first.
+signature meets a moved class, with every constraint over them replayed.
+A literal of a variable that moves renames with it; the variable is copied
+where the literal is met first.
 
 **Lemma (copies).**  For any execution in the concretization and each copy at
 the point its key denotes, the exact or virtual assignment there satisfies

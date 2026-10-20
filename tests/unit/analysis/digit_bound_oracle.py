@@ -329,8 +329,8 @@ def check(fn: fp.Function, arg_types: list[Type]) -> list[str]:
 
     def holding(k: _Point, binders: tuple[_Binder, ...], *at: _Site) -> frozenset[int]:
         """The literals true at point *k* under *binders*: what each value
-        observed there or around it makes true, and what each `with` around
-        *at* establishes."""
+        observed there or around it makes true, and what `assume_at` gives each
+        of *at*."""
         out = set().union(*(a.db.assume_at(a.e) for a in at))
         for m in range(len(binders) + 1):
             out |= observed.get((binders[:m], k[:m + 1]), set())

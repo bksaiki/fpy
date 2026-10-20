@@ -1155,6 +1155,59 @@ def _call_seed(x, y):
     return m
 
 
+# -- region summaries -----------------------------------------------------
+
+
+@fp.fpy(ctx=fp.REAL)
+def _summary_pair(xs, ys):
+    c = fp.empty(4)
+    for i in range(4):
+        with fp.INTEGER:
+            k = 3 - i
+        with fp.FP32:
+            c[k] = ys[i] * 2
+    zs = [c[j] for j in range(4)]
+    d = zs[0] + zs[1]
+    return d
+
+
+@fp.fpy(ctx=fp.REAL)
+def _built_then_chosen(xs, ys):
+    out = fp.empty(4)
+    for i in range(4):
+        out[i] = xs[i]
+    other = [y for y in ys]
+    z = out if xs[0] > 0 else other
+    e = fp.logb(out[1])
+    with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+        r = fp.round(z[1])
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _built_beside_another(xs, ys):
+    out = fp.empty(4)
+    for i in range(4):
+        out[i] = xs[i]
+    other = [y for y in ys]
+    xss = [out, other]
+    t = other[1]
+    u = out[1]
+    return t + u
+
+
+@fp.fpy(ctx=fp.REAL)
+def _written_zip_unpacked(xs, ys):
+    ws = zip(xs, ys)
+    al = ws
+    al[0] = (ys[1] * 1024, xs[1])
+    out = fp.empty(4)
+    for i in range(4):
+        a, b = ws[i]  # noqa: RUF059 -- the zip has two fields
+        out[i] = a + xs[i]
+    return out
+
+
 # -- a constant-index read of a list of lists ------------------------------
 
 
@@ -1321,6 +1374,10 @@ SHAPES = {
     'row-iterated-written': (_row_iterated_written, [_L2x4]),
     'returned-alias': (_returned_alias, [L4]),
     'row-read': (_row_read, [L4]),
+    'summary-pair': (_summary_pair, [L4, L4]),
+    'built-then-chosen': (_built_then_chosen, [L4, L4]),
+    'built-beside-another': (_built_beside_another, [L4, L4]),
+    'written-zip-unpacked': (_written_zip_unpacked, [L4, L4]),
 }
 
 PENDING: dict[str, str] = {}

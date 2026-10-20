@@ -907,9 +907,9 @@ class TestIndexSpaces:
 
 
 class TestAJoinHoldsAtAnotherIndex:
-    """A loop's phi is the value from the iteration *before*, and an element a
-    partial write left is from whichever iteration wrote it: neither join is a
-    fact about the index the phi is read at."""
+    """A loop's phi is the value from the iteration *before*, and an element
+    written at another index is from whichever iteration wrote it: neither
+    join is a fact about the index read."""
 
     BIG = (2 ** 24 - 1) * 2.0 ** 76
 
@@ -920,7 +920,7 @@ class TestAJoinHoldsAtAnotherIndex:
         xs = [fp.FP32.round(self.BIG), *(fp.FP32.round(1.0) for _ in range(3))]
         assert fmt.representable_in(_carried(xs)[1])
 
-    def test_a_partial_write_is_from_another_index(self):
+    def test_a_write_at_another_index_is_from_another_iteration(self):
         """`out[i]` is `2 * xs[n - 1 - i]`, which no bound on `xs[i]` reaches."""
         _, b = _analyze(_reversed_write, [L4])
         _, out = _term(b, 'out[i]')

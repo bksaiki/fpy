@@ -128,10 +128,10 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
   - *A chain of FMAs with a separate join* (CDNA3's, `cdna3-fma`):
     `round_down_at(t, e - F2 - 2) + round_down_at(c, e - F - 1)` adds two
     roundings at runtime positions, and the exact add is bounded only where
-    digit-bound inference ties `t`'s magnitude to `e`.  A tree does now
-    (`cdna3-tree` agrees; index spaces by identity), but a chain's exit is
-    bounded add by add, `e + 30` where `e + 4` fits, unrolled or not:
-    a chain of rounded adds, which the digit bound relates only through the iteration before (`digit-bound.md`, "Control").
+    digit-bound inference ties `t`'s magnitude to `e`.  A tree does
+    (`cdna3-tree` agrees); a chain does not: each rounded add is related
+    only to the iteration before (`digit-bound.md`, "Control"), so its exit
+    is bounded at `e + 30` where `e + 4` fits, unrolled or not.
   - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
     accumulator spans ~500 bits, which no storage holds ("`sum` is exact,
     and no storage holds its elements and partial sums"): CDNA1's E-FDPA,
