@@ -47,8 +47,9 @@ elements part, ``fld(c, i)`` field *i*):
 ``for row in xss``         ``reg(row) ≡ elts(xss)``
 ``xs if c else ys``        ``reg(result) ≡ reg(xs) ≡ reg(ys)``
 ``enumerate``/``zip``      ``elts(result) ≡ elts(arg)``
-``f(xs)``                  each list in ``result`` ≡ each one in ``xs``
-                           of the same shape, if ``f`` may retain ``xs``
+``f(xs, ys)``              each list in ``xs`` ≡ each one in ``result``,
+                           or in ``ys`` if ``f`` may write it, of the same
+                           shape, if ``f`` may retain ``xs``
 =========================  ==========================================
 
 Equality rather than inclusion is deliberate.  Each place denotes exactly one
@@ -81,9 +82,9 @@ One *summary* store for the whole function, not one per program point, so it is
 flow-insensitive: ``ys = xs`` marks ``xs`` shared even if ``ys`` is dead
 immediately afterwards, and a container part counts as a referrer even if the
 container itself is never read — except :attr:`AliasAnalysis.consumed_defs`,
-which buys back one flow-sensitive fact under narrow guards.  Intraprocedural: a
-list handed to a call is shared outward, without asking whether the callee
-retains it.  Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three
+which buys back one flow-sensitive fact under narrow guards.  Context-insensitive:
+one summary of a callee (:mod:`fpy2.analysis.escape`) answers for every call to
+it.  Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three
 cost precision, not soundness.
 """
 
@@ -124,7 +125,7 @@ from ..ast import (
     Zip,
 )
 from ..function import Function
-from ..types import ListType, TupleType, Type
+from ..types import ListType, TupleType, Type, VarType
 from ..utils import Unionfind
 from .array_size import (
     ArraySizeAnalysis,
@@ -135,7 +136,7 @@ from .array_size import (
 )
 from .define_use import DefineUse, DefineUseAnalysis
 from .reaching_defs import AssignDef, Definition, same_object_defs
-from .type_infer import TypeAnalysis, TypeInfer
+from .type_infer import TypeAnalysis, TypeInfer, TypeInferError
 
 if TYPE_CHECKING:
     # `escape` builds on this module; the dependency only goes the other way
@@ -159,10 +160,10 @@ def _carries_list(ty: Type | None) -> bool:
     """Whether a value of type *ty* can hold a list reference anywhere inside it.
 
     Values that cannot are not given regions at all — nothing about them is
-    observable through aliasing.
+    observable through aliasing.  A type variable may be a list.
     """
     match ty:
-        case ListType():
+        case ListType() | VarType():
             return True
         case TupleType():
             return any(_carries_list(elt) for elt in ty.elts)
@@ -247,12 +248,14 @@ class _Regions:
         # things for ownership -- see `AliasAnalysis.transfers_ownership`.
         self._shared_out: set[Region] = set()
         self._returned: set[Region] = set()
+        # handed to a callee that may store into it, which need not keep it
+        self._callee_written: set[Region] = set()
         self._parts: dict[Region, dict[_PartKey, Region]] = {}
 
     @property
     def _flags(self) -> tuple[set[Region], ...]:
         """Every downward-propagating class flag, so each is handled alike."""
-        return (self._shared_out, self._returned)
+        return (self._shared_out, self._returned, self._callee_written)
 
     def new(
         self, kind: str, *, name: NamedId | None = None, slot: bool = False,
@@ -394,8 +397,15 @@ class _Regions:
         """*c* is handed to the caller by a ``return``."""
         self._spread(self._returned, c)
 
+    def mark_callee_written(self, c: Region) -> None:
+        """*c* is handed to a callee that may store into it."""
+        self._spread(self._callee_written, c)
+
     def is_shared_out(self, c: Region) -> bool:
         return self.find(c) in self._shared_out
+
+    def is_callee_written(self, c: Region) -> bool:
+        return self.find(c) in self._callee_written
 
     def is_returned(self, c: Region) -> bool:
         return self.find(c) in self._returned
@@ -526,6 +536,10 @@ class AliasAnalysis:
         still holds it — handed to a call, or to an unmodelled operation."""
         return self._regions.is_shared_out(region)
 
+    def callee_writes_at(self, region: Region) -> bool:
+        """Whether a callee *region* is handed to may store into it."""
+        return self._regions.is_callee_written(region)
+
     def returned_at(self, region: Region) -> bool:
         """Whether *region* is handed to the caller by a ``return``."""
         return self._regions.is_returned(region)
@@ -610,7 +624,8 @@ class AliasAnalysis:
         holds, itself or through a call it hands one to."""
         r: Region | None = region
         while r is not None:
-            if r in self.written_regions or r in self.stored_regions or self.escapes_at(r):
+            if (r in self.written_regions or r in self.stored_regions
+                    or self.escapes_at(r) or self.callee_writes_at(r)):
                 return True
             r = self.region_at(r)
         return False
@@ -772,6 +787,8 @@ class _Builder(DefaultVisitor):
                 self._site('param', arg, region, depth)
                 if _carries_list(ty.elt):
                     self._seed(self._part(region), ty.elt, arg, depth + 1)
+            case VarType():
+                self._site('param', arg, region, depth)
             case TupleType():
                 for i, elt in enumerate(ty.elts):
                     if _carries_list(elt):
@@ -857,15 +874,8 @@ class _Builder(DefaultVisitor):
                         )
                 return region
             case Call():
-                # the result may be any list the callee keeps
-                region = self._alloc('call', e, deep=True)
-                held = list(self._lists_in(region, self.types.by_expr.get(e)))
-                for a, ac in self._retained_args(e):
-                    for q, aty in list(self._lists_in(ac, self.types.by_expr.get(a))):
-                        for r, ty in held:
-                            if _shape(ty) == _shape(aty):
-                                self.regions.merge(r, q)
-                return region
+                # linked to what the callee keeps by `_visit_call`
+                return self._alloc('call', e, deep=True)
             case Range1() | Range2() | Range3() | Empty():
                 # A fresh sequence over *integer* arguments: there is nothing
                 # list-shaped for it to retain, so unlike the catch-all below it
@@ -914,17 +924,30 @@ class _Builder(DefaultVisitor):
                 for i, elt in enumerate(target.elts):
                     self._bind(elt, self._part(region, i), site)
 
-    def _retained_args(self, e: Call) -> Iterator[tuple[Expr, Region]]:
+    def _summary(self, e: Call) -> 'EscapeSummary | None':
+        """The callee's summary, computed when not given; ``None`` for a foreign
+        function or one that does not type on its own, which means the
+        conservative answer."""
+        if not isinstance(e.fn, Function):
+            return None
+        fd = e.fn.ast
+        if fd not in self.summaries:
+            from .escape import Escape
+            try:
+                self.summaries[fd] = Escape.analyze(fd, self.summaries)
+            except TypeInferError:
+                return None
+        return self.summaries[fd]
+
+    def _retained_args(
+        self, e: Call, summary: 'EscapeSummary | None',
+    ) -> Iterator[tuple[Expr, Region]]:
         """The arguments the callee may keep, with their regions.
 
         Unless its summary says otherwise: a callee that only reads or writes
         its argument holds nothing once it returns, so the caller's list is no
-        more shared than before the call.  No summary — a foreign function, or
-        one not yet analyzed — means the conservative answer.
+        more shared than before the call.
         """
-        summary = None
-        if isinstance(e.fn, Function):
-            summary = self.summaries.get(e.fn.ast)
         for i, a in enumerate(e.args):
             ac = self._region_for(a)
             if ac is not None and (summary is None or summary.retains(i)):
@@ -954,10 +977,24 @@ class _Builder(DefaultVisitor):
         return super()._visit_expr(e, ctx)
 
     def _visit_call(self, e: Call, ctx):
-        """A list handed to a call escapes: whether the callee retains it is not
-        decidable here."""
-        for _, ac in self._retained_args(e):
+        """A list the callee keeps escapes, and may end up in its result or in
+        a list it writes."""
+        summary = self._summary(e)
+        written = [a for i, a in enumerate(e.args) if summary is None or summary.writes(i)]
+        for a in written:
+            if (ac := self._region_for(a)) is not None:
+                self.regions.mark_callee_written(ac)
+        reach: list[tuple[Region, Type]] = []
+        for x in (e, *written):
+            xc = self._region_for(x)
+            if xc is not None:
+                reach.extend(self._lists_in(xc, self.types.by_expr.get(x)))
+        for a, ac in self._retained_args(e, summary):
             self.regions.mark_shared_out(ac)
+            for q, aty in list(self._lists_in(ac, self.types.by_expr.get(a))):
+                for r, ty in reach:
+                    if _shape(ty) == _shape(aty):
+                        self.regions.merge(r, q)
         super()._visit_call(e, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
@@ -1230,8 +1267,9 @@ class Alias:
             type_info: reuse an existing type analysis (needed to tell which
                 expressions carry lists).
             summaries: escape summaries for the callees, so an argument a callee
-                does not retain is not treated as shared.  A callee absent from
-                it is assumed to retain everything.
+                does not retain is not treated as shared.  A memo: one absent
+                from it is computed and added.  A foreign callee, or one that
+                does not type on its own, is assumed to retain everything.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got {func}")
@@ -1239,4 +1277,4 @@ class Alias:
             def_use = DefineUse.analyze(func)
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=def_use)
-        return _Builder(func, def_use, type_info, summaries or {}).run()
+        return _Builder(func, def_use, type_info, {} if summaries is None else summaries).run()

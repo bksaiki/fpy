@@ -25,8 +25,12 @@ names are one region.
 
 Computed leaves-first, so a callee's summary exists before its callers need it.
 No fixpoint is needed and none would help — the parser rejects forward
-references, so recursion cannot be written and the order is always a DAG.  A
-missing summary reads as *retains everything*.
+references, so recursion cannot be written and the order is always a DAG.
+``alias`` computes a missing summary when it needs one; a callee that does not
+type on its own reads as *retains everything*.
+
+A summary also says which parameters the callee may store into: a list it keeps
+may land there.
 """
 
 from dataclasses import dataclass
@@ -38,12 +42,17 @@ from .define_use import DefineUse, DefineUseAnalysis
 
 @dataclass(frozen=True)
 class EscapeSummary:
-    """Which of a function's parameters outlive a call to it, by index."""
+    """Which of a function's parameters outlive a call to it, and which it may
+    store into, by index."""
 
     retained: frozenset[int]
+    written: frozenset[int]
 
     def retains(self, index: int) -> bool:
         return index in self.retained
+
+    def writes(self, index: int) -> bool:
+        return index in self.written
 
 
 class Escape:
@@ -60,12 +69,10 @@ class Escape:
 
         Args:
             func: the function to summarize.
-            summaries: summaries of its callees.  One absent from it is assumed
-                to retain everything.
+            summaries: summaries of its callees, a memo; see
+                :meth:`Alias.analyze`.
             def_use: reuse an existing def-use analysis.
-            alias: reuse an existing alias analysis.  It must have been built
-                with the same *summaries*, or every call argument reads as
-                shared and the result says nothing.
+            alias: reuse an existing alias analysis.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got {func}")
@@ -87,7 +94,8 @@ class Escape:
                     retained.add(i)
                     break
                 depth += 1
-        return EscapeSummary(frozenset(retained))
+        written = alias.written_params(func, def_use)
+        return EscapeSummary(frozenset(retained), frozenset(written))
 
 
 def _retains(alias: AliasAnalysis, region: Region, arg: Argument) -> bool:

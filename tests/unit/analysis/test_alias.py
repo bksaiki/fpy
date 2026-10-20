@@ -225,9 +225,9 @@ class TestEscape:
     def test_returned_and_also_passed_to_a_call_is_not_owned(self):
         """Shared outward beats a transfer: the callee may still hold it."""
         @fp.fpy
-        def g(zs: list[fp.Real]) -> fp.Real:
+        def g(zs: list[fp.Real]) -> list[fp.Real]:
             with fp.FP64:
-                return zs[0]
+                return zs
 
         @fp.fpy
         def f(x: fp.Real) -> list[fp.Real]:
@@ -252,19 +252,31 @@ class TestEscape:
         a, owned, _ = _sites(f)
         assert owned, 'a fresh nested list transfers whole'
 
-    def test_call_argument_escapes(self):
+    def test_call_argument_escapes_only_if_retained(self):
         @fp.fpy
-        def g(zs: list[fp.Real]) -> fp.Real:
+        def reads(zs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
                 return zs[0]
 
         @fp.fpy
+        def keeps(zs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return zs
+
+        @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
-                return g(xs)
+                return reads(xs)
 
-        a, owned, _ = _sites(f)
-        assert not owned, 'conservative: a callee may retain its argument'
+        @fp.fpy
+        def g(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return keeps(xs)[0]
+
+        _, owned, _ = _sites(f)
+        assert owned, 'the callee keeps nothing'
+        _, owned, _ = _sites(g)
+        assert not owned, 'the callee may hand its argument back'
 
 
 class TestNesting:
@@ -401,6 +413,22 @@ class TestCallResults:
         al, d = self._defs(f, (first,))
         assert al.may_alias(d['r'], d['row'])
         assert not al.may_alias(d['r'], d['xss'])
+
+    def test_a_call_links_a_retained_argument_to_the_others(self):
+        @fp.fpy
+        def put(yss: list[list[fp.Real]], xs: list[fp.Real]) -> fp.Real:
+            yss[0] = xs
+            return 0
+
+        @fp.fpy
+        def f(yss: list[list[fp.Real]], xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = put(yss, xs)
+                row = yss[1]
+                return row[0] + t
+
+        al, d = self._defs(f, (put,))
+        assert al.may_alias(d['row'], d['xs'])
 
     def test_result_does_not_alias_an_argument_not_retained(self):
         @fp.fpy

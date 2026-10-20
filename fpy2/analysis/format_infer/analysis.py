@@ -1708,9 +1708,6 @@ class PreAnalysisCache:
         if array_size is None:
             array_size = ArraySizeInfer.analyze(func, type_info=type_info)
         if alias is None:
-            # No escape summaries: `Alias` is then maximally conservative about
-            # what a call may retain, which over-approximates the aliasing --
-            # exactly the safe direction for the widening below.
             alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
         pre = PreAnalyses(def_use, type_info, ctx_use, array_size, alias, partial_eval)
         self._table[key] = pre

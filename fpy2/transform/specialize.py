@@ -29,10 +29,9 @@ from ..analysis.array_size import (
     TupleSize,
     concrete_size,
 )
-from ..analysis.call_graph import CallGraph
 from ..analysis.define_use import AssignDef, DefineUse
 from ..analysis.digit_bound import DigitBoundParams
-from ..analysis.escape import Escape, EscapeSummary
+from ..analysis.escape import EscapeSummary
 from ..analysis.format_infer import (
     FormatAnalysis,
     FormatBound,
@@ -44,7 +43,6 @@ from ..analysis.format_infer import (
     to_abstract,
 )
 from ..analysis.partial_eval import PartialEvalInfo
-from ..analysis.type_infer import TypeInferError
 from ..analysis.value_class import ValueClass, ValueClassInfer
 from ..ast import Call, Expr, ForeignVal, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
@@ -60,23 +58,6 @@ from ..utils import NamedId
 from .monomorphize import Monomorphize
 from .path import walk_exprs
 from .subst_var import SubstVar
-
-
-def _escape_summaries(
-    fd: FuncDef, memo: dict[FuncDef, EscapeSummary],
-) -> dict[FuncDef, EscapeSummary]:
-    """*memo*, holding a summary for every function *fd* calls, transitively.
-
-    From each callee's own body, leaves first.  One that does not type on its
-    own is left out, which reads as retaining everything.
-    """
-    for callee in CallGraph.analyze(fd).order:
-        if callee is not fd and callee not in memo:
-            try:
-                memo[callee] = Escape.analyze(callee, memo)
-            except TypeInferError:
-                pass
-    return memo
 
 
 # ----------------------------------------------------------------------
@@ -733,10 +714,9 @@ class Specialize:
             # `use_digit_bounds`: the spec key carries the relational bounds, so two
             # callers whose context differs must not share a spec -- and the
             # params this captures are what carry that context into the emit.
-            # With the callees' escape summaries, so a list handed to one keeps
-            # the element facts a callee's params assume.
+            # The callees' escape summaries, shared across specs.
             classes = ValueClassInfer.analyze(
-                mono, alias=Alias.analyze(mono, summaries=_escape_summaries(mono, escapes)))
+                mono, alias=Alias.analyze(mono, summaries=escapes))
             fa = FormatInfer.analyze(mono, use_digit_bounds=True, value_classes=classes)
             pe = fa.partial_eval
             site_map: dict[Call, _SpecKey] = {}

@@ -4657,6 +4657,19 @@ def _returned_alias(xs):
 
 
 @fp.fpy(ctx=fp.REAL)
+def _put(yss, xs):
+    yss[0] = xs
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _linked_by_call(yss, xs):
+    t = _put(yss, xs)  # noqa: F841 -- the call's link is what is tested
+    xs[1] = xs[0] * 1024
+    return yss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
 def _iterate_written_row(xss):
     rs = fp.empty(4)
     k = 0
@@ -4696,10 +4709,11 @@ _BIG = fp.FP32.maxval()
     (_row_held, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
     (_returned_alias, _fp32s(4), [[_BIG] * 4]),
     (_iterate_written_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_linked_by_call, [*_fp32_rows(2, 4), *_fp32s(4)], [[[_BIG] * 4] * 2, [_BIG] * 4]),
 ], ids=[
     'sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written',
     'row-alias', 'row-iterated', 'row-shared', 'row-held', 'returned-alias',
-    'iterate-written-row',
+    'iterate-written-row', 'linked-by-call',
 ])
 @pytest.mark.parametrize('digit_bounds', [False, True], ids=['', 'digit-bounds'])
 def test_the_returned_format_holds_a_run(fn, arg_types, args, digit_bounds):
