@@ -1718,9 +1718,7 @@ class TestFormatInfer:
         tuple's field."""
         leaf = SetFormat(frozenset((Fraction(1),)))
         nested = ListFormat(ListFormat(leaf))
-        # Inserting a non-dyadic value at depth 2 widens the leaf to REAL_FORMAT
-        # (1/3 is not representable in any concrete format here, so the join
-        # falls back to REAL_FORMAT).
+        # Joining at the leaf keeps both values.
         insert = SetFormat(frozenset((Fraction(1, 3),)))
         widened = ListFormat(ListFormat(
             SetFormat(frozenset((Fraction(1), Fraction(1, 3))))
@@ -4702,16 +4700,9 @@ def _callee_keeps_from_tuple(xs):
 
 
 @fp.fpy(ctx=fp.REAL)
-def _write_rows(xss):
-    for row in xss:
-        row[1] = row[0] * 1024
-    return 0
-
-
-@fp.fpy(ctx=fp.REAL)
 def _callee_writes_a_held_row(xss):
     row = xss[0]
-    w = _write_rows(xss)  # noqa: F841
+    w = _row_iterated(xss)  # noqa: F841
     return row[1]
 
 
@@ -4767,7 +4758,7 @@ def _fp32_rows(m: int, n: int) -> list[ListType]:
 _BIG = fp.FP32.maxval()
 
 
-@pytest.mark.parametrize('fn, arg_types, args', [
+_RUNS = [
     # the fold rounds only what it adds to the first element
     (_sum_of_one, _fp32s(1), [[fp.Float(c=1, exp=-10)]]),
     # each of the seven roundings away doubles the sum, overflowing past 16,
@@ -4794,12 +4785,11 @@ _BIG = fp.FP32.maxval()
     # a callee's parameters may name one list
     (_same_list_twice, _fp32s(4), [[_BIG] * 4]),
     (_same_row_twice, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
-], ids=[
-    'sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written',
-    'row-alias', 'row-iterated', 'row-shared', 'row-held', 'returned-alias',
-    'iterate-written-row', 'linked-by-call', 'callee-writes-in-tuple',
-    'callee-keeps-from-tuple', 'callee-writes-a-held-row', 'comprehension-written',
-    'same-list-twice', 'same-row-twice',
+]
+
+
+@pytest.mark.parametrize('fn, arg_types, args', _RUNS, ids=[
+    fn.name.lstrip('_').replace('_', '-') for fn, _, _ in _RUNS
 ])
 @pytest.mark.parametrize('digit_bounds', [False, True], ids=['', 'digit-bounds'])
 def test_the_returned_format_holds_a_run(fn, arg_types, args, digit_bounds):

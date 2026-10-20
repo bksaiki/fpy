@@ -47,9 +47,9 @@ elements part, ``fld(c, i)`` field *i*):
 ``for row in xss``         ``reg(row) ≡ elts(xss)``
 ``xs if c else ys``        ``reg(result) ≡ reg(xs) ≡ reg(ys)``
 ``enumerate``/``zip``      ``elts(result) ≡ elts(arg)``
-``f(xs, ys)``              each list in ``xs`` ≡ each one in ``result``,
-                           or in ``ys`` if ``f`` may write it, of the same
-                           shape, if ``f`` may retain ``xs``
+``f(xs, ys)``              if ``f`` may keep ``xs``: each list in ``xs`` ≡
+                           each same-shaped one in ``result``, or in ``ys``
+                           if ``f`` may write it
 =========================  ==========================================
 
 Equality rather than inclusion is deliberate.  Each place denotes exactly one
@@ -67,13 +67,12 @@ The ownership queries stay sound because shared-outward poisons them;
 :meth:`AliasAnalysis.may_alias` is sound only for the routes above.
 
 Two routes leave the function, and they mean opposite things for ownership.
-*Shared outward* — handed to a call, or to an unmodelled operation — means
-something else may hold the list while this function still does: **E-App** keeps
-no store of its own, so a callee writes the caller's cells.  *Returned* is
-**E-Ret** handing a location out, which is a transfer; see
-:meth:`AliasAnalysis.transfers_ownership`.  Collapsing the two would forgo every
-returned value: 37 of the corpus's 299 allocation sites are fresh values that are
-returned and nothing else.
+*Shared outward* — kept by a call, or handed to an unmodelled operation — means
+something else may hold the list while this function still does.  A call that
+only writes it is flagged apart (:meth:`AliasAnalysis.callee_writes_at`):
+**E-App** keeps no store of its own, so a callee writes the caller's cells.
+*Returned* is **E-Ret** handing a location out, which is a transfer; see
+:meth:`AliasAnalysis.transfers_ownership`.
 
 Limitations
 -----------
@@ -547,7 +546,7 @@ class AliasAnalysis:
 
     def escapes_at(self, region: Region) -> bool:
         """Whether *region* is held by something outside while this function
-        still holds it — handed to a call, or to an unmodelled operation."""
+        still holds it — kept by a call, or handed to an unmodelled operation."""
         return self._regions.is_shared_out(region)
 
     def callee_writes_at(self, region: Region) -> bool:
@@ -579,7 +578,7 @@ class AliasAnalysis:
 
     def escapes(self, site: AllocSite) -> bool:
         """Whether *site*, or a container holding it, leaves the function at all
-        — handed to a call, or returned.
+        — kept by a call, or returned.
 
         Says nothing about *which*; :meth:`transfers_ownership` separates them.
         """
@@ -642,13 +641,13 @@ class AliasAnalysis:
             for r in self.within(region)
         )
 
-    def written_params(self, func: FuncDef, def_use: DefineUseAnalysis) -> dict[int, Region]:
-        """The regions of *func*'s parameters it may store into, by position."""
+    def param_regions(self, func: FuncDef, def_use: DefineUseAnalysis) -> dict[int, Region]:
+        """The region of each of *func*'s list parameters, by position."""
         out: dict[int, Region] = {}
         for i, arg in enumerate(func.args):
             if isinstance(arg.name, NamedId):
                 r = self.region_of(def_use.find_def_from_site(arg.name, arg))
-                if r is not None and self.may_write(r):
+                if r is not None:
                     out[i] = r
         return out
 
@@ -969,20 +968,6 @@ class _Builder(DefaultVisitor):
                 return None
         return self.summaries[fd]
 
-    def _retained_args(
-        self, e: Call, summary: 'EscapeSummary | None',
-    ) -> Iterator[tuple[Expr, Region]]:
-        """The arguments the callee may keep, with their regions.
-
-        Unless its summary says otherwise: a callee that only reads or writes
-        its argument holds nothing once it returns, so the caller's list is no
-        more shared than before the call.
-        """
-        for i, a in enumerate(e.args):
-            ac = self._region_for(a)
-            if ac is not None and (summary is None or summary.retains(i)):
-                yield a, ac
-
     def _lists_in(self, region: Region, ty: Type | None) -> Iterator[tuple[Region, Type]]:
         """Every list *region* holds, itself included, with its type."""
         match ty:
@@ -1007,19 +992,23 @@ class _Builder(DefaultVisitor):
         return super()._visit_expr(e, ctx)
 
     def _visit_call(self, e: Call, ctx):
-        """A list the callee keeps escapes, and may end up in its result or in
-        a list it writes."""
+        """An argument the callee may write is marked so; one it may keep is
+        shared outward and joins each same-shaped list in the result or in a
+        written argument."""
         summary = self._summary(e)
         written = [a for i, a in enumerate(e.args) if summary is None or summary.writes(i)]
-        for a in written:
-            if (ac := self._region_for(a)) is not None:
-                self.regions.mark_callee_written(ac)
-        for a, ac in self._retained_args(e, summary):
+        retained = [a for i, a in enumerate(e.args) if summary is None or summary.retains(i)]
+        reach = [(x, xc) for x in (e, *written) if (xc := self._region_for(x)) is not None]
+        for x, xc in reach:
+            if x is not e:
+                self.regions.mark_callee_written(xc)
+        for a in retained:
+            if (ac := self._region_for(a)) is None:
+                continue
             self.regions.mark_shared_out(ac)
-            for x in (e, *written):
-                if (xc := self._region_for(x)) is not None:
-                    self._merge_by_shape(
-                        ac, self.types.by_expr.get(a), xc, self.types.by_expr.get(x))
+            for x, xc in reach:
+                self._merge_by_shape(
+                    ac, self.types.by_expr.get(a), xc, self.types.by_expr.get(x))
         super()._visit_call(e, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):

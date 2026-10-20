@@ -585,7 +585,6 @@ class CppCompiler(Backend):
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
         array_size = ArraySizeInfer.analyze(ast)
         type_info = TypeInfer.check(ast, def_use=def_use)
-        # before the value classes, which read it
         alias = Alias.analyze(ast, def_use=def_use, type_info=type_info, summaries=summaries)
         class_info = ValueClassInfer.analyze(
             ast, def_use=def_use, type_info=type_info, ctx_use=ctx_use, alias=alias,

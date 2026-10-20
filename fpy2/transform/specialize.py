@@ -714,7 +714,6 @@ class Specialize:
             # `use_digit_bounds`: the spec key carries the relational bounds, so two
             # callers whose context differs must not share a spec -- and the
             # params this captures are what carry that context into the emit.
-            # The callees' escape summaries, shared across specs.
             classes = ValueClassInfer.analyze(
                 mono, alias=Alias.analyze(mono, summaries=escapes))
             fa = FormatInfer.analyze(mono, use_digit_bounds=True, value_classes=classes)

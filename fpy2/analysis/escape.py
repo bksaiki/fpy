@@ -1,10 +1,9 @@
 """
 Escape summaries: which of a function's list parameters outlive the call.
 
-A caller that hands a list to a callee has to assume the worst — the callee might
-keep it — so :mod:`fpy2.analysis.alias` marks any call argument *shared outward*.
-That is what makes a compiled-to-compiled boundary keep its handles, and it is
-the whole cost of decomposing a program into several functions.
+A caller that hands a list to a callee must know whether the callee keeps it:
+:mod:`fpy2.analysis.alias` marks an argument *shared outward* only where the
+summary says it may be retained.
 
 A summary answers the question that assumption stands in for: **after this call
 returns, can anything outside still reach the argument's list?**  A caller whose
@@ -23,19 +22,16 @@ Reading routes off regions rather than syntax means aliasing inside the callee
 needs no rule of its own: ``ys = xs; return ys`` retains ``xs`` because both
 names are one region.
 
-Computed leaves-first, so a callee's summary exists before its callers need it.
-No fixpoint is needed and none would help — the parser rejects forward
-references, so recursion cannot be written and the order is always a DAG.
-``alias`` computes a missing summary when it needs one; a callee that does not
-type on its own reads as *retains everything*.
-
-A summary also says which parameters the callee may store into: a list it keeps
-may land there.
+``alias`` computes a callee's summary on demand.  The parser rejects forward
+references, so the call graph is a DAG and no fixpoint is needed.  A callee that
+does not type on its own reads as retaining and writing everything.  A summary
+also says which parameters the callee may store into, which is where a list it
+keeps may land.
 """
 
 from dataclasses import dataclass
 
-from ..ast import Argument, FuncDef, NamedId
+from ..ast import Argument, FuncDef
 from .alias import Alias, AliasAnalysis, Region
 from .define_use import DefineUse, DefineUseAnalysis
 
@@ -65,7 +61,7 @@ class Escape:
         def_use: DefineUseAnalysis | None = None,
         alias: AliasAnalysis | None = None,
     ) -> EscapeSummary:
-        """Which of *func*'s parameters outlive a call to it.
+        """*func*'s :class:`EscapeSummary`.
 
         Args:
             func: the function to summarize.
@@ -83,15 +79,14 @@ class Escape:
                 func, def_use=def_use, summaries=summaries,
             )
 
-        retained: set[int] = set()
-        for i, arg in enumerate(func.args):
-            if not isinstance(arg.name, NamedId):
-                continue
-            region = alias.region_of(def_use.find_def_from_site(arg.name, arg))
-            if region is not None and any(_retains(alias, r, arg) for r in alias.within(region)):
-                retained.add(i)
-        written = alias.written_params(func, def_use)
-        return EscapeSummary(frozenset(retained), frozenset(written))
+        params = alias.param_regions(func, def_use)
+        return EscapeSummary(
+            frozenset(
+                i for i, region in params.items()
+                if any(_retains(alias, r, func.args[i]) for r in alias.within(region))
+            ),
+            frozenset(i for i, region in params.items() if alias.may_write(region)),
+        )
 
 
 def _retains(alias: AliasAnalysis, region: Region, arg: Argument) -> bool:

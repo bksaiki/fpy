@@ -242,6 +242,12 @@ def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     return None
 
 
+def _unfold_advice(ctx: Context) -> str:
+    """Advice for a context the op table has no signature under at all, which
+    `unfold=DOUBLE_ROUND` answers by computing at one it does have."""
+    return '' if is_native_ctx(ctx) else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
+
+
 def _cast_advice(arg_ty: CppScalar, target_ty: CppScalar) -> str:
     """How to make a conversion :meth:`_maybe_cast` refused legal.
 
@@ -2013,13 +2019,7 @@ class CppEmitter(Visitor):
             if widened is not None:
                 return widened
 
-        advice = (
-            ''
-            if is_native_ctx(active)
-            # the op table has no signature under this context at all, which
-            # `unfold=DOUBLE_ROUND` answers by computing at one it does have
-            else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
-        )
+        advice = _unfold_advice(active)
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under context '
             f'`{active}`: {[s.format() for s in storages]}{advice}',
@@ -2912,11 +2912,10 @@ class CppEmitter(Visitor):
         is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there --
         except where a non-zero length in the type has already settled it.
 
-        The accumulator is the active context's type, with each step its ``+``;
-        ``REAL`` accumulates in the result's.  It may be *wider* than the element
-        but not narrower: ``init + *first`` converts to the common type, which is
-        the accumulator only when the element fits it exactly, making the fold
-        uni-precision there as the interpreter is.  Otherwise the seed would round.
+        The fold accumulates in the active context's type, each step its ``+``,
+        then casts to the result's; a context with no scalar type (``REAL``)
+        accumulates in the result's.  The element must fit the accumulator
+        exactly, or casting the seed would round it.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2932,12 +2931,11 @@ class CppEmitter(Visitor):
             acc_ty = self._scalar_for_ctx(active, at=e)
         except CppEmitError:
             acc_ty = result_ty
-        # each step must be `+` under `active`
         if active is not REAL and not any(
             sig.in_tys == (acc_ty, acc_ty) and sig.out_ctx == active
             for sig in self.op_table.binary.get(Add, ())
         ):
-            advice = '' if is_native_ctx(active) else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
+            advice = _unfold_advice(active)
             raise CppEmitError(
                 f'no `+` on `{acc_ty.format()}` rounding under context `{active}` '
                 f'for `sum`{advice}',

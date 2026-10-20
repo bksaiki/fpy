@@ -162,8 +162,8 @@ def _fp16_sum(xs):
 
 
 def test_a_sum_without_a_native_add_is_refused():
-    """FP16 has storage (`float`) but no `+`: a `float` fold would not round each
-    step as FP16 does, which the interpreter does ([2048, 1, 1] is 2048)."""
+    """FP16 is stored as `float` but has no `+`: a `float` fold would not round
+    each step to FP16 as the interpreter does (``[2048, 1, 1]`` sums to 2048)."""
     with pytest.raises(CppCompileError, match='no `\\+`'):
         CppCompiler().compile(_fp16_sum, arg_types=[ListType(RealType(fp.FP16), 4)])
 

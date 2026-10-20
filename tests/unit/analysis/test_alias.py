@@ -7,7 +7,7 @@ distinguished from a shared one.
 
 import fpy2 as fp
 
-from fpy2.analysis import Alias, DefineUse, Escape
+from fpy2.analysis import Alias, AliasAnalysis, DefineUse, Definition
 from fpy2.ast.fpyast import Var
 from fpy2.transform.path import walk_exprs
 
@@ -374,14 +374,13 @@ class TestMayAlias:
 
 
 class TestCallResults:
-    """A call's result may be any list the callee retains, at matching shape."""
+    """A list the callee may keep may be any same-shaped list in its result or
+    in an argument it writes."""
 
     @staticmethod
-    def _defs(f: fp.Function, callees: tuple[fp.Function, ...] = ()):
-        summaries = {g.ast: Escape.analyze(g.ast) for g in callees}
+    def _defs(f: fp.Function) -> tuple[AliasAnalysis, dict[str, Definition]]:
         du = DefineUse.analyze(f.ast)
-        al = Alias.analyze(f.ast, def_use=du, summaries=summaries)
-        return al, {str(d.name): d for d in du.defs}
+        return Alias.analyze(f.ast, def_use=du), {str(d.name): d for d in du.defs}
 
     def test_result_aliases_a_retained_argument(self):
         @fp.fpy
@@ -394,9 +393,8 @@ class TestCallResults:
                 r = same(xs)
                 return r[0]
 
-        for callees in ((), (same,)):
-            al, d = self._defs(f, callees)
-            assert al.may_alias(d['r'], d['xs'])
+        al, d = self._defs(f)
+        assert al.may_alias(d['r'], d['xs'])
 
     def test_result_aliases_a_retained_row(self):
         @fp.fpy
@@ -410,7 +408,7 @@ class TestCallResults:
                 r = first(xss)
                 return r[0] + row[0]
 
-        al, d = self._defs(f, (first,))
+        al, d = self._defs(f)
         assert al.may_alias(d['r'], d['row'])
         assert not al.may_alias(d['r'], d['xss'])
 
@@ -427,7 +425,7 @@ class TestCallResults:
                 row = yss[1]
                 return row[0] + t
 
-        al, d = self._defs(f, (put,))
+        al, d = self._defs(f)
         assert al.may_alias(d['row'], d['xs'])
 
     def test_linked_parameters_share_their_lists(self):
@@ -454,7 +452,7 @@ class TestCallResults:
                 r = copy(xs)
                 return r[0]
 
-        al, d = self._defs(f, (copy,))
+        al, d = self._defs(f)
         assert not al.may_alias(d['r'], d['xs'])
 
 

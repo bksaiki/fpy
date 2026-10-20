@@ -1993,9 +1993,9 @@ class _FormatInferInstance(Visitor):
         self.by_def[d] = self._with_region_inserts(self.alias.region_of(d), fmt, d)
 
     def _store_paths(self, region: Region, written: Region, depth: int) -> list[_Path]:
-        """Where in a value in *region* a store *depth* list levels into
-        *written* lands: below each path to *written* where *region* holds it,
-        or above where it is held inside it."""
+        """Paths in a value of *region* to where a store *depth* levels into
+        *written* lands: after each path from *region* to *written*, and
+        ``depth - k`` levels in where *region* is *k* levels inside *written*."""
         below = (ELTS,) * depth
         out = [path + below for path in self._paths_to(region, written)]
         out += [
@@ -2756,28 +2756,16 @@ class _FormatInferInstance(Visitor):
 
 
     def _sum_bound(self, e: Sum, arg_fmt: ListFormat) -> FormatBound:
-        """
-        Format of ``Sum(xs)`` — reduce-by-pairwise-addition with rounding
-        under the active context at each step.
-
-        Strategy: simulate ``n - 1`` exact pairwise additions through
-        :class:`AbstractFormat`.  The simulated accumulator's
-        representable set is a superset of every intermediate partial
-        sum's value set (this matters for signed reductions, where
-        intermediate magnitudes can exceed the final result).  If the
-        simulated accumulator fits under the active scope's format,
-        every per-step ``round_C`` is the identity, so the precise
-        format is sound to report — regardless of whether the scope
-        is :data:`REAL` or a concrete rounding context.  Otherwise
-        the result widens to the scope's format via :meth:`_op_bound`.
-
-        Requires the list size to be statically known via
-        :class:`ArraySizeAnalysis`; otherwise the element format joined
-        with :meth:`_op_bound`: a length-one sum is unrounded.
+        """Format of ``Sum(xs)``: a left fold from an unrounded ``xs[0]``, each
+        step rounded under the active context.  With ``n`` known, ``n - 1``
+        exact additions in :class:`AbstractFormat` cover every partial sum; if
+        none rounds, that is the bound, else :meth:`_op_bound`.  With ``n``
+        unknown, the element format joined with :meth:`_op_bound`, since ``n``
+        may be 1.
         """
         n = self._known_iter_count(e.arg)
         if n is None:
-            return _join_bounds(arg_fmt.elt, self._op_bound(e))
+            return self._join(arg_fmt.elt, self._op_bound(e))
 
         # ``sum([])`` is conventionally 0 — fits trivially in any scope.
         if n == 0:
@@ -2993,7 +2981,9 @@ class _FormatInferInstance(Visitor):
         point, so their join bounds what it holds after the call."""
         assert isinstance(e.fn, Function)
         pre = self._pre_cache.get(e.fn.ast, linked=self._linked_args(e))
-        for i, region in pre.alias.written_params(sub.func, pre.def_use).items():
+        for i, region in pre.alias.param_regions(sub.func, pre.def_use).items():
+            if not pre.alias.may_write(region):
+                continue
             fmts = [sub.by_def[d] for d in pre.alias.defs_in(region) if d in sub.by_def]
             self._record_held(self.alias.region_of_expr(e.args[i]), reduce(self._join, fmts))
 
@@ -3098,21 +3088,23 @@ class _FormatInferInstance(Visitor):
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
-        body_fmt: FormatBound = None
-
         def iterate():
-            nonlocal body_fmt
             for target, iterable in zip(e.targets, e.iterables):
-                # each element reads the live list, so what a call in the body
-                # stores into it reaches a later element's target
-                iter_fmt = self._with_region_inserts(
-                    self.alias.region_of_expr(iterable), self._visit_expr(iterable, ctx))
-                assert isinstance(iter_fmt, ListFormat)
-                self._visit_binding(e, target, iter_fmt.elt)
-            body_fmt = self._visit_expr(e.elt, ctx)
+                self._bind_live(e, target, iterable, self._visit_expr(iterable, ctx))
+            self._visit_expr(e.elt, ctx)
 
         self._fixpoint([], iterate)
-        return ListFormat(body_fmt)
+        return ListFormat(self.by_expr[e.elt])
+
+    def _bind_live(
+        self, site: DefSite, target: Id | TupleBinding, iterable: Expr, fmt: FormatBound,
+    ) -> None:
+        """Bind *target* to an element of *iterable*'s list as it is now: *fmt*
+        widened by what stores reached it since, which a later iteration
+        reads."""
+        live = self._with_region_inserts(self.alias.region_of_expr(iterable), fmt)
+        assert isinstance(live, ListFormat)
+        self._visit_binding(site, target, live.elt)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> FormatBound:
         value_fmt = self._visit_expr(e.value, ctx)
@@ -3193,12 +3185,9 @@ class _FormatInferInstance(Visitor):
         # re-widen them here.  Monotone, so this cannot cycle.
         for d in list(self.by_def):
             d_region = self.alias.region_of(d)
-            if (
-                d not in already
-                and d_region is not None
-                and self._store_paths(d_region, region, depth)
-            ):
-                self.by_def[d] = self._with_region_inserts(d_region, self.by_def[d], d)
+            if (d not in already and d_region is not None
+                    and self._store_paths(d_region, region, depth)):
+                self._set_def_bound(d, self.by_def[d])
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -3333,15 +3322,9 @@ class _FormatInferInstance(Visitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
-        assert isinstance(iter_fmt, ListFormat)
 
         def iterate():
-            # the loop reads the live list, so what the body stores into it
-            # reaches a later iteration's target
-            live = self._with_region_inserts(
-                self.alias.region_of_expr(stmt.iterable), iter_fmt)
-            assert isinstance(live, ListFormat)
-            self._visit_binding(stmt, stmt.target, live.elt)
+            self._bind_live(stmt, stmt.target, stmt.iterable, iter_fmt)
             self._visit_block(stmt.body, ctx)
 
         # If the iterable's length is statically known, drive the phi
