@@ -139,7 +139,7 @@ import math
 import operator
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import reduce
 from typing import Any, TypeAlias
@@ -1688,7 +1688,7 @@ class PreAnalysisCache:
     """
 
     def __init__(self):
-        self._table: dict[int, PreAnalyses] = {}
+        self._table: dict[tuple[int, frozenset[tuple[int, int]]], PreAnalyses] = {}
 
     def get(
         self,
@@ -1699,17 +1699,27 @@ class PreAnalysisCache:
         ctx_use: ContextUseAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
         alias: AliasAnalysis | None = None,
+        linked: frozenset[tuple[int, int]] = frozenset(),
     ) -> PreAnalyses:
         """Return the pre-analyses for *func*, computing them on the
         first request.  Pre-supplied analyses (via the keyword args)
         populate the cache for *func* if it hasn't been computed
         yet — used by the public :meth:`FormatInfer.analyze` to
         thread externally-computed analyses in.  Subsequent lookups
-        ignore the keyword args."""
-        key = id(func)
+        ignore the keyword args.
+
+        *linked* names parameters a call site passes one list to; only the
+        alias analysis differs for it (see :meth:`Alias.analyze`)."""
+        key = (id(func), linked)
         cached = self._table.get(key)
         if cached is not None:
             return cached
+        if linked:
+            base = self.get(func)
+            pre = replace(base, alias=Alias.analyze(
+                func, def_use=base.def_use, type_info=base.type_info, linked=linked))
+            self._table[key] = pre
+            return pre
         if def_use is None:
             def_use = DefineUse.analyze(func)
         if type_info is None:
@@ -2982,7 +2992,7 @@ class _FormatInferInstance(Visitor):
         definitions in its parameter's region describe that object at every
         point, so their join bounds what it holds after the call."""
         assert isinstance(e.fn, Function)
-        pre = self._pre_cache.get(e.fn.ast)
+        pre = self._pre_cache.get(e.fn.ast, linked=self._linked_args(e))
         for i, region in pre.alias.written_params(sub.func, pre.def_use).items():
             fmts = [sub.by_def[d] for d in pre.alias.defs_in(region) if d in sub.by_def]
             self._record_held(self.alias.region_of_expr(e.args[i]), reduce(self._join, fmts))
@@ -2999,6 +3009,18 @@ class _FormatInferInstance(Visitor):
             case TupleFormat():
                 for i, elt in enumerate(fmt.elts):
                     self._record_held(self.alias.region_field(region, i), elt)
+
+    def _linked_args(self, e: Call) -> frozenset[tuple[int, int]]:
+        """Pairs of arguments that may hold one list, at any depth."""
+        held = [
+            self.alias.within(r) if (r := self.alias.region_of_expr(a)) is not None
+            else frozenset()
+            for a in e.args
+        ]
+        return frozenset(
+            (i, j) for i in range(len(held)) for j in range(i + 1, len(held))
+            if held[i] & held[j]
+        )
 
     def _analyze_callee(self, e: Call) -> FormatAnalysis | None:
         """Recursive sub-analysis on the callee at this site.
@@ -3042,7 +3064,7 @@ class _FormatInferInstance(Visitor):
             ret_fmt=REAL_FORMAT,
             arg_vals=arg_vals,
         )
-        pre = self._pre_cache.get(fn.ast)
+        pre = self._pre_cache.get(fn.ast, linked=self._linked_args(e))
         return _FormatInferInstance(
             fn.ast,
             pre=pre,

@@ -656,7 +656,8 @@ class AliasAnalysis:
         """Whether the list *d* names may have an element replaced, through
         any name here or by a call it is handed to."""
         r = self.region_of(d)
-        return r is None or r in self.stored_regions or self.escapes_at(r)
+        return (r is None or r in self.stored_regions
+                or self.escapes_at(r) or self.callee_writes_at(r))
 
 
 class _EscapeVars(DefaultVisitor):
@@ -689,11 +690,13 @@ class _Builder(DefaultVisitor):
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis,
                  type_info: TypeAnalysis,
-                 summaries: 'dict[FuncDef, EscapeSummary]'):
+                 summaries: 'dict[FuncDef, EscapeSummary]',
+                 linked: frozenset[tuple[int, int]]):
         self.func = func
         self.def_use = def_use
         self.types = type_info
         self.summaries = summaries
+        self.linked = linked
         self.regions = _Regions()
         self.sites: list[AllocSite] = []
         self.by_def: dict[Definition, Region] = {}
@@ -782,13 +785,28 @@ class _Builder(DefaultVisitor):
                 self.regions.merge(self._reg(d), self._reg(self.def_use.defs[i]))
 
     def _seed_params(self) -> None:
-        for arg in self.func.args:
+        params: dict[int, tuple[Region, Type | None]] = {}
+        for i, arg in enumerate(self.func.args):
             if not isinstance(arg.name, NamedId):
                 continue
             d = self.def_use.find_def_from_site(arg.name, arg)
             ty = self.types.by_def.get(d)
             if _carries_list(ty):
                 self._seed(self._reg(d), ty, arg, 0)
+                params[i] = (self._reg(d), ty)
+        for i, j in self.linked:
+            if i in params and j in params:
+                self._merge_by_shape(*params[i], *params[j])
+
+    def _merge_by_shape(
+        self, a: Region, a_ty: Type | None, b: Region, b_ty: Type | None,
+    ) -> None:
+        """Merge each list in *a* with each list in *b* of the same shape."""
+        theirs = list(self._lists_in(b, b_ty))
+        for r, ty in list(self._lists_in(a, a_ty)):
+            for q, qty in theirs:
+                if _shape(ty) == _shape(qty):
+                    self.regions.merge(r, q)
 
     def _seed(self, region: Region, ty: Type | None, arg: Argument,
               depth: int) -> None:
@@ -996,17 +1014,12 @@ class _Builder(DefaultVisitor):
         for a in written:
             if (ac := self._region_for(a)) is not None:
                 self.regions.mark_callee_written(ac)
-        reach: list[tuple[Region, Type]] = []
-        for x in (e, *written):
-            xc = self._region_for(x)
-            if xc is not None:
-                reach.extend(self._lists_in(xc, self.types.by_expr.get(x)))
         for a, ac in self._retained_args(e, summary):
             self.regions.mark_shared_out(ac)
-            for q, aty in list(self._lists_in(ac, self.types.by_expr.get(a))):
-                for r, ty in reach:
-                    if _shape(ty) == _shape(aty):
-                        self.regions.merge(r, q)
+            for x in (e, *written):
+                if (xc := self._region_for(x)) is not None:
+                    self._merge_by_shape(
+                        ac, self.types.by_expr.get(a), xc, self.types.by_expr.get(x))
         super()._visit_call(e, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
@@ -1270,6 +1283,7 @@ class Alias:
         def_use: DefineUseAnalysis | None = None,
         type_info: TypeAnalysis | None = None,
         summaries: 'dict[FuncDef, EscapeSummary] | None' = None,
+        linked: frozenset[tuple[int, int]] = frozenset(),
     ) -> AliasAnalysis:
         """Compute what may refer to each list in *func*.
 
@@ -1282,6 +1296,8 @@ class Alias:
                 does not retain is not treated as shared.  A memo: one absent
                 from it is computed and added.  A foreign callee, or one that
                 does not type on its own, is assumed to retain everything.
+            linked: pairs of parameters a caller may pass one list to, at any
+                depth; their same-shaped lists share regions.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got {func}")
@@ -1289,4 +1305,5 @@ class Alias:
             def_use = DefineUse.analyze(func)
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=def_use)
-        return _Builder(func, def_use, type_info, {} if summaries is None else summaries).run()
+        summaries = {} if summaries is None else summaries
+        return _Builder(func, def_use, type_info, summaries, linked).run()

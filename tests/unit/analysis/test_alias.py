@@ -430,6 +430,19 @@ class TestCallResults:
         al, d = self._defs(f, (put,))
         assert al.may_alias(d['row'], d['xs'])
 
+    def test_linked_parameters_share_their_lists(self):
+        """A caller that passes one list twice links the two parameters."""
+        @fp.fpy
+        def f(a: list[fp.Real], bs: list[list[fp.Real]], c: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return a[0] + bs[0][0] + c[0]
+
+        du = DefineUse.analyze(f.ast)
+        d = {str(x.name): x for x in du.defs}
+        al = Alias.analyze(f.ast, def_use=du, linked=frozenset({(0, 1)}))
+        assert al.region_of(d['a']) is al.region_of(d['bs'], 1)
+        assert not al.may_alias(d['a'], d['c'])
+
     def test_result_does_not_alias_an_argument_not_retained(self):
         @fp.fpy
         def copy(xs: list[fp.Real]) -> list[fp.Real]:
