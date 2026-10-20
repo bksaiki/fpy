@@ -4716,6 +4716,18 @@ def _callee_writes_a_held_row(xss):
 
 
 @fp.fpy(ctx=fp.REAL)
+def _scale_last(zs):
+    zs[3] = zs[0] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _comprehension_written(xs):
+    ys = [x * 1 for x in xs]
+    return [_scale_last(ys) + y for y in ys]
+
+
+@fp.fpy(ctx=fp.REAL)
 def _iterate_written_row(xss):
     rs = fp.empty(4)
     k = 0
@@ -4760,11 +4772,13 @@ _BIG = fp.FP32.maxval()
     (_callee_writes_in_tuple, _fp32s(4), [[_BIG] * 4]),
     (_callee_keeps_from_tuple, _fp32s(4), [[_BIG] * 4]),
     (_callee_writes_a_held_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    # a comprehension reads the live list, as a loop does
+    (_comprehension_written, _fp32s(4), [[_BIG] * 4]),
 ], ids=[
     'sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written',
     'row-alias', 'row-iterated', 'row-shared', 'row-held', 'returned-alias',
     'iterate-written-row', 'linked-by-call', 'callee-writes-in-tuple',
-    'callee-keeps-from-tuple', 'callee-writes-a-held-row',
+    'callee-keeps-from-tuple', 'callee-writes-a-held-row', 'comprehension-written',
 ])
 @pytest.mark.parametrize('digit_bounds', [False, True], ids=['', 'digit-bounds'])
 def test_the_returned_format_holds_a_run(fn, arg_types, args, digit_bounds):

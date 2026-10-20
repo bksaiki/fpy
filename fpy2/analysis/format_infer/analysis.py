@@ -3076,11 +3076,20 @@ class _FormatInferInstance(Visitor):
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
-        for target, iterable in zip(e.targets, e.iterables):
-            iter_fmt = self._visit_expr(iterable, ctx)
-            assert isinstance(iter_fmt, ListFormat)
-            self._visit_binding(e, target, iter_fmt.elt)
-        body_fmt = self._visit_expr(e.elt, ctx)
+        body_fmt: FormatBound = None
+
+        def iterate():
+            nonlocal body_fmt
+            for target, iterable in zip(e.targets, e.iterables):
+                # each element reads the live list, so what a call in the body
+                # stores into it reaches a later element's target
+                iter_fmt = self._with_region_inserts(
+                    self.alias.region_of_expr(iterable), self._visit_expr(iterable, ctx))
+                assert isinstance(iter_fmt, ListFormat)
+                self._visit_binding(e, target, iter_fmt.elt)
+            body_fmt = self._visit_expr(e.elt, ctx)
+
+        self._fixpoint([], iterate)
         return ListFormat(body_fmt)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> FormatBound:
