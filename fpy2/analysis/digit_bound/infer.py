@@ -69,6 +69,14 @@ _WitnessKey: TypeAlias = tuple[Literal['witness'], int]
 """An index an existential picks -- an aggregate's worst element, a loop's
 iteration before, an element's writer -- by what picks it."""
 
+_ReadKey: TypeAlias = tuple[Literal['read'], Key]
+"""The elements read at a binder's index whose lists' spaces correspond with a
+binder nested with it, by the binder."""
+
+_ApartKey: TypeAlias = tuple[Literal['apart'], '_RangeKey | _EltKey', int]
+"""An index set enumerated by a binder nested with the one enumerating it
+first: the *n*-th such, apart from the rest."""
+
 _LastKey: TypeAlias = tuple[Literal['last'], int]
 """A loop's last iteration, by the loop's identity, or a partial write's last
 writer, by its phi's."""
@@ -100,7 +108,8 @@ class _IndexSet:
     elements: set[Key] = field(default_factory=set)
     """The spaces the copy moves over."""
     subst: dict[int, Term] = field(default_factory=dict)
-    mark: int = 0
+    done: set[int] = field(default_factory=set)
+    """The constraints replayed onto it."""
     minted: int = 0
     """How many of :attr:`subst`'s copies have their index spaces."""
 
@@ -155,6 +164,8 @@ class DigitBoundParams:
     assume: frozenset[int] = frozenset()
     """The literals every call reaching the callee proved, which hold
     wherever its body runs."""
+    outer: tuple[Key, ...] = ()
+    """The caller's binders around the call, which the callee varies with."""
 
 
 @dataclass
@@ -168,6 +179,8 @@ class DigitBoundAnalysis:
     by_expr: dict[Expr, Terms] = field(default_factory=dict)
     by_def: dict[Definition, Terms] = field(default_factory=dict)
     by_call: dict[Call, 'DigitBoundAnalysis'] = field(default_factory=dict)
+    outer: tuple[Key, ...] = ()
+    """The caller's binders around the call this analysis is of."""
     ret: Terms = field(default_factory=Terms)
     assume_at: Callable[[Expr], frozenset[int]] = lambda _e: frozenset()
     """The guard literals that hold wherever an expression is evaluated."""
@@ -303,7 +316,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _elt_expr: dict[Definition, Expr]
     _covered_write: set[Definition]
     _lsb_vars: set[int]
-    _index_sets: dict[_RangeKey | _EltKey | _WitnessKey | _LastKey, _IndexSet]
+    _index_sets: dict['_RangeKey | _EltKey | _WitnessKey | _LastKey | _ReadKey | _ApartKey', _IndexSet]
+    _enumerators: dict['_RangeKey | _EltKey', list[Key]]
+    """The binders enumerating each index set, one per index set apart."""
     _gather: tuple[_RangeKey, Definition] | None
     _gathered: set[Expr]
     _returns: list[tuple[Expr, Terms]]
@@ -325,6 +340,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
     """The binder whose index each loop target is."""
     _outer_binders: tuple[Key, ...]
     """The caller's binders around the call this walk is."""
+    _walk: int
+    """This walk's identity in its keys."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
     _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
     _scope_of: dict[ContextStmt, ContextScope]
@@ -357,7 +374,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self.ctx_use = view.ctx_use
         self.array_size = view.array_size
         self.scopes = view.scopes
-        self.out = DigitBoundAnalysis(store, args)
+        self.out = DigitBoundAnalysis(store, args, outer=outer_binders)
         self._loop_index = {}
         self._trip = None
         self._partial = {}
@@ -366,6 +383,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._covered_write = set()
         self._lsb_vars = set()
         self._index_sets = {}
+        self._enumerators = {}
         self._gather = None
         self._gathered = set()
         self._returns = []
@@ -380,6 +398,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._binders_of_stmt = {}
         self._index_binder = {}
         self._outer_binders = outer_binders
+        self._walk = store.spaces.walk()
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
         self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
@@ -438,24 +457,41 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _binder(self, node: Stmt | Expr, clause: int = 0) -> Key:
         """A loop's, or a comprehension clause's, key: this walk's own, so two
         calls to one function keep theirs apart."""
-        return ('binder', id(self), id(node), clause)
+        return ('binder', self._walk, id(node), clause)
 
     def _elements(self, of: Expr | Definition) -> Key:
         """The key of the list *of*'s element space."""
-        return ('elements', id(self), id(of))
+        return ('elements', self._walk, id(of))
 
     def _unify_elements(self, a: Expr | Definition, b: Expr | Definition) -> None:
         """*a* and *b* hold one list's elements, where they are lists."""
         if isinstance(self._type_of(a), ListType):
             self.store.spaces.unify(self._elements(a), self._elements(b))
 
-    def _indexed_at(self, d_lst: Definition, idx: Expr) -> None:
-        """The list *d_lst*, read or written at *idx*, corresponds with the
-        binder whose index *idx* is."""
-        if isinstance(idx, Var):
-            b = self._index_binder.get(self.def_use.find_def_from_use(idx))
-            if b is not None:
-                self.store.spaces.unify(b, self._elements(d_lst))
+    def _index_of(self, idx: Expr) -> Key | None:
+        """The binder whose index *idx* is, if any."""
+        return self._index_binder.get(self.def_use.find_def_from_use(idx)) if isinstance(idx, Var) else None
+
+    def _reads_summary(self, d_lst: Definition, binder: Key | None) -> bool:
+        """Does the list *d_lst*, read at *binder*'s index, correspond with the
+        binder?  Not where its space already does with a binder nested with
+        this one."""
+        return binder is None or self.store.spaces.correspond(binder, self._elements(d_lst))
+
+    def _read_apart(self, t: Terms, d_lst: Definition, binder: Key) -> Terms:
+        """*t*, of the list *d_lst*'s element, at *binder*'s index: a copy
+        every list read apart there shares, `('read', binder)`."""
+        around = (*self.store.spaces.around(binder), binder)
+        return self._copy(t, (self._elements(d_lst),), ('read', binder), around)
+
+    def _element(self, d_lst: Definition, binder: Key | None) -> Terms:
+        """The list *d_lst*'s element at *binder*'s index: its summary, or
+        where the binder cannot correspond with it, a copy."""
+        src = self._def(d_lst)
+        if self._reads_summary(d_lst, binder):
+            return src
+        assert binder is not None
+        return self._read_apart(src, d_lst, binder)
 
     def _corresponds(self, of: Expr | Definition, src: Terms, outer: tuple[Key, ...]) -> None:
         """The list *of* takes *src*, another frame's list: its elements
@@ -604,9 +640,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case ListRef(value=Var() as lst, index=idx) if self._covers(
                 idx, self._len_of(lst)
             ):
-                d_lst = self.def_use.find_def_from_use(lst)
-                src = self._def(d_lst)
-                self._indexed_at(d_lst, idx)
+                src = self._element(self.def_use.find_def_from_use(lst), self._index_of(idx))
             case ListRef(value=Var() as lst, index=idx) if (
                 inst := self._at_index(lst, idx)
             ) is not None:
@@ -1489,7 +1523,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if k is not None:
             return self._instance(lst, (('c', k), ('c', k + 1), _ONE))
         key = self._elt_key_of(idx)
-        return None if key is None else self._instance(lst, key)
+        return None if key is None else self._instance(lst, key, self._trip_binder())
 
     def _at_index_set(self, lst: Var, idx: Var) -> Terms | None:
         """*lst*'s element summary restricted to the index set *idx* covers:
@@ -1509,18 +1543,37 @@ class _DigitBoundInferInstance(DefaultVisitor):
             if self._gather is None or d_idx is not self._gather[1]:
                 return None
             key = self._gather[0]
-        return self._instance(lst, key)
+            return self._instance(lst, key, self._index_binder.get(d_idx))
+        return self._instance(lst, key, self._trip_binder())
 
-    def _instance(self, lst: Var, key: '_RangeKey | _EltKey') -> Terms:
-        """*lst*'s element summary renamed for the index set *key*; see
-        :meth:`_at_index_set`."""
+    def _trip_binder(self) -> Key | None:
+        """The binder of the trip count an `a + s * k` index counts by."""
+        return None if self._trip is None else self._index_binder.get(self._trip[0])
+
+    def _enumerated(self, key: '_RangeKey | _EltKey', binder: Key | None) -> '_RangeKey | _EltKey | _ApartKey':
+        """The index set *key*, as *binder* enumerates it: one with the binders
+        that enumerate it already, where *binder* corresponds with theirs --
+        both run over it in order, so their indices are one -- else one apart."""
+        if binder is None:
+            return key
+        firsts = self._enumerators.setdefault(key, [])
+        for n, b in enumerate(firsts):
+            if b == binder or self.store.spaces.correspond(binder, b):
+                return key if n == 0 else ('apart', key, n)
+        firsts.append(binder)
+        n = len(firsts) - 1
+        return key if n == 0 else ('apart', key, n)
+
+    def _instance(self, lst: Var, key: '_RangeKey | _EltKey', binder: Key | None = None) -> Terms:
+        """*lst*'s element summary renamed for the index set *key*, as *binder*
+        enumerates it; see :meth:`_at_index_set`."""
         d_lst = self.def_use.find_def_from_use(lst)
         src = self._def(d_lst)
         if src.value is None:
             # the part is what a rounding position is built from, and the
             # whole list's value is minted lazily, so force it here
             src.value = self._def_value(d_lst)
-        return self._copy(src, (self._elements(d_lst),), key)
+        return self._copy(src, (self._elements(d_lst),), self._enumerated(key, binder))
 
     def _witness(self, e: AMax | AMin | Sum) -> Term | None:
         """The `msb` of the worst element of the list *e* reduces: a copy of
@@ -1535,7 +1588,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self,
         src: Terms,
         elements: Iterable[Key],
-        key: '_RangeKey | _EltKey | _WitnessKey | _LastKey',
+        key: '_RangeKey | _EltKey | _WitnessKey | _LastKey | _ReadKey | _ApartKey',
         binders: tuple[Key, ...] | None = None,
     ) -> Terms:
         """*src* renamed onto the index set *key*: at another index of
@@ -1558,7 +1611,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _replay(self, inst: _IndexSet) -> None:
         """Every fact stated since *inst* was last replayed, renamed onto it."""
         moving = _Varying(self.store.spaces, inst.elements)
-        inst.mark = self.store.instance(moving, inst.subst, inst.mark, inst.tag)
+        self.store.instance(moving, inst.subst, inst.done, inst.tag)
         spaces = self.store.spaces
         for old, new in list(inst.subst.items())[inst.minted:]:
             for v, _ in new.coeffs:
@@ -1638,8 +1691,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _bind_elt(self, target: NamedId, site, source: Var, binder: Key) -> None:
         d_src = self.def_use.find_def_from_use(source)
-        self._share(self.def_use.find_def_from_site(target, site), self._def(d_src))
-        self.store.spaces.unify(binder, self._elements(d_src))
+        self._share(self.def_use.find_def_from_site(target, site), self._element(d_src, binder))
 
     def _bind_iter(self, target: Id | TupleBinding, iterable: Expr, site, binder: Key) -> None:
         """What iterating *iterable* as *target* binds, at *site*.
@@ -1680,6 +1732,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         outer = self._gather, self._trip
         self._trip = None
         clauses = tuple(self._binder(e, k) for k in range(len(e.targets)))
+        for k, c in enumerate(clauses):
+            self.store.spaces.open(c, (*self._binders, *clauses[:k]))
         for target, iterable, binder in zip(e.targets, e.iterables, clauses):
             self._visit_expr(iterable, ctx)
             # a `zip` has no counterpart in the lowered loop, so it stays here
@@ -1699,6 +1753,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_expr(stmt.iterable, ctx)
         outer = self._gather, self._trip
         self._trip = None
+        self.store.spaces.open(self._binder(stmt), self._binders)
         self._bind_iter(stmt.target, stmt.iterable, stmt, self._binder(stmt))
         # A list the body fills enters the loop holding whatever it already
         # does, which a partial write leaves in place.
@@ -1779,8 +1834,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     if d_idx in self._index_binder:
                         self._index_binder[d] = self._index_binder[d_idx]
                 else:
-                    self._share(d, self._def(d_src))
-                    self._indexed_at(d_src, idx)
+                    self._share(d, self._element(d_src, self._index_of(idx)))
             case _:
                 src = self.out.by_expr.get(stmt.expr)
                 if src is None:
@@ -1819,14 +1873,18 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 idx, self._len_of(lst)
             ):
                 d_lst = self.def_use.find_def_from_use(lst)
-                self._indexed_at(d_lst, idx)
+                binder = self._index_of(idx)
             case _:
                 return
         fields = self._fields.get(d_lst) or self._zip_fields(d_lst)
         if fields is None:
             return
+        here = self._reads_summary(d_lst, binder)
         for sub, part in zip(target.elts, fields):
             if isinstance(sub, NamedId) and part is not None:
+                if not here:
+                    assert binder is not None
+                    part = self._read_apart(part, d_lst, binder)
                 self._share(self.def_use.find_def_from_site(sub, stmt), part)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
@@ -1846,11 +1904,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
               if covers and isinstance(stmt.indices[0], Var) else None)
         if at is None and stmt.expr in self._gathered and self._carried(d_in) == []:
             at = self._gather_binder(stmt.indices[0])
-        if at is None or at not in self._binders:
+        if (at is None or at not in self._binders
+                or not self.store.spaces.correspond(at, self._elements(d))):
             prior = self._carried(d_in)
             self._partial[d] = None if src is None or prior is None else [*prior, src]
             return
-        self.store.spaces.unify(at, self._elements(d))
         # each element is what the binders inside `at` last left: a copy over them
         i = self._binders.index(at) + 1
         inner, outer = self._binders[i:], self._binders[:i]
@@ -2005,6 +2063,6 @@ class DigitBoundInfer:
             params = DigitBoundParams(DigitBoundStore(), ())
         assume = params.assume
         return _DigitBoundInferInstance(
-            func, view, params.store, params.args, classes=classes,
+            func, view, params.store, params.args, classes=classes, outer_binders=params.outer,
             outer=(lambda: assume) if assume else None,
         ).analyze()

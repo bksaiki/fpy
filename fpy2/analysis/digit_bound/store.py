@@ -51,6 +51,9 @@ class DigitBoundStore:
     """Each variable's literal "this is not `-inf`", for those that have one;
     see :meth:`not_neg_inf`."""
 
+    _naming: dict[int, list[int]]
+    """Each variable's constraints, by position."""
+
     spaces: IndexSpaces
     """Which index spaces each variable varies over, kept with the variables so
     every walk sharing them shares it."""
@@ -65,12 +68,15 @@ class DigitBoundStore:
         self._n_lits = 0
         self._universal = set()
         self._not_neg_inf = {}
+        self._naming = {}
         self.spaces = IndexSpaces()
 
     def _add(self, c: Constraint) -> None:
         self._constraints.append(c)
         for t in (c.lhs, *c.rhs):
-            self._constrained.update(v.index for v, _ in t.coeffs)
+            for v, _ in t.coeffs:
+                self._constrained.add(v.index)
+                self._naming.setdefault(v.index, []).append(len(self._constraints) - 1)
         self._solver.assume(c)
         self._answers.clear()
         self._decisions.clear()
@@ -90,44 +96,48 @@ class DigitBoundStore:
         self,
         elementwise: Container[int],
         subst: dict[int, Term],
-        mark: int,
+        done: set[int],
         tag: str,
-    ) -> int:
-        """Replay every constraint naming an *elementwise* variable, from
-        *mark* on, with each of those renamed by *subst* and the rest shared.
-        Returns a new mark.
+    ) -> None:
+        """Replay every constraint reachable from the variables *subst*
+        renames, through *elementwise* ones: each such constraint with its
+        elementwise variables renamed by *subst* -- grown with a fresh copy for
+        each it meets -- and the rest shared.  *done* holds the constraints
+        replayed already, and grows.
 
         Every constraint holds at every index of the lists it is about -- the
         walk states an aggregate's upper bound only on a copy of its own -- so
         it holds at an index drawn from any subset: which is how a part of a
         list gets the facts the whole one has without *sharing* a variable
-        with it, and keeps those relating it to what does not vary.  A guarded
-        one is replayed under its guard, and only where every literal in it is
-        universal.
+        with it, and keeps those relating it to what does not vary.  One not
+        reachable from the copies names only copies nothing reaches, and adds
+        nothing about them.  A guarded one is replayed under its guard, and
+        only where every literal in it is universal.
 
-        *subst* grows in place: a second call for the same index set reuses
-        the renaming, which is what relates two parts taken over one range.
+        A second call for the same index set reuses the renaming, which is what
+        relates two parts taken over one range, and reaches what was stated
+        since.
         """
-        end = len(self._constraints)
-        for c in self._constraints[mark:end]:
-            vs = [v for t in (c.lhs, *c.rhs) for v, _ in t.coeffs]
-            ours = [v for v in vs if v.index in elementwise]
-            if not ours:
-                continue
-            if not self._universal.issuperset(c.guard):
-                # a non-universal literal need not hold at every index
-                continue
-            for v in ours:
-                if v.index not in subst:
-                    subst[v.index] = self.var(v.name + tag)
-            # keep the guard
-            self._add(Constraint(
-                c.lhs.rename(subst), c.op,
-                tuple(t.rename(subst) for t in c.rhs), c.guard,
-            ))
-        # past the copies too: they are elementwise themselves, so a mark of
-        # *end* would replay them again on the next call for this key
-        return len(self._constraints)
+        frontier = list(subst)
+        while frontier:
+            for i in tuple(self._naming.get(frontier.pop(), ())):
+                if i in done:
+                    continue
+                done.add(i)
+                c = self._constraints[i]
+                if not self._universal.issuperset(c.guard):
+                    # a non-universal literal need not hold at every index
+                    continue
+                for t in (c.lhs, *c.rhs):
+                    for v, _ in t.coeffs:
+                        if v.index in elementwise and v.index not in subst:
+                            subst[v.index] = self.var(v.name + tag)
+                            frontier.append(v.index)
+                # keep the guard
+                self._add(Constraint(
+                    c.lhs.rename(subst), c.op,
+                    tuple(t.rename(subst) for t in c.rhs), c.guard,
+                ))
 
     def literal(self, *, universal: bool = False) -> int:
         """A fresh guard literal, for a constraint that holds only where it

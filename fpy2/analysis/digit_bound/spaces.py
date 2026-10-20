@@ -24,15 +24,44 @@ class IndexSpaces:
     _classes: Unionfind[Key]
     _minted: dict[int, set[Key]]
     _bounded: dict[int, set[Key]]
+    _around: dict[Key, tuple[Key, ...]]
+    _walks: int
 
     def __init__(self) -> None:
         self._classes = Unionfind()
         self._minted = {}
         self._bounded = {}
+        self._around = {}
+        self._walks = 0
+
+    def walk(self) -> int:
+        """A fresh walk's identity, for its keys: an `id` is reused once its
+        object is freed, and a callee's walk is."""
+        self._walks += 1
+        return self._walks
 
     def unify(self, a: Key, b: Key) -> None:
         """*a* and *b* correspond."""
         self._classes.union(self._classes.add(a), self._classes.add(b))
+
+    def open(self, binder: Key, around: tuple[Key, ...]) -> None:
+        """*binder* runs inside the binders *around*, outermost first."""
+        self._around[binder] = around
+
+    def around(self, binder: Key) -> tuple[Key, ...]:
+        """The binders *binder* runs inside, outermost first."""
+        return self._around.get(binder, ())
+
+    def correspond(self, a: Key, b: Key) -> bool:
+        """Unify *a* and *b*, unless that puts two nested binders in one class:
+        each has its own index at a point inside both, and a class is one
+        index.  Whether it did."""
+        ca = self._classes.component(self._classes.add(a))
+        cb = self._classes.component(self._classes.add(b))
+        if any(x in self.around(y) or y in self.around(x) for x in ca for y in cb):
+            return False
+        self.unify(a, b)
+        return True
 
     def find(self, k: Key) -> Key:
         """*k*'s class, as its representative key."""

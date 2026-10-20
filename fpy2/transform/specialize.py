@@ -791,6 +791,7 @@ class Specialize:
                     if db is not None and call in db.by_call:
                         params_for[callee_key] = DigitBoundParams(
                             db.store, db.by_call[call].args, db.assume_at(call),
+                            db.by_call[call].outer,
                         )
                     worklist.append(callee_key)
                 elif (params := params_for.get(callee_key)) is not None and params.assume:

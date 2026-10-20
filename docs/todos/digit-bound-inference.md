@@ -1181,7 +1181,7 @@ premise holds there.  An audit reads the premises off this table.
 | envelopes | `_value_uncached`'s `AMax`/`AMin` | holds |
 | element reads at a binder's target | `_visit_expr`'s covering `ListRef`, `_visit_assign`, `_unpack_elt`; `_indexed_at` | holds |
 | element reads elsewhere | `_at_index`, `_at_index_set`, `_instance`, `_copy`, `_replay` | holds |
-| correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`) | **departs**: a second binder at one point; index sets reached without correspondence (Phase 14) |
+| correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`), all through `IndexSpaces.correspond` | holds (Phase 14) |
 | sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: exits on some paths only (Phase 15) |
 | writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | **departs**: a covering write that is not the only one (Phase 15) |
 | branches | `_visit_branches`, `_merge_arms`, `_untaken`, guards | holds |
@@ -1827,17 +1827,47 @@ same 18 fail as before, less seed 30.
 
 #### Phase 14 - One index per space at a point
 
-- Correspondence refuses a second binder active at the same point: a binder
-  unifies with a list's space only where no enclosing binder, nor another clause
-  of its comprehension, is already in that class.  A read through it goes through
-  a copy keyed by its binder.  This refutes the open item on unification by
-  covering, for nested binders.
-- Two binders reading one index set correspond, since both enumerate it in
-  order: reaching an index set under a binder unifies that binder with the
-  set's first.  An index set cannot be reached without it.
+**Done.**
 
-Tests: classes I and II's shapes pass; the generator's seeds; the corpus hash
--- the phase most likely to change outputs, since the corpus's loops nest.
+- **Correspondence refuses nested binders** (`IndexSpaces.correspond`): a
+  binder unifies with a space unless the merged class would hold two nested
+  binders -- one around the other (`IndexSpaces.open` records each binder's),
+  or two clauses of one comprehension.  Reads (`_element`, `_bind_elt`,
+  `_unpack_elt`) and covering writes go through it; a refused read is a copy at
+  its binder's index, `('read', binder)`, shared by every list read apart
+  there; a refused write is partial.  List-to-list unifies stay plain: their
+  equation is true, and a later merge only narrows earlier facts to the
+  diagonal.
+- **Index sets reached by several binders** (`_enumerated`): a part read under a
+  binder joins the index set the first binder over that range made, unifying
+  the two, unless they are nested -- then one apart, `('apart', key, n)`.
+- **Three things the corpus forced, beyond the plan:**
+  - *Copies replay only what they reach* (settling the Phase 5 open item):
+    `store.instance` walks from the variables a copy renames, through
+    elementwise ones, revisiting older constraints as the renaming grows; each
+    index set keeps the constraints it replayed (`done`).  A skipped constraint
+    names only copies nothing reaches, and adds nothing about them.  Before it,
+    a read copy duplicated nearly the whole store -- Hopper reached 118k
+    constraints, eight workers ran the machine out of memory.
+  - *The C++ backend's per-function analysis was told nothing of the call's
+    loops* (`DigitBoundParams.outer`, from `DigitBoundAnalysis.outer`).  A
+    callee analyzed alone unified its list parameters with every loop its
+    argument varied over -- `A[i:i + 32]` in the chain over instructions -- a
+    false equation, present since Phase 2 and unseen until this phase's check
+    refused the callee's own loops as nested in it: Hopper, Ampere and CDNA3
+    refused to compile.  `test_a_callee_analyzed_alone_knows_the_loop_around_its_call`.
+  - *A walk's identity is a counter* (`IndexSpaces.walk`), not `id(self)`: a
+    callee's walk is freed after it returns and its id reused, so two calls'
+    keys could collide.  Not the cause here; a latent bug of Phase 2's.
+
+Measured: the five Phase 14 pins and all 12 pinned seeds pass, and so does
+`list-scalar-exit` (pinned to Phase 15: `ys = [x for x in xs]` inside `for i`
+put `ys` in the comprehension's class, nested in `i` -- class I).  All 64 seeds
+pass (13 s); 378 analysis tests pass, 7 strict xfails for Phase 15.  All 141
+corpus outputs byte for byte Phase 13's, the same 6 refused; the C++ corpus
+57 s, from 72 s, with no read copy in it.
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
 
 #### Phase 15 - Writes and exits
 
@@ -1888,6 +1918,8 @@ It is not per-element today, and its phis are never joined, so they keep only
 their seeds.  **Provisional:** no, as today.
 
 #### Should a copy replay only what reaches the variables it copies?
+
+**Settled in Phase 14:** yes; the corpus could not compile without it.
 
 A replay copies every constraint naming a moving variable, which for a loop
 witness is most of the loop body -- Phase 5's 23 s.  Replaying only the

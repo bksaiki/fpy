@@ -13,6 +13,7 @@ import fpy2 as fp
 from fpy2.analysis import FormatInfer
 from fpy2.analysis.digit_bound import (
     DigitBoundInfer,
+    DigitBoundParams,
     DigitBoundStore,
     Term,
     Z3Solver,
@@ -315,8 +316,8 @@ class TestAGuardedConstraint:
         g = s.literal(universal=True)
         s.le(elt, 3, guard=(g,))
         s.le(elt, 9)
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        subst: dict[int, Term] = {v.index: s.var('elt@0') for v, _ in elt.coeffs}
+        s.instance({v.index for v, _ in elt.coeffs}, subst, set(), '@0')
         part = elt.rename(subst)
         assert s.maximum(part, frozenset({g})) == 3
         assert s.maximum(part) == 9
@@ -328,8 +329,8 @@ class TestAGuardedConstraint:
         g = s.literal()
         s.le(elt, 3, guard=(g,))
         s.le(elt, 9)
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        subst: dict[int, Term] = {v.index: s.var('elt@0') for v, _ in elt.coeffs}
+        s.instance({v.index for v, _ in elt.coeffs}, subst, set(), '@0')
         assert s.maximum(elt.rename(subst), frozenset({g})) == 9
 
 
@@ -584,8 +585,8 @@ class TestReplayingAtAnIndexSet:
         s.le(other, 7)
         s.le(top, 5)
 
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, 0, '@0')
+        subst: dict[int, Term] = {v.index: s.var('elt@0') for v, _ in elt.coeffs}
+        s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, set(), '@0')
         part = elt.rename(subst)
 
         assert part != elt                       # a copy, not the same variable
@@ -839,6 +840,32 @@ class TestIndexSpaces:
                 for e, t in b.by_expr.items() if e.format() == 'acc']
         assert len(uses) == 2
         assert any(u & elements for u in uses) and any(not (u & elements) for u in uses)
+
+    def test_a_callee_analyzed_alone_knows_the_loop_around_its_call(self):
+        """The C++ backend analyzes a callee alone, continuing its caller's
+        store.  The loop around the call is one the callee runs inside, not
+        its list's index: the result's elements do not correspond with it."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                ys = [x * 2 for x in xs]
+                es = _logbs(ys)
+                out[j] = es[0]
+            return out
+
+        _, b = _analyze(f, self.L4)
+        sub = next(iter(b.by_call.values()))
+        assert sub.outer
+        callee = monomorphize(_logbs, args=self.L4).ast
+        alone = DigitBoundInfer.analyze(
+            callee, FormatInfer.analyze(callee),
+            DigitBoundParams(b.store, sub.args, frozenset(), sub.outer))
+        spaces = alone.store.spaces
+        _, t = _term(alone, '[fp.logb(y) for y in ys]')
+        clause = {k for v, _ in t.msb.coeffs for k in spaces.keys(v.index)} - set(sub.outer)
+        assert clause and all(spaces.find(k) != spaces.find(sub.outer[0]) for k in clause)
 
     def test_a_callee_corresponds_with_its_caller(self):
         """A callee's comprehension over its parameter pairs with the caller's
