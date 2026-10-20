@@ -380,14 +380,20 @@ class _Regions:
         inherit the flag in :meth:`part`, so the two directions together are
         order-independent.
         """
+        flag.update(self.within(c))
+
+    def parts(self, c: Region) -> dict[_PartKey, Region]:
+        return {k: self.find(r) for k, r in self._parts.get(self.find(c), {}).items()}
+
+    def within(self, c: Region) -> set[Region]:
+        """*c* and every class reachable inside it, through elements and fields."""
         pending, seen = [self.find(c)], set()
         while pending:
             root = self.find(pending.pop())
-            if root in seen:
-                continue
-            seen.add(root)
-            flag.add(root)
-            pending.extend(self._parts.get(root, {}).values())
+            if root not in seen:
+                seen.add(root)
+                pending.extend(self._parts.get(root, {}).values())
+        return seen
 
     def mark_shared_out(self, c: Region) -> None:
         """*c* may be held by something outside while this function holds it."""
@@ -476,6 +482,14 @@ class AliasAnalysis:
     def region_at(self, region: Region, depth: int = 1) -> Region | None:
         """The region *depth* list levels inside *region*."""
         return self._walk(region, depth)
+
+    def parts(self, region: Region) -> dict[_PartKey, Region]:
+        """*region*'s parts by key: its elements (:data:`ELTS`) or field *i*."""
+        return self._regions.parts(region)
+
+    def within(self, region: Region) -> frozenset[Region]:
+        """*region* and every region it holds, through elements and fields."""
+        return frozenset(self._regions.within(region))
 
     def region_field(self, region: Region | None, i: int) -> Region | None:
         """The region held by field *i* of *region*'s tuple."""
@@ -622,13 +636,11 @@ class AliasAnalysis:
     def may_write(self, region: Region) -> bool:
         """Whether this function may store into *region*, or into a list it
         holds, itself or through a call it hands one to."""
-        r: Region | None = region
-        while r is not None:
-            if (r in self.written_regions or r in self.stored_regions
-                    or self.escapes_at(r) or self.callee_writes_at(r)):
-                return True
-            r = self.region_at(r)
-        return False
+        return any(
+            r in self.written_regions or r in self.stored_regions
+            or self.escapes_at(r) or self.callee_writes_at(r)
+            for r in self.within(region)
+        )
 
     def written_params(self, func: FuncDef, def_use: DefineUseAnalysis) -> dict[int, Region]:
         """The regions of *func*'s parameters it may store into, by position."""

@@ -172,7 +172,7 @@ from ...types import (
     VarType,
 )
 from ...utils import is_dyadic, trailing_zeros
-from ..alias import Alias, AliasAnalysis, Region
+from ..alias import ELTS, Alias, AliasAnalysis, Region
 from ..array_size import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -1590,42 +1590,54 @@ def _literal_bound(e) -> FormatBound:
     return SetFormat.from_value(e.as_rational())
 
 
-def _has_list_depth(fmt: FormatBound, depth: int) -> bool:
-    """Can *fmt* be peeled *depth* times as a :class:`ListFormat`?
+_Path: TypeAlias = tuple[int | None, ...]
+"""Steps into a value, each a list's elements (:data:`ELTS`) or a tuple's field."""
 
-    The precondition :func:`_list_set_widen` asserts.  Tested rather than
-    caught, so that a genuine shape bug still surfaces as the assertion it is.
+
+def _has_path(fmt: FormatBound, path: _Path) -> bool:
+    """Can *fmt* be followed along *path*?
+
+    The precondition :func:`_set_widen` asserts.  Tested rather than caught, so
+    that a genuine shape bug still surfaces as the assertion it is.
     """
-    for _ in range(depth):
-        if not isinstance(fmt, ListFormat):
+    for key in path:
+        if key is ELTS and isinstance(fmt, ListFormat):
+            fmt = fmt.elt
+        elif isinstance(key, int) and isinstance(fmt, TupleFormat) and key < len(fmt.elts):
+            fmt = fmt.elts[key]
+        else:
             return False
-        fmt = fmt.elt
     return True
 
 
-def _list_set_widen(
+def _set_widen(
     value_fmt: FormatBound,
-    depth: int,
+    path: _Path,
     insert_fmt: FormatBound,
     *,
     widen: bool = False,
 ) -> FormatBound:
     """
-    Widen a list format for a functional update at *depth* levels of nesting.
+    Widen *value_fmt* for a functional update of what *path* leads to.
 
     An ``IndexedAssign`` ``xs[i1]…[iN] = val`` produces a new list in which
-    ``xs[i1]…[iN]`` is replaced by *val*.  The result's format is the join
-    of the original format with *insert_fmt* at the leaf level after
-    peeling *depth* layers of :class:`ListFormat` (one per index).
+    ``xs[i1]…[iN]`` is replaced by *val*: the path is one :data:`ELTS` per
+    index.  The result's format is the original joined with *insert_fmt* at
+    the end of the path.
 
     *widen* propagates to the leaf-level :func:`_join_bounds` call so that
     indexed assignments inside a saturated loop iteration also widen.
     """
-    if depth == 0:
+    if not path:
         return _join_bounds(value_fmt, insert_fmt, widen=widen)
-    assert isinstance(value_fmt, ListFormat), \
-        f'expected ListFormat at depth {depth}, got {value_fmt!r}'
-    return ListFormat(_list_set_widen(value_fmt.elt, depth - 1, insert_fmt, widen=widen))
+    key, rest = path[0], path[1:]
+    if key is ELTS:
+        assert isinstance(value_fmt, ListFormat), f'expected ListFormat, got {value_fmt!r}'
+        return ListFormat(_set_widen(value_fmt.elt, rest, insert_fmt, widen=widen))
+    assert isinstance(value_fmt, TupleFormat), f'expected TupleFormat, got {value_fmt!r}'
+    elts = list(value_fmt.elts)
+    elts[key] = _set_widen(elts[key], rest, insert_fmt, widen=widen)
+    return TupleFormat(tuple(elts))
 
 
 def _format_of_scope(scope: ContextScope) -> Format:
@@ -1970,20 +1982,25 @@ class _FormatInferInstance(Visitor):
     def _set_def_bound(self, d: Definition, fmt: FormatBound):
         self.by_def[d] = self._with_region_inserts(self.alias.region_of(d), fmt, d)
 
-    def _store_depth(self, region: Region, written: Region, depth: int) -> int | None:
-        """How deep in a list in *region* a store *depth* levels into *written*
-        lands: deeper where *region* holds *written*, shallower where it is held
-        inside it, ``None`` where neither."""
-        r: Region | None = region
-        k = 0
-        while r is not None:
-            if r is written:
-                return k + depth
-            r, k = self.alias.region_at(r), k + 1
-        for k in range(1, depth):
-            if self.alias.region_at(written, k) is region:
-                return depth - k
-        return None
+    def _store_paths(self, region: Region, written: Region, depth: int) -> list[_Path]:
+        """Where in a value in *region* a store *depth* list levels into
+        *written* lands: below each path to *written* where *region* holds it,
+        or above where it is held inside it."""
+        below = (ELTS,) * depth
+        out = [path + below for path in self._paths_to(region, written)]
+        out += [
+            (ELTS,) * (depth - k) for k in range(1, depth)
+            if self.alias.region_at(written, k) is region
+        ]
+        return out
+
+    def _paths_to(self, region: Region, target: Region) -> Iterator[_Path]:
+        """Every path of parts from *region* to *target*."""
+        if region is target:
+            yield ()
+        for key, part in self.alias.parts(region).items():
+            for path in self._paths_to(part, target):
+                yield (key, *path)
 
     def _with_region_inserts(
         self, region: Region | None, fmt: FormatBound, d: Definition | None = None,
@@ -2008,9 +2025,9 @@ class _FormatInferInstance(Visitor):
                     # keeps this flow-sensitive -- a read before the store still
                     # sees the narrow bound.
                     continue
-                at = self._store_depth(region, written, depth)
-                if at is not None and _has_list_depth(fmt, at):
-                    fmt = _list_set_widen(fmt, at, insert_fmt, widen=self._widen)
+                for path in self._store_paths(region, written, depth):
+                    if _has_path(fmt, path):
+                        fmt = _set_widen(fmt, path, insert_fmt, widen=self._widen)
         return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
@@ -2968,10 +2985,20 @@ class _FormatInferInstance(Visitor):
         pre = self._pre_cache.get(e.fn.ast)
         for i, region in pre.alias.written_params(sub.func, pre.def_use).items():
             fmts = [sub.by_def[d] for d in pre.alias.defs_in(region) if d in sub.by_def]
-            held = reduce(self._join, fmts)
-            if isinstance(held, ListFormat):
-                self._record_region_insert(
-                    self.alias.region_of_expr(e.args[i]), 1, held.elt, already=set())
+            self._record_held(self.alias.region_of_expr(e.args[i]), reduce(self._join, fmts))
+
+    def _record_held(self, region: Region | None, fmt: FormatBound) -> None:
+        """Record that each list in *region*, at every level, may hold what
+        *fmt* says."""
+        if region is None:
+            return
+        match fmt:
+            case ListFormat():
+                self._record_region_insert(region, 1, fmt.elt, already=set())
+                self._record_held(self.alias.region_at(region), fmt.elt)
+            case TupleFormat():
+                for i, elt in enumerate(fmt.elts):
+                    self._record_held(self.alias.region_field(region, i), elt)
 
     def _analyze_callee(self, e: Call) -> FormatAnalysis | None:
         """Recursive sub-analysis on the callee at this site.
@@ -3089,14 +3116,14 @@ class _FormatInferInstance(Visitor):
         # — a fresh SSA def of ``xs`` (per ``reaching_defs``).  The new
         # def's format is the original element format widened with the
         # inserted value's format at depth ``len(indices)``; see
-        # :func:`_list_set_widen` for the recursive widening rule.
+        # :func:`_set_widen` for the recursive widening rule.
         d_use = self.def_use.find_def_from_use(stmt)
         value_fmt = self._bound_of_def(d_use)
         for s in stmt.indices:
             self._visit_expr(s, ctx)
         insert_fmt = self._visit_expr(stmt.expr, ctx)
-        new_fmt = _list_set_widen(
-            value_fmt, len(stmt.indices), insert_fmt, widen=self._widen
+        new_fmt = _set_widen(
+            value_fmt, (ELTS,) * len(stmt.indices), insert_fmt, widen=self._widen
         )
         d_def = self.def_use.find_def_from_site(stmt.var, stmt)
         self._set_def_bound(d_def, new_fmt)
@@ -3138,7 +3165,7 @@ class _FormatInferInstance(Visitor):
             if (
                 d not in already
                 and d_region is not None
-                and self._store_depth(d_region, region, depth) is not None
+                and self._store_paths(d_region, region, depth)
             ):
                 self.by_def[d] = self._with_region_inserts(d_region, self.by_def[d], d)
 

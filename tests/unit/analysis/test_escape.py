@@ -142,6 +142,21 @@ class TestThroughCalls:
 
         assert _retained(f, callees=None) == set()
 
+    def test_a_list_held_in_a_tuple_is_retained_and_written(self):
+        @fp.fpy
+        def keep(t: tuple[list[fp.Real], fp.Real]) -> list[fp.Real]:
+            ys, k = t
+            return ys
+
+        @fp.fpy
+        def write(t: tuple[list[fp.Real], fp.Real]) -> fp.Real:
+            ys, k = t
+            ys[0] = k
+            return k
+
+        assert _retained(keep) == {0}
+        assert _summary(write).written == {0}
+
     def test_a_polymorphic_callee_retains_what_it_returns(self):
         """A parameter of no known type may be a list."""
         @fp.fpy

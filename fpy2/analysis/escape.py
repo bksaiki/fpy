@@ -87,13 +87,9 @@ class Escape:
         for i, arg in enumerate(func.args):
             if not isinstance(arg.name, NamedId):
                 continue
-            d = def_use.find_def_from_site(arg.name, arg)
-            depth = 0
-            while (region := alias.region_of(d, depth)) is not None:
-                if _retains(alias, region, arg):
-                    retained.add(i)
-                    break
-                depth += 1
+            region = alias.region_of(def_use.find_def_from_site(arg.name, arg))
+            if region is not None and any(_retains(alias, r, arg) for r in alias.within(region)):
+                retained.add(i)
         written = alias.written_params(func, def_use)
         return EscapeSummary(frozenset(retained), frozenset(written))
 

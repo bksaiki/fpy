@@ -31,9 +31,10 @@ from fpy2.analysis.format_infer.analysis import (
     Special,
     _INTEGER_FORMAT,
     _join_bounds,
-    _list_set_widen,
+    _set_widen,
     is_bottom,
 )
+from fpy2.analysis.alias import ELTS
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign, ListTypeAnn, RealTypeAnn
 from fpy2.number import FixedContext
@@ -1712,18 +1713,21 @@ class TestFormatInfer:
             f"ListFormat(REAL_FORMAT), got {post_bound}"
         )
 
-    def test_list_set_widen_helper_nested(self):
-        """``_list_set_widen`` peels one ``ListFormat`` layer per index."""
+    def test_set_widen_helper_nested(self):
+        """``_set_widen`` peels one layer per step: a list's elements or a
+        tuple's field."""
         leaf = SetFormat(frozenset((Fraction(1),)))
         nested = ListFormat(ListFormat(leaf))
         # Inserting a non-dyadic value at depth 2 widens the leaf to REAL_FORMAT
         # (1/3 is not representable in any concrete format here, so the join
         # falls back to REAL_FORMAT).
         insert = SetFormat(frozenset((Fraction(1, 3),)))
-        result = _list_set_widen(nested, 2, insert)
-        assert result == ListFormat(ListFormat(
+        widened = ListFormat(ListFormat(
             SetFormat(frozenset((Fraction(1), Fraction(1, 3))))
         ))
+        assert _set_widen(nested, (ELTS, ELTS), insert) == widened
+        pair = TupleFormat((nested, leaf))
+        assert _set_widen(pair, (0, ELTS, ELTS), insert) == TupleFormat((widened, leaf))
 
     # ------------------------------------------------------------------
     # Error handling
@@ -4670,6 +4674,48 @@ def _linked_by_call(yss, xs):
 
 
 @fp.fpy(ctx=fp.REAL)
+def _write_held(t):
+    ys, k = t  # noqa: F841
+    ys[1] = ys[0] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_writes_in_tuple(xs):
+    ys = [x * 1 for x in xs]
+    w = _write_held((ys, 1))  # noqa: F841
+    return ys[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _keep_held(t):
+    ys, k = t  # noqa: F841
+    return ys
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_keeps_from_tuple(xs):
+    ys = [x * 1 for x in xs]
+    r = _keep_held((ys, 1))
+    r[1] = xs[0] * 1024
+    return ys[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _write_rows(xss):
+    for row in xss:
+        row[1] = row[0] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_writes_a_held_row(xss):
+    row = xss[0]
+    w = _write_rows(xss)  # noqa: F841
+    return row[1]
+
+
+@fp.fpy(ctx=fp.REAL)
 def _iterate_written_row(xss):
     rs = fp.empty(4)
     k = 0
@@ -4710,10 +4756,15 @@ _BIG = fp.FP32.maxval()
     (_returned_alias, _fp32s(4), [[_BIG] * 4]),
     (_iterate_written_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
     (_linked_by_call, [*_fp32_rows(2, 4), *_fp32s(4)], [[[_BIG] * 4] * 2, [_BIG] * 4]),
+    # through a tuple, and into a row the caller holds
+    (_callee_writes_in_tuple, _fp32s(4), [[_BIG] * 4]),
+    (_callee_keeps_from_tuple, _fp32s(4), [[_BIG] * 4]),
+    (_callee_writes_a_held_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
 ], ids=[
     'sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written',
     'row-alias', 'row-iterated', 'row-shared', 'row-held', 'returned-alias',
-    'iterate-written-row', 'linked-by-call',
+    'iterate-written-row', 'linked-by-call', 'callee-writes-in-tuple',
+    'callee-keeps-from-tuple', 'callee-writes-a-held-row',
 ])
 @pytest.mark.parametrize('digit_bounds', [False, True], ids=['', 'digit-bounds'])
 def test_the_returned_format_holds_a_run(fn, arg_types, args, digit_bounds):
