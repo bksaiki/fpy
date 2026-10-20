@@ -43,6 +43,7 @@ from ...analysis.format_infer import (
 from ...analysis.storage_infer import without_absent
 from ...ast.fpyast import (
     Abs,
+    Add,
     AllOf,
     AMax,
     AMin,
@@ -239,6 +240,12 @@ def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     if n < 2 ** 63:
         return CppScalar.S64
     return None
+
+
+def _unfold_advice(ctx: Context) -> str:
+    """Advice for a context the op table has no signature under at all, which
+    `unfold=DOUBLE_ROUND` answers by computing at one it does have."""
+    return '' if is_native_ctx(ctx) else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
 
 
 def _cast_advice(arg_ty: CppScalar, target_ty: CppScalar) -> str:
@@ -2012,13 +2019,7 @@ class CppEmitter(Visitor):
             if widened is not None:
                 return widened
 
-        advice = (
-            ''
-            if is_native_ctx(active)
-            # the op table has no signature under this context at all, which
-            # `unfold=DOUBLE_ROUND` answers by computing at one it does have
-            else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
-        )
+        advice = _unfold_advice(active)
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under context '
             f'`{active}`: {[s.format() for s in storages]}{advice}',
@@ -2911,10 +2912,10 @@ class CppEmitter(Visitor):
         is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there --
         except where a non-zero length in the type has already settled it.
 
-        The accumulator may be *wider* than the element but not narrower:
-        ``init + *first`` converts to the common type, which is the accumulator only
-        when the element fits it exactly, making the fold uni-precision there as the
-        interpreter is.  Otherwise the seed would round.
+        The fold accumulates in the active context's type, each step its ``+``,
+        then casts to the result's; a context with no scalar type (``REAL``)
+        accumulates in the result's.  The element must fit the accumulator
+        exactly, or casting the seed would round it.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2925,10 +2926,26 @@ class CppEmitter(Visitor):
                 f'{elt_ty!r} and {result_ty!r}',
                 at=e,
             )
-        if not scalar_fits_in(elt_ty, result_ty):
+        active = self._active_ctx_for(e)
+        try:
+            acc_ty = self._scalar_for_ctx(active, at=e)
+        except CppEmitError:
+            acc_ty = result_ty
+        if active is not REAL and not any(
+            sig.in_tys == (acc_ty, acc_ty) and sig.out_ctx == active
+            for sig in self.op_table.binary.get(Add, ())
+        ):
+            advice = _unfold_advice(active)
+            raise CppEmitError(
+                f'no `+` on `{acc_ty.format()}` rounding under context `{active}` '
+                f'for `sum`{advice}',
+                at=e,
+                unfold_answers=bool(advice),
+            )
+        if not scalar_fits_in(elt_ty, acc_ty):
             raise CppEmitError(
                 f'unsupported: `sum` over `{elt_ty.format()}` elements '
-                f'accumulating in `{result_ty.format()}`, which cannot hold one '
+                f'accumulating in `{acc_ty.format()}`, which cannot hold one '
                 f'exactly.  Use a context whose format contains the element '
                 f'format.',
                 at=e,
@@ -2938,14 +2955,15 @@ class CppEmitter(Visitor):
         # below to one evaluation.
         src = self._bind_operand(arg)
         seed = self._list_at(arg_ty, src, '0')
-        if elt_ty != result_ty:
+        if elt_ty != acc_ty:
             # `accumulate` deduces `T` from its seed, so an uncast one would run
             # the whole fold in the element type.  Exact, by the check above.
-            seed = self._explicit_cast(seed, result_ty)
+            seed = self._explicit_cast(seed, acc_ty)
         fold = (
             f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
             f'{self._list_end(arg_ty, src)}, {seed})'
         )
+        fold = self._maybe_cast(fold, acc_ty, result_ty, at=e, bound_of=e)
         if isinstance(arg_ty, CppList) and arg_ty.size:
             # a *non-zero* length settles the guard; `size == 0` is falsy here
             # and keeps it, which is the case a `std::array<T, 0>` needs

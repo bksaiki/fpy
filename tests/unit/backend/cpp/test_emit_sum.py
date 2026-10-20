@@ -153,3 +153,28 @@ class TestAScaleOnlyTheCallerProvesFinite:
         got = _run(_guarded_fsum, _GUARDED_ARGS, f'int main() {{ {calls} }}\n')
         want = [float(_guarded_fsum(xs, y)).hex() for xs, y in cases]
         assert [float.fromhex(g).hex() for g in got.split()] == want
+
+
+@fp.fpy(ctx=fp.REAL)
+def _fp16_sum(xs):
+    with fp.FP16:
+        return sum(xs)
+
+
+def test_a_sum_without_a_native_add_is_refused():
+    """FP16 is stored as `float` but has no `+`: a `float` fold would not round
+    each step to FP16 as the interpreter does (``[2048, 1, 1]`` sums to 2048)."""
+    with pytest.raises(CppCompileError, match='no `\\+`'):
+        CppCompiler().compile(_fp16_sum, arg_types=[ListType(RealType(fp.FP16), 4)])
+
+
+@fp.fpy(ctx=fp.REAL)
+def _sint64_sum(xs):
+    with fp.SINT64:
+        return sum(xs)
+
+
+def test_a_fold_narrows_to_a_result_its_values_fit():
+    """Four `int8_t`s sum within `int16_t`, though accumulated in `int64_t`."""
+    out = CppCompiler().compile(_sint64_sum, arg_types=[ListType(RealType(fp.SINT8), 4)])
+    assert 'static_cast<int16_t>(std::accumulate(' in out

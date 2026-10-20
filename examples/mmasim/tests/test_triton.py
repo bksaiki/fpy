@@ -95,6 +95,8 @@ def _remixes() -> 'dict[str, Design]':
         'cdna3-rne-7': replace(CATALOG['amd.cdna3.bf16'], rho=fp.IEEEContext(8, 15, fp.RM.RNE)),
         'hopper-tree': replace(hopper, sum='tree'),
         'ampere-tree': replace(CATALOG['nv.ampere.bf16.f32'], sum='tree'),
+        # an exact round to `rho`, its operand held wider
+        'hopper-bf16-f8': replace(CATALOG['nv.hopper.bf16.f32'], F=8),
     }
 
 

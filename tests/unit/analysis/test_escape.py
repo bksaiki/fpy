@@ -132,9 +132,7 @@ class TestThroughCalls:
         assert _retained(g) == {0}
         assert _retained(f, {g: _summary(g)}) == {0}
 
-    def test_a_callee_with_no_summary_retains_everything(self):
-        """A foreign function, an unresolved target, or one in a cycle: the
-        absence of a summary is the conservative answer."""
+    def test_a_callee_with_no_summary_given_is_summarized(self):
         g = self._leaf_reads()
 
         @fp.fpy
@@ -142,7 +140,37 @@ class TestThroughCalls:
             with fp.FP64:
                 return g(xs)
 
-        assert _retained(f, callees=None) == {0}
+        assert _retained(f, callees=None) == set()
+
+    def test_a_list_held_in_a_tuple_is_retained_and_written(self):
+        @fp.fpy
+        def keep(t: tuple[list[fp.Real], fp.Real]) -> list[fp.Real]:
+            ys, k = t
+            return ys
+
+        @fp.fpy
+        def write(t: tuple[list[fp.Real], fp.Real]) -> fp.Real:
+            ys, k = t
+            ys[0] = k
+            return k
+
+        assert _retained(keep) == {0}
+        assert _summary(write).written == {0}
+
+    def test_a_polymorphic_callee_retains_what_it_returns(self):
+        """A parameter of no known type may be a list."""
+        @fp.fpy
+        def same(zs):
+            return zs
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                ys = same(xs)
+                return ys[0]
+
+        assert _retained(same) == {0}
+        assert _retained(f) == {0}
 
     def test_only_the_retained_position_matters(self):
         """A callee that retains its *second* argument says nothing about the

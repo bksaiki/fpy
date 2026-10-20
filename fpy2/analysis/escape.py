@@ -1,10 +1,9 @@
 """
 Escape summaries: which of a function's list parameters outlive the call.
 
-A caller that hands a list to a callee has to assume the worst — the callee might
-keep it — so :mod:`fpy2.analysis.alias` marks any call argument *shared outward*.
-That is what makes a compiled-to-compiled boundary keep its handles, and it is
-the whole cost of decomposing a program into several functions.
+A caller that hands a list to a callee must know whether the callee keeps it:
+:mod:`fpy2.analysis.alias` marks an argument *shared outward* only where the
+summary says it may be retained.
 
 A summary answers the question that assumption stands in for: **after this call
 returns, can anything outside still reach the argument's list?**  A caller whose
@@ -23,27 +22,33 @@ Reading routes off regions rather than syntax means aliasing inside the callee
 needs no rule of its own: ``ys = xs; return ys`` retains ``xs`` because both
 names are one region.
 
-Computed leaves-first, so a callee's summary exists before its callers need it.
-No fixpoint is needed and none would help — the parser rejects forward
-references, so recursion cannot be written and the order is always a DAG.  A
-missing summary reads as *retains everything*.
+``alias`` computes a callee's summary on demand.  The parser rejects forward
+references, so the call graph is a DAG and no fixpoint is needed.  A callee that
+does not type on its own reads as retaining and writing everything.  A summary
+also says which parameters the callee may store into, which is where a list it
+keeps may land.
 """
 
 from dataclasses import dataclass
 
-from ..ast import Argument, FuncDef, NamedId
+from ..ast import Argument, FuncDef
 from .alias import Alias, AliasAnalysis, Region
 from .define_use import DefineUse, DefineUseAnalysis
 
 
 @dataclass(frozen=True)
 class EscapeSummary:
-    """Which of a function's parameters outlive a call to it, by index."""
+    """Which of a function's parameters outlive a call to it, and which it may
+    store into, by index."""
 
     retained: frozenset[int]
+    written: frozenset[int]
 
     def retains(self, index: int) -> bool:
         return index in self.retained
+
+    def writes(self, index: int) -> bool:
+        return index in self.written
 
 
 class Escape:
@@ -56,16 +61,14 @@ class Escape:
         def_use: DefineUseAnalysis | None = None,
         alias: AliasAnalysis | None = None,
     ) -> EscapeSummary:
-        """Which of *func*'s parameters outlive a call to it.
+        """*func*'s :class:`EscapeSummary`.
 
         Args:
             func: the function to summarize.
-            summaries: summaries of its callees.  One absent from it is assumed
-                to retain everything.
+            summaries: summaries of its callees, a memo; see
+                :meth:`Alias.analyze`.
             def_use: reuse an existing def-use analysis.
-            alias: reuse an existing alias analysis.  It must have been built
-                with the same *summaries*, or every call argument reads as
-                shared and the result says nothing.
+            alias: reuse an existing alias analysis.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got {func}")
@@ -76,18 +79,14 @@ class Escape:
                 func, def_use=def_use, summaries=summaries,
             )
 
-        retained: set[int] = set()
-        for i, arg in enumerate(func.args):
-            if not isinstance(arg.name, NamedId):
-                continue
-            d = def_use.find_def_from_site(arg.name, arg)
-            depth = 0
-            while (region := alias.region_of(d, depth)) is not None:
-                if _retains(alias, region, arg):
-                    retained.add(i)
-                    break
-                depth += 1
-        return EscapeSummary(frozenset(retained))
+        params = alias.param_regions(func, def_use)
+        return EscapeSummary(
+            frozenset(
+                i for i, region in params.items()
+                if any(_retains(alias, r, func.args[i]) for r in alias.within(region))
+            ),
+            frozenset(i for i, region in params.items() if alias.may_write(region)),
+        )
 
 
 def _retains(alias: AliasAnalysis, region: Region, arg: Argument) -> bool:

@@ -139,7 +139,7 @@ import math
 import operator
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import reduce
 from typing import Any, TypeAlias
@@ -172,7 +172,7 @@ from ...types import (
     VarType,
 )
 from ...utils import is_dyadic, trailing_zeros
-from ..alias import Alias, AliasAnalysis, Region
+from ..alias import ELTS, Alias, AliasAnalysis, Region
 from ..array_size import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -1590,42 +1590,54 @@ def _literal_bound(e) -> FormatBound:
     return SetFormat.from_value(e.as_rational())
 
 
-def _has_list_depth(fmt: FormatBound, depth: int) -> bool:
-    """Can *fmt* be peeled *depth* times as a :class:`ListFormat`?
+_Path: TypeAlias = tuple[int | None, ...]
+"""Steps into a value, each a list's elements (:data:`ELTS`) or a tuple's field."""
 
-    The precondition :func:`_list_set_widen` asserts.  Tested rather than
-    caught, so that a genuine shape bug still surfaces as the assertion it is.
+
+def _has_path(fmt: FormatBound, path: _Path) -> bool:
+    """Can *fmt* be followed along *path*?
+
+    The precondition :func:`_set_widen` asserts.  Tested rather than caught, so
+    that a genuine shape bug still surfaces as the assertion it is.
     """
-    for _ in range(depth):
-        if not isinstance(fmt, ListFormat):
+    for key in path:
+        if key is ELTS and isinstance(fmt, ListFormat):
+            fmt = fmt.elt
+        elif isinstance(key, int) and isinstance(fmt, TupleFormat) and key < len(fmt.elts):
+            fmt = fmt.elts[key]
+        else:
             return False
-        fmt = fmt.elt
     return True
 
 
-def _list_set_widen(
+def _set_widen(
     value_fmt: FormatBound,
-    depth: int,
+    path: _Path,
     insert_fmt: FormatBound,
     *,
     widen: bool = False,
 ) -> FormatBound:
     """
-    Widen a list format for a functional update at *depth* levels of nesting.
+    Widen *value_fmt* for a functional update of what *path* leads to.
 
     An ``IndexedAssign`` ``xs[i1]…[iN] = val`` produces a new list in which
-    ``xs[i1]…[iN]`` is replaced by *val*.  The result's format is the join
-    of the original format with *insert_fmt* at the leaf level after
-    peeling *depth* layers of :class:`ListFormat` (one per index).
+    ``xs[i1]…[iN]`` is replaced by *val*: the path is one :data:`ELTS` per
+    index.  The result's format is the original joined with *insert_fmt* at
+    the end of the path.
 
     *widen* propagates to the leaf-level :func:`_join_bounds` call so that
     indexed assignments inside a saturated loop iteration also widen.
     """
-    if depth == 0:
+    if not path:
         return _join_bounds(value_fmt, insert_fmt, widen=widen)
-    assert isinstance(value_fmt, ListFormat), \
-        f'expected ListFormat at depth {depth}, got {value_fmt!r}'
-    return ListFormat(_list_set_widen(value_fmt.elt, depth - 1, insert_fmt, widen=widen))
+    key, rest = path[0], path[1:]
+    if key is ELTS:
+        assert isinstance(value_fmt, ListFormat), f'expected ListFormat, got {value_fmt!r}'
+        return ListFormat(_set_widen(value_fmt.elt, rest, insert_fmt, widen=widen))
+    assert isinstance(value_fmt, TupleFormat), f'expected TupleFormat, got {value_fmt!r}'
+    elts = list(value_fmt.elts)
+    elts[key] = _set_widen(elts[key], rest, insert_fmt, widen=widen)
+    return TupleFormat(tuple(elts))
 
 
 def _format_of_scope(scope: ContextScope) -> Format:
@@ -1676,7 +1688,7 @@ class PreAnalysisCache:
     """
 
     def __init__(self):
-        self._table: dict[int, PreAnalyses] = {}
+        self._table: dict[tuple[int, frozenset[tuple[int, int]]], PreAnalyses] = {}
 
     def get(
         self,
@@ -1687,17 +1699,27 @@ class PreAnalysisCache:
         ctx_use: ContextUseAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
         alias: AliasAnalysis | None = None,
+        linked: frozenset[tuple[int, int]] = frozenset(),
     ) -> PreAnalyses:
         """Return the pre-analyses for *func*, computing them on the
         first request.  Pre-supplied analyses (via the keyword args)
         populate the cache for *func* if it hasn't been computed
         yet — used by the public :meth:`FormatInfer.analyze` to
         thread externally-computed analyses in.  Subsequent lookups
-        ignore the keyword args."""
-        key = id(func)
+        ignore the keyword args.
+
+        *linked* names parameters a call site passes one list to; only the
+        alias analysis differs for it (see :meth:`Alias.analyze`)."""
+        key = (id(func), linked)
         cached = self._table.get(key)
         if cached is not None:
             return cached
+        if linked:
+            base = self.get(func)
+            pre = replace(base, alias=Alias.analyze(
+                func, def_use=base.def_use, type_info=base.type_info, linked=linked))
+            self._table[key] = pre
+            return pre
         if def_use is None:
             def_use = DefineUse.analyze(func)
         if type_info is None:
@@ -1708,9 +1730,6 @@ class PreAnalysisCache:
         if array_size is None:
             array_size = ArraySizeInfer.analyze(func, type_info=type_info)
         if alias is None:
-            # No escape summaries: `Alias` is then maximally conservative about
-            # what a call may retain, which over-approximates the aliasing --
-            # exactly the safe direction for the widening below.
             alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
         pre = PreAnalyses(def_use, type_info, ctx_use, array_size, alias, partial_eval)
         self._table[key] = pre
@@ -1971,10 +1990,33 @@ class _FormatInferInstance(Visitor):
         return self.type_info.def_use
 
     def _set_def_bound(self, d: Definition, fmt: FormatBound):
-        self.by_def[d] = self._with_region_inserts(d, fmt)
+        self.by_def[d] = self._with_region_inserts(self.alias.region_of(d), fmt, d)
 
-    def _with_region_inserts(self, d: Definition, fmt: FormatBound) -> FormatBound:
-        """*fmt*, widened by every store recorded against *d*'s alias region.
+    def _store_paths(self, region: Region, written: Region, depth: int) -> list[_Path]:
+        """Paths in a value of *region* to where a store *depth* levels into
+        *written* lands: after each path from *region* to *written*, and
+        ``depth - k`` levels in where *region* is *k* levels inside *written*."""
+        below = (ELTS,) * depth
+        out = [path + below for path in self._paths_to(region, written)]
+        out += [
+            (ELTS,) * (depth - k) for k in range(1, depth)
+            if self.alias.region_at(written, k) is region
+        ]
+        return out
+
+    def _paths_to(self, region: Region, target: Region) -> Iterator[_Path]:
+        """Every path of parts from *region* to *target*."""
+        if region is target:
+            yield ()
+        for key, part in self.alias.parts(region).items():
+            for path in self._paths_to(part, target):
+                yield (key, *path)
+
+    def _with_region_inserts(
+        self, region: Region | None, fmt: FormatBound, d: Definition | None = None,
+    ) -> FormatBound:
+        """*fmt*, widened by every store recorded that may reach a list in
+        *region*, the region of *d* where it names one.
 
         Replaying the record on each write, rather than editing bounds in place,
         makes this order-independent: a def computed after the store picks the
@@ -1982,25 +2024,20 @@ class _FormatInferInstance(Visitor):
         :meth:`_record_region_insert`.  Widening only raises a bound, so a loop
         fixpoint still converges.
         """
-        if not self._region_inserts:
-            return fmt
-        region = self.alias.region_of(d)
         if region is None:
             return fmt
-        for depth, insert_fmt, already in self._region_inserts.get(region, ()):
-            if d in already:
-                # `reaching_defs` accounts for these two itself: the def the
-                # store reads is the list's state *before* it, and the def it
-                # creates already carries the widening.  Skipping them is what
-                # keeps this flow-sensitive -- a read before the store still
-                # sees the narrow bound.
-                continue
-            if not _has_list_depth(fmt, depth):
-                # A region can hold defs of differing nesting -- a row and the
-                # matrix that holds it -- and a store at one depth says nothing
-                # about a def shallower than that.
-                continue
-            fmt = _list_set_widen(fmt, depth, insert_fmt, widen=self._widen)
+        for written, record in self._region_inserts.items():
+            for depth, insert_fmt, already in record:
+                if d in already:
+                    # `reaching_defs` accounts for these two itself: the def the
+                    # store reads is the list's state *before* it, and the def it
+                    # creates already carries the widening.  Skipping them is what
+                    # keeps this flow-sensitive -- a read before the store still
+                    # sees the narrow bound.
+                    continue
+                for path in self._store_paths(region, written, depth):
+                    if _has_path(fmt, path):
+                        fmt = _set_widen(fmt, path, insert_fmt, widen=self._widen)
         return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
@@ -2719,49 +2756,26 @@ class _FormatInferInstance(Visitor):
 
 
     def _sum_bound(self, e: Sum, arg_fmt: ListFormat) -> FormatBound:
-        """
-        Format of ``Sum(xs)`` — reduce-by-pairwise-addition with rounding
-        under the active context at each step.
-
-        Strategy: simulate ``n - 1`` exact pairwise additions through
-        :class:`AbstractFormat`.  The simulated accumulator's
-        representable set is a superset of every intermediate partial
-        sum's value set (this matters for signed reductions, where
-        intermediate magnitudes can exceed the final result).  If the
-        simulated accumulator fits under the active scope's format,
-        every per-step ``round_C`` is the identity, so the precise
-        format is sound to report — regardless of whether the scope
-        is :data:`REAL` or a concrete rounding context.  Otherwise
-        the result widens to the scope's format via :meth:`_op_bound`.
-
-        Requires the list size to be statically known via
-        :class:`ArraySizeAnalysis`; otherwise falls back to
-        :meth:`_op_bound`.
-
-        The branches below are ordered so that the trivial cases
-        (``n == 0`` and ``n == 1``) are decided before any
-        abstractability check on the element format.
+        """Format of ``Sum(xs)``: a left fold from an unrounded ``xs[0]``, each
+        step rounded under the active context.  With ``n`` known, ``n - 1``
+        exact additions in :class:`AbstractFormat` cover every partial sum; if
+        none rounds, that is the bound, else :meth:`_op_bound`.  With ``n``
+        unknown, the element format joined with :meth:`_op_bound`, since ``n``
+        may be 1.
         """
         n = self._known_iter_count(e.arg)
         if n is None:
-            return self._op_bound(e)
+            return self._join(arg_fmt.elt, self._op_bound(e))
 
         # ``sum([])`` is conventionally 0 — fits trivially in any scope.
         if n == 0:
             return SetFormat.from_value(Fraction(0))
 
         elt_fmt = arg_fmt.elt
-        # Single-element reduction: ``sum([x])`` evaluates to
-        # ``round_C(x)``.  Tighten to ``elt_fmt`` when it fits under
-        # the scope; otherwise the round may not be the identity.
+        # ``sum([x])`` is ``x``: the fold rounds only what it adds to the
+        # first element.
         if n == 1:
-            if isinstance(elt_fmt, SetFormat):
-                fitted = self._bound_if_fits(e, elt_fmt)
-            elif isinstance(elt_fmt, AbstractableFormat):
-                fitted = self._bound_if_fits(e, AbstractFormat.from_format(elt_fmt))
-            else:
-                fitted = None
-            return fitted if fitted is not None else self._op_bound(e)
+            return elt_fmt
 
         # ``n >= 2``: simulate ``n - 1`` pairwise additions through
         # AbstractFormat, then check the final accumulator against the
@@ -2774,8 +2788,11 @@ class _FormatInferInstance(Visitor):
         af_acc = af_elt
         for _ in range(n - 1):
             af_acc = af_acc + af_elt
-        fitted = self._bound_if_fits(e, af_acc)
-        return fitted if fitted is not None else self._op_bound(e)
+        if round_is_identity(af_acc, self._resolve_active_ctx(e)):
+            fitted = self._bound_if_fits(e, af_acc)
+            if fitted is not None:
+                return fitted
+        return self._op_bound(e)
 
     def _range_elt_format(self, start: int, stop: int, step: int) -> FormatBound:
         """Format of the integers produced by ``range(start, stop, step)``
@@ -2953,10 +2970,49 @@ class _FormatInferInstance(Visitor):
         sub = self._analyze_callee(e)
         if sub is not None:
             self.by_call[e] = sub
+            self._callee_stores(e, sub)
             return sub.fn_fmt.ret_fmt
         return _bound_of_type(self.type_info.by_expr[e])
 
-    def _analyze_callee(self, e: Call) -> 'FormatAnalysis | None':
+    def _callee_stores(self, e: Call, sub: FormatAnalysis) -> None:
+        """What the callee may leave in a list argument, recorded as a store
+        here: the caller's list is the object it writes.  The callee's
+        definitions in its parameter's region describe that object at every
+        point, so their join bounds what it holds after the call."""
+        assert isinstance(e.fn, Function)
+        pre = self._pre_cache.get(e.fn.ast, linked=self._linked_args(e))
+        for i, region in pre.alias.param_regions(sub.func, pre.def_use).items():
+            if not pre.alias.may_write(region):
+                continue
+            fmts = [sub.by_def[d] for d in pre.alias.defs_in(region) if d in sub.by_def]
+            self._record_held(self.alias.region_of_expr(e.args[i]), reduce(self._join, fmts))
+
+    def _record_held(self, region: Region | None, fmt: FormatBound) -> None:
+        """Record that each list in *region*, at every level, may hold what
+        *fmt* says."""
+        if region is None:
+            return
+        match fmt:
+            case ListFormat():
+                self._record_region_insert(region, 1, fmt.elt, already=set())
+                self._record_held(self.alias.region_at(region), fmt.elt)
+            case TupleFormat():
+                for i, elt in enumerate(fmt.elts):
+                    self._record_held(self.alias.region_field(region, i), elt)
+
+    def _linked_args(self, e: Call) -> frozenset[tuple[int, int]]:
+        """Pairs of arguments that may hold one list, at any depth."""
+        held = [
+            self.alias.within(r) if (r := self.alias.region_of_expr(a)) is not None
+            else frozenset()
+            for a in e.args
+        ]
+        return frozenset(
+            (i, j) for i in range(len(held)) for j in range(i + 1, len(held))
+            if held[i] & held[j]
+        )
+
+    def _analyze_callee(self, e: Call) -> FormatAnalysis | None:
         """Recursive sub-analysis on the callee at this site.
 
         The callee's structural pre-analyses (def-use, types, context
@@ -2998,7 +3054,7 @@ class _FormatInferInstance(Visitor):
             ret_fmt=REAL_FORMAT,
             arg_vals=arg_vals,
         )
-        pre = self._pre_cache.get(fn.ast)
+        pre = self._pre_cache.get(fn.ast, linked=self._linked_args(e))
         return _FormatInferInstance(
             fn.ast,
             pre=pre,
@@ -3032,12 +3088,23 @@ class _FormatInferInstance(Visitor):
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
-        for target, iterable in zip(e.targets, e.iterables):
-            iter_fmt = self._visit_expr(iterable, ctx)
-            assert isinstance(iter_fmt, ListFormat)
-            self._visit_binding(e, target, iter_fmt.elt)
-        body_fmt = self._visit_expr(e.elt, ctx)
-        return ListFormat(body_fmt)
+        def iterate():
+            for target, iterable in zip(e.targets, e.iterables):
+                self._bind_live(e, target, iterable, self._visit_expr(iterable, ctx))
+            self._visit_expr(e.elt, ctx)
+
+        self._fixpoint([], iterate)
+        return ListFormat(self.by_expr[e.elt])
+
+    def _bind_live(
+        self, site: DefSite, target: Id | TupleBinding, iterable: Expr, fmt: FormatBound,
+    ) -> None:
+        """Bind *target* to an element of *iterable*'s list as it is now: *fmt*
+        widened by what stores reached it since, which a later iteration
+        reads."""
+        live = self._with_region_inserts(self.alias.region_of_expr(iterable), fmt)
+        assert isinstance(live, ListFormat)
+        self._visit_binding(site, target, live.elt)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> FormatBound:
         value_fmt = self._visit_expr(e.value, ctx)
@@ -3072,19 +3139,20 @@ class _FormatInferInstance(Visitor):
         # — a fresh SSA def of ``xs`` (per ``reaching_defs``).  The new
         # def's format is the original element format widened with the
         # inserted value's format at depth ``len(indices)``; see
-        # :func:`_list_set_widen` for the recursive widening rule.
+        # :func:`_set_widen` for the recursive widening rule.
         d_use = self.def_use.find_def_from_use(stmt)
         value_fmt = self._bound_of_def(d_use)
         for s in stmt.indices:
             self._visit_expr(s, ctx)
         insert_fmt = self._visit_expr(stmt.expr, ctx)
-        new_fmt = _list_set_widen(
-            value_fmt, len(stmt.indices), insert_fmt, widen=self._widen
+        new_fmt = _set_widen(
+            value_fmt, (ELTS,) * len(stmt.indices), insert_fmt, widen=self._widen
         )
         d_def = self.def_use.find_def_from_site(stmt.var, stmt)
         self._set_def_bound(d_def, new_fmt)
         self._record_region_insert(
-            d_use, len(stmt.indices), insert_fmt, already={d_use, d_def},
+            self.alias.region_of(d_use), len(stmt.indices), insert_fmt,
+            already={d_use, d_def},
         )
 
     def _insert_count(self) -> int:
@@ -3092,17 +3160,16 @@ class _FormatInferInstance(Visitor):
         return sum(map(len, self._region_inserts.values()))
 
     def _record_region_insert(
-        self, base: Definition, depth: int, insert_fmt: FormatBound,
+        self, region: Region | None, depth: int, insert_fmt: FormatBound,
         *, already: set[Definition],
     ) -> None:
-        """Note that a store put *insert_fmt* into *base*'s list at *depth*.
+        """Note that a store put *insert_fmt* into a list in *region* at *depth*.
 
         ``reaching_defs`` refreshes only the name written through, but the list is
         one object: ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding ``y``.  Without
         this, ``xs`` keeps its old element format and the analysis reports a bound
         the program exceeds -- see ``docs/todos/backend-cpp.md``.
         """
-        region = self.alias.region_of(base)
         if region is None:
             return
         record = self._region_inserts.setdefault(region, [])
@@ -3117,8 +3184,10 @@ class _FormatInferInstance(Visitor):
         # Defs already computed do not get another write on their own, so
         # re-widen them here.  Monotone, so this cannot cycle.
         for d in list(self.by_def):
-            if d not in already and self.alias.region_of(d) == region:
-                self.by_def[d] = self._with_region_inserts(d, self.by_def[d])
+            d_region = self.alias.region_of(d)
+            if (d not in already and d_region is not None
+                    and self._store_paths(d_region, region, depth)):
+                self._set_def_bound(d, self.by_def[d])
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -3253,10 +3322,9 @@ class _FormatInferInstance(Visitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
-        assert isinstance(iter_fmt, ListFormat)
-        self._visit_binding(stmt, stmt.target, iter_fmt.elt)
 
         def iterate():
+            self._bind_live(stmt, stmt.target, stmt.iterable, iter_fmt)
             self._visit_block(stmt.body, ctx)
 
         # If the iterable's length is statically known, drive the phi

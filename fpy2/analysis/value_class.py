@@ -417,10 +417,10 @@ wherever it is read.  Either lasts until a store into the region."""
 def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None':
     """*region*, unless no fact about its elements may be recorded.
 
-    ``None`` where the list escapes -- handed to a call, which may store
-    through it after this analysis has stopped looking.
+    ``None`` where a call may store through it after this analysis has
+    stopped looking: one that keeps it, or one that writes it.
     """
-    if region is None or alias.escapes_at(region):
+    if region is None or alias.escapes_at(region) or alias.callee_writes_at(region):
         return None
     return region
 
@@ -470,7 +470,7 @@ class ValueClassAnalysis:
     list ever held.  The top class stands for "anything", which is what a list
     built where no store was walked gets: a literal, a parameter, a callee's
     result.  A definition is absent where no fact may be recorded at all --
-    a list that escapes to a callee."""
+    a list a callee may keep or write."""
 
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
@@ -1954,13 +1954,8 @@ class ValueClassInfer:
         The pre-analyses are accepted as keyword arguments so a caller that
         already holds them does not recompute them.
 
-        *alias* is computed here when absent rather than the analysis going
-        without: it costs about half what this analysis does, and without it a
-        list fact would have to be dropped silently.  Computed here it has no
-        escape summaries, which is the *conservative* reading -- every list
-        handed to a call is marked as escaping.  A caller holding a summarized
-        one should pass it: the C++ backend does, and gets the element facts
-        the conservative reading throws away.
+        *alias* is computed here when absent: without it a list fact would
+        have to be dropped silently.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')

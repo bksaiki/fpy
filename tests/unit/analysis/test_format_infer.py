@@ -31,9 +31,10 @@ from fpy2.analysis.format_infer.analysis import (
     Special,
     _INTEGER_FORMAT,
     _join_bounds,
-    _list_set_widen,
+    _set_widen,
     is_bottom,
 )
+from fpy2.analysis.alias import ELTS
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign, ListTypeAnn, RealTypeAnn
 from fpy2.number import FixedContext
@@ -1712,18 +1713,19 @@ class TestFormatInfer:
             f"ListFormat(REAL_FORMAT), got {post_bound}"
         )
 
-    def test_list_set_widen_helper_nested(self):
-        """``_list_set_widen`` peels one ``ListFormat`` layer per index."""
+    def test_set_widen_helper_nested(self):
+        """``_set_widen`` peels one layer per step: a list's elements or a
+        tuple's field."""
         leaf = SetFormat(frozenset((Fraction(1),)))
         nested = ListFormat(ListFormat(leaf))
-        # Inserting a non-dyadic value at depth 2 widens the leaf to REAL_FORMAT
-        # (1/3 is not representable in any concrete format here, so the join
-        # falls back to REAL_FORMAT).
+        # Joining at the leaf keeps both values.
         insert = SetFormat(frozenset((Fraction(1, 3),)))
-        result = _list_set_widen(nested, 2, insert)
-        assert result == ListFormat(ListFormat(
+        widened = ListFormat(ListFormat(
             SetFormat(frozenset((Fraction(1), Fraction(1, 3))))
         ))
+        assert _set_widen(nested, (ELTS, ELTS), insert) == widened
+        pair = TupleFormat((nested, leaf))
+        assert _set_widen(pair, (0, ELTS, ELTS), insert) == TupleFormat((widened, leaf))
 
     # ------------------------------------------------------------------
     # Error handling
@@ -4563,3 +4565,239 @@ def _range_bound(*bounds: int) -> FormatBound:
     info = FormatInfer.analyze(f.ast)
     (bound,) = [b for e, b in info.by_expr.items() if type(e).__name__.startswith('Range')]
     return bound
+
+
+# -- formats against runs -------------------------------------------------
+
+
+@fp.fpy(ctx=fp.REAL)
+def _sum_of_one(xs):
+    with fp.MPFixedContext(-1, fp.RM.RTZ):
+        s = sum(xs)
+    return s
+
+
+_ONE_DIGIT = fp.MPBFloatContext(1, -20, fp.RealFloat(c=1, exp=4), fp.RM.RAZ)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _sum_carrying(xs):
+    ys = [fp.digits(1025, -10, 2) for x in xs]
+    with _ONE_DIGIT:
+        s = sum(ys)
+    return s
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scale(zs):
+    for i in range(4):
+        zs[i] = zs[i] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_writes(xs):
+    ys = [x * 1 for x in xs]
+    t = _scale(ys)  # noqa: F841 -- the call's store is what is tested
+    rs = fp.empty(4)
+    for i in range(4):
+        rs[i] = ys[i] + xs[i]
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _iterate_written(xs):
+    rs = fp.empty(4)
+    k = 0
+    for x in xs:
+        xs[3] = x * 1024
+        rs[k] = x * 2
+        with fp.INTEGER:
+            k = k + 1
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_alias(xss):
+    row = xss[0]
+    row[1] = xss[1][0] * 1024
+    return xss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_iterated(xss):
+    for row in xss:
+        row[1] = row[0] * 1024
+    return xss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_shared(xs):
+    a = [x for x in xs]
+    xss = [a, a]
+    a[1] = xs[0] * 1024
+    return xss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_held(xss):
+    r = xss[0]
+    xss[0][1] = xss[1][0] * 1024
+    return r[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _same(xs):
+    return xs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _returned_alias(xs):
+    r = _same(xs)
+    r[1] = xs[0] * 1024
+    return xs[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _put(yss, xs):
+    yss[0] = xs
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _linked_by_call(yss, xs):
+    t = _put(yss, xs)  # noqa: F841 -- the call's link is what is tested
+    xs[1] = xs[0] * 1024
+    return yss[0][1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _write_held(t):
+    ys, k = t  # noqa: F841
+    ys[1] = ys[0] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_writes_in_tuple(xs):
+    ys = [x * 1 for x in xs]
+    w = _write_held((ys, 1))  # noqa: F841
+    return ys[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _keep_held(t):
+    ys, k = t  # noqa: F841
+    return ys
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_keeps_from_tuple(xs):
+    ys = [x * 1 for x in xs]
+    r = _keep_held((ys, 1))
+    r[1] = xs[0] * 1024
+    return ys[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_writes_a_held_row(xss):
+    row = xss[0]
+    w = _row_iterated(xss)  # noqa: F841
+    return row[1]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scale_last(zs):
+    zs[3] = zs[0] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _comprehension_written(xs):
+    ys = [x * 1 for x in xs]
+    return [_scale_last(ys) + y for y in ys]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _store_one_read_other(a, b):
+    b[0] = b[1] * 1024
+    return a[0]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _same_list_twice(xs):
+    ys = [x * 1 for x in xs]
+    return _store_one_read_other(ys, ys)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _same_row_twice(xss):
+    return _store_one_read_other(xss[0], xss[0])
+
+
+@fp.fpy(ctx=fp.REAL)
+def _iterate_written_row(xss):
+    rs = fp.empty(4)
+    k = 0
+    for x in xss[0]:
+        xss[0][3] = x * 1024
+        rs[k] = x * 2
+        with fp.INTEGER:
+            k = k + 1
+    return rs
+
+
+def _fp32s(n: int) -> list[ListType]:
+    return [ListType(RealType(fp.FP32), n)]
+
+
+def _fp32_rows(m: int, n: int) -> list[ListType]:
+    return [ListType(ListType(RealType(fp.FP32), n), m)]
+
+
+_BIG = fp.FP32.maxval()
+
+
+_RUNS = [
+    # the fold rounds only what it adds to the first element
+    (_sum_of_one, _fp32s(1), [[fp.Float(c=1, exp=-10)]]),
+    # each of the seven roundings away doubles the sum, overflowing past 16,
+    # though the exact total, about 8, fits
+    (_sum_carrying, _fp32s(8), [[_BIG] * 8]),
+    # the callee's store reaches the caller's list
+    (_callee_writes, _fp32s(4), [[_BIG] * 4]),
+    # a loop over a list reads what its body stored into it
+    (_iterate_written, _fp32s(4), [[_BIG] * 4]),
+    # a store through one reference reaches every other reference to the list
+    (_row_alias, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_row_iterated, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_row_shared, _fp32s(4), [[_BIG] * 4]),
+    (_row_held, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_returned_alias, _fp32s(4), [[_BIG] * 4]),
+    (_iterate_written_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    (_linked_by_call, [*_fp32_rows(2, 4), *_fp32s(4)], [[[_BIG] * 4] * 2, [_BIG] * 4]),
+    # through a tuple, and into a row the caller holds
+    (_callee_writes_in_tuple, _fp32s(4), [[_BIG] * 4]),
+    (_callee_keeps_from_tuple, _fp32s(4), [[_BIG] * 4]),
+    (_callee_writes_a_held_row, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+    # a comprehension reads the live list, as a loop does
+    (_comprehension_written, _fp32s(4), [[_BIG] * 4]),
+    # a callee's parameters may name one list
+    (_same_list_twice, _fp32s(4), [[_BIG] * 4]),
+    (_same_row_twice, _fp32_rows(2, 4), [[[_BIG] * 4] * 2]),
+]
+
+
+@pytest.mark.parametrize('fn, arg_types, args', _RUNS, ids=[
+    fn.name.lstrip('_').replace('_', '-') for fn, _, _ in _RUNS
+])
+@pytest.mark.parametrize('digit_bounds', [False, True], ids=['', 'digit-bounds'])
+def test_the_returned_format_holds_a_run(fn, arg_types, args, digit_bounds):
+    if digit_bounds and fn is _callee_writes:
+        pytest.xfail('digit bounds miss what a callee stores')
+    ast = monomorphize(fn, args=arg_types).ast
+    (ret,) = [s.expr for s in ast.body.stmts if type(s).__name__ == 'ReturnStmt']
+    fmt = FormatInfer.analyze(ast, use_digit_bounds=digit_bounds).by_expr[ret]
+    v = fn(*args)
+    for x in (v if isinstance(v, list) else [v]):
+        assert (fmt.elt if isinstance(fmt, ListFormat) else fmt).representable_in(x), (fmt, x)

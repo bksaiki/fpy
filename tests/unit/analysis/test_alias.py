@@ -7,7 +7,7 @@ distinguished from a shared one.
 
 import fpy2 as fp
 
-from fpy2.analysis import Alias, DefineUse
+from fpy2.analysis import Alias, AliasAnalysis, DefineUse, Definition
 from fpy2.ast.fpyast import Var
 from fpy2.transform.path import walk_exprs
 
@@ -225,9 +225,9 @@ class TestEscape:
     def test_returned_and_also_passed_to_a_call_is_not_owned(self):
         """Shared outward beats a transfer: the callee may still hold it."""
         @fp.fpy
-        def g(zs: list[fp.Real]) -> fp.Real:
+        def g(zs: list[fp.Real]) -> list[fp.Real]:
             with fp.FP64:
-                return zs[0]
+                return zs
 
         @fp.fpy
         def f(x: fp.Real) -> list[fp.Real]:
@@ -252,19 +252,31 @@ class TestEscape:
         a, owned, _ = _sites(f)
         assert owned, 'a fresh nested list transfers whole'
 
-    def test_call_argument_escapes(self):
+    def test_call_argument_escapes_only_if_retained(self):
         @fp.fpy
-        def g(zs: list[fp.Real]) -> fp.Real:
+        def reads(zs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
                 return zs[0]
 
         @fp.fpy
+        def keeps(zs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return zs
+
+        @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
-                return g(xs)
+                return reads(xs)
 
-        a, owned, _ = _sites(f)
-        assert not owned, 'conservative: a callee may retain its argument'
+        @fp.fpy
+        def g(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return keeps(xs)[0]
+
+        _, owned, _ = _sites(f)
+        assert owned, 'the callee keeps nothing'
+        _, owned, _ = _sites(g)
+        assert not owned, 'the callee may hand its argument back'
 
 
 class TestNesting:
@@ -359,6 +371,89 @@ class TestMayAlias:
         al = Alias.analyze(f.ast, def_use=du)
         defs = {str(d.name): d for d in du.defs}
         assert not al.may_alias(defs['a'], defs['b'])
+
+
+class TestCallResults:
+    """A list the callee may keep may be any same-shaped list in its result or
+    in an argument it writes."""
+
+    @staticmethod
+    def _defs(f: fp.Function) -> tuple[AliasAnalysis, dict[str, Definition]]:
+        du = DefineUse.analyze(f.ast)
+        return Alias.analyze(f.ast, def_use=du), {str(d.name): d for d in du.defs}
+
+    def test_result_aliases_a_retained_argument(self):
+        @fp.fpy
+        def same(xs: list[fp.Real]) -> list[fp.Real]:
+            return xs
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                r = same(xs)
+                return r[0]
+
+        al, d = self._defs(f)
+        assert al.may_alias(d['r'], d['xs'])
+
+    def test_result_aliases_a_retained_row(self):
+        @fp.fpy
+        def first(xss: list[list[fp.Real]]) -> list[fp.Real]:
+            return xss[0]
+
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                row = xss[1]
+                r = first(xss)
+                return r[0] + row[0]
+
+        al, d = self._defs(f)
+        assert al.may_alias(d['r'], d['row'])
+        assert not al.may_alias(d['r'], d['xss'])
+
+    def test_a_call_links_a_retained_argument_to_the_others(self):
+        @fp.fpy
+        def put(yss: list[list[fp.Real]], xs: list[fp.Real]) -> fp.Real:
+            yss[0] = xs
+            return 0
+
+        @fp.fpy
+        def f(yss: list[list[fp.Real]], xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = put(yss, xs)
+                row = yss[1]
+                return row[0] + t
+
+        al, d = self._defs(f)
+        assert al.may_alias(d['row'], d['xs'])
+
+    def test_linked_parameters_share_their_lists(self):
+        """A caller that passes one list twice links the two parameters."""
+        @fp.fpy
+        def f(a: list[fp.Real], bs: list[list[fp.Real]], c: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return a[0] + bs[0][0] + c[0]
+
+        du = DefineUse.analyze(f.ast)
+        d = {str(x.name): x for x in du.defs}
+        al = Alias.analyze(f.ast, def_use=du, linked=frozenset({(0, 1)}))
+        assert al.region_of(d['a']) is al.region_of(d['bs'], 1)
+        assert not al.may_alias(d['a'], d['c'])
+
+    def test_result_does_not_alias_an_argument_not_retained(self):
+        @fp.fpy
+        def copy(xs: list[fp.Real]) -> list[fp.Real]:
+            return [x for x in xs]
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                r = copy(xs)
+                return r[0]
+
+        al, d = self._defs(f)
+        assert not al.may_alias(d['r'], d['xs'])
 
 
 class TestCapturedByNonLists:
