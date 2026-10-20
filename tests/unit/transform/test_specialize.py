@@ -288,9 +288,10 @@ class TestDerivedBounds:
         specs = _specs(_module((caller, [l8, l8, l8, l8])))
         assert len([n for n in specs if n.startswith('rnd')]) == 2
 
-    def test_one_relation_keeps_one_spec(self):
-        """The same relation twice derives the same bounds, so the callers
-        share a spec rather than each taking a copy."""
+    def test_one_relation_twice_is_two_specs(self):
+        """The same relation from two calls derives the same bounds, but a
+        spec analyzed from one call's relations is not shown to hold at the
+        other (digit-bound.md, "Calls and returns"), so each takes its own."""
         rnd = self._rnd()
 
         @fp.fpy(ctx=fp.REAL)
@@ -301,7 +302,7 @@ class TestDerivedBounds:
 
         l8 = ListType(RealType(fp.FP16), 8)
         specs = _specs(_module((caller, [l8, l8])))
-        assert len([n for n in specs if n.startswith('rnd')]) == 1
+        assert len([n for n in specs if n.startswith('rnd')]) == 2
 
     def test_trivial_bounds_add_no_key_segment(self):
         """A callee the caller bounds at nothing is named as it was before the

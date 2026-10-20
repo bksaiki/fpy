@@ -125,14 +125,13 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
   unless the operands bound the result: `+`, `-`, `*`, `fma`, `sqrt`; not `/`.
 - **What a generated design still hits** (`examples/mmasim/tests/test_triton.py`'s
   `REFUSED` pins them):
-  - *A tree or chain of FMAs with a separate join* (CDNA3's tree and chain
-    of FMAs, and any other anchor's): `round_down_at(t, e - F2 - 2) +
-    round_down_at(c, e - F - 1)` adds two roundings at runtime positions, and
-    the exact add is bounded only where digit-bound inference ties `t`'s
-    magnitude to `e`.  Two gaps keep it from doing so, both in
-    `digit-bound-inference.md`'s "What is left": index spaces by identity
-    (the tree's constant reads, inside the loop over `k`), and loop-carried
-    values (the chain of FMAs).
+  - *A chain of FMAs with a separate join* (CDNA3's, `cdna3-fma`):
+    `round_down_at(t, e - F2 - 2) + round_down_at(c, e - F - 1)` adds two
+    roundings at runtime positions, and the exact add is bounded only where
+    digit-bound inference ties `t`'s magnitude to `e`.  A tree does now
+    (`cdna3-tree` agrees; index spaces by identity), but a chain's exit is
+    bounded add by add, `e + 30` where `e + 4` fits, unrolled or not:
+    a chain of rounded adds, which the digit bound relates only through the iteration before (`digit-bound.md`, "Control").
   - *An exact sum rounded once:* `round(sum(xs))` of products and an FP32
     accumulator spans ~500 bits, which no storage holds ("`sum` is exact,
     and no storage holds its elements and partial sums"): CDNA1's E-FDPA,

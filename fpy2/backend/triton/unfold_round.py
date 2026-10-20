@@ -41,7 +41,7 @@ def _within(e: Expr, bound: Fraction, nmin: int, info: FormatAnalysis) -> bool:
     terms = db.by_expr.get(e) if db is not None else None
     if db is None or terms is None or terms.msb is None:
         return False
-    msb = db.store.maximum(terms.msb)
+    msb = db.store.maximum(terms.msb, db.query_at(e))
     return isinstance(msb, int) and nmin < msb + 1 and 2 ** (msb + 1) <= bound
 
 

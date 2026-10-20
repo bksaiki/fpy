@@ -199,6 +199,10 @@ class _Instance(NamedTuple):
     """What the caller's analysis derived *inside* the callee; empty for a
     public entry, which has no caller."""
 
+    site: int = 0
+    """Tells apart specs that differ only in the relations their calls carry;
+    0 for the first."""
+
 
 class _SpecKey(NamedTuple):
     """Which function, instantiated how.
@@ -264,6 +268,11 @@ def _is_trivial_bound(f: FormatBound) -> bool:
             return True
         case _:
             return _is_trivial_fmt(f)
+
+
+def _terms(p: DigitBoundParams | None) -> tuple | None:
+    """What a call passes a spec: two calls passing the same share it."""
+    return None if p is None else (p.store, p.args, p.outer)
 
 
 def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
@@ -383,6 +392,8 @@ def _mangle_private(base: str, inst: _Instance) -> str:
         parts.append('v' + _digest(inst.arg_vals))
     if inst.bounds:
         parts.append('b' + _digest(inst.bounds))
+    if inst.site:
+        parts.append(f's{inst.site}')
     return '__'.join(parts)
 
 
@@ -535,7 +546,8 @@ def _drop_dead_args(
         params = bound_params.get(func.name) if bound_params is not None else None
         if params is not None:
             bound_params[func.name] = replace(  # type: ignore[index]
-                params, args=tuple(a for i, a in enumerate(params.args) if i not in gone_set))
+                params, args=tuple(a for i, a in enumerate(params.args) if i not in gone_set),
+                elements=tuple(k for i, k in enumerate(params.elements) if i not in gone_set))
         return out
 
     return module.map(step)
@@ -681,8 +693,11 @@ class Specialize:
         arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
         # Per-spec argument values the caller pinned, applied by substitution.
         arg_vals_for: dict[_SpecKey, tuple[_PinnedValue, ...] | None] = {}
-        # Per-spec digit-bound params, from the caller that first reached it.
+        # Per-spec digit-bound params: one call's terms, assuming what every
+        # call passing them proves.
         params_for: dict[_SpecKey, DigitBoundParams] = {}
+        # How many specs each relational call's key has split into.
+        sites: Counter[_SpecKey] = Counter()
         escapes: dict[FuncDef, EscapeSummary] = {}
 
         public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
@@ -717,6 +732,8 @@ class Specialize:
                 mono, alias=Alias.analyze(mono, summaries=escapes))
             fa = FormatInfer.analyze(mono, use_digit_bounds=True, value_classes=classes)
             pe = fa.partial_eval
+            # the caller without relations, for a call another already reached
+            plain: FormatAnalysis | None = None
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
             local_seen: set[_SpecKey] = set()
@@ -755,29 +772,42 @@ class Specialize:
                     arg_vals=_arg_vals_key(callee_arg_vals),
                     bounds=_bounds_key(sub_fa),
                 ))
+                # A spec's digit-bound params are its call's relations, which
+                # another call need not satisfy (digit-bound.md, "Calls and returns"):
+                # a spec carrying them serves only calls passing the same terms.
+                db = fa.digit_bound
+                params = None
+                if db is not None and call in db.by_call:
+                    params = replace(db.by_call[call].params, assume=db.assume_at(call))
+                if callee_key in seen and _terms(params_for.get(callee_key)) != _terms(params):
+                    if plain is None:
+                        plain = FormatInfer.analyze(mono, value_classes=classes)
+                    if _bounds_key(plain.by_call[call]) == callee_key.inst.bounds:
+                        # the relations derive nothing a format does not, so
+                        # the spec does without them
+                        params_for.pop(callee_key, None)
+                        params = None
+                    else:
+                        sites[callee_key] += 1
+                        callee_key = callee_key._replace(
+                            inst=callee_key.inst._replace(site=sites[callee_key]))
 
                 site_map[call] = callee_key
                 if callee_key not in local_seen:
                     local_seen.add(callee_key)
                     local_callees.append(callee_key)
-                db = fa.digit_bound
                 if callee_key not in seen:
                     seen.add(callee_key)
                     orig_func[callee_key] = callee_fn
                     arg_types_for[callee_key] = callee_atypes
                     arg_vals_for[callee_key] = callee_arg_vals
-                    if db is not None and call in db.by_call:
-                        params_for[callee_key] = DigitBoundParams(
-                            db.store, db.by_call[call].args, db.assume_at(call),
-                        )
+                    if params is not None:
+                        params_for[callee_key] = params
                     worklist.append(callee_key)
-                elif (params := params_for.get(callee_key)) is not None and params.assume:
-                    # the spec runs wherever any of its calls does, so it
-                    # assumes only what all of them prove -- and a literal
-                    # names something only in the store that minted it
-                    also = (db.assume_at(call) if db is not None and db.store is params.store
-                            else frozenset())
-                    params_for[callee_key] = replace(params, assume=params.assume & also)
+                elif (first := params_for.get(callee_key)) is not None and params is not None:
+                    # the same terms from another call: the spec runs wherever
+                    # either does, so it assumes only what both prove
+                    params_for[callee_key] = replace(first, assume=first.assume & params.assume)
 
             call_targets[key] = site_map
             callees_of[key] = local_callees
