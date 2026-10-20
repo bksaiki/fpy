@@ -43,6 +43,7 @@ from ...analysis.format_infer import (
 from ...analysis.storage_infer import without_absent
 from ...ast.fpyast import (
     Abs,
+    Add,
     AllOf,
     AMax,
     AMin,
@@ -2911,10 +2912,13 @@ class CppEmitter(Visitor):
         is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there --
         except where a non-zero length in the type has already settled it.
 
-        The accumulator may be *wider* than the element but not narrower:
+        The accumulator is the active context's own type, which needs a ``+``
+        rounding as each step does, as ``+`` alone would; ``REAL`` accumulates in
+        the result's.  It may be *wider* than the element but not narrower:
         ``init + *first`` converts to the common type, which is the accumulator only
         when the element fits it exactly, making the fold uni-precision there as the
-        interpreter is.  Otherwise the seed would round.
+        interpreter is.  Otherwise the seed would round.  The result's type holds
+        the unrounded seed too, so it may be wider than the accumulator.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2925,12 +2929,35 @@ class CppEmitter(Visitor):
                 f'{elt_ty!r} and {result_ty!r}',
                 at=e,
             )
-        if not scalar_fits_in(elt_ty, result_ty):
+        active = self._active_ctx_for(e)
+        try:
+            acc_ty = self._scalar_for_ctx(active, at=e)
+        except CppEmitError:
+            acc_ty = result_ty
+        # each step rounds as `+` under the context does: refused where `+` is
+        if active is not REAL and not any(
+            sig.in_tys == (acc_ty, acc_ty) and sig.out_ctx == active
+            for sig in self.op_table.binary.get(Add, ())
+        ):
+            advice = '' if is_native_ctx(active) else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
+            raise CppEmitError(
+                f'no `+` on `{acc_ty.format()}` rounding under context `{active}` '
+                f'for `sum`{advice}',
+                at=e,
+                unfold_answers=bool(advice),
+            )
+        if not scalar_fits_in(elt_ty, acc_ty):
             raise CppEmitError(
                 f'unsupported: `sum` over `{elt_ty.format()}` elements '
-                f'accumulating in `{result_ty.format()}`, which cannot hold one '
+                f'accumulating in `{acc_ty.format()}`, which cannot hold one '
                 f'exactly.  Use a context whose format contains the element '
                 f'format.',
+                at=e,
+            )
+        if not scalar_fits_in(acc_ty, result_ty):
+            raise CppEmitError(
+                f'unsupported: `sum` accumulating in `{acc_ty.format()}` into a '
+                f'`{result_ty.format()}` result, which cannot hold it exactly.',
                 at=e,
             )
         # A prvalue operand (a list literal) would otherwise give begin() and
@@ -2938,14 +2965,16 @@ class CppEmitter(Visitor):
         # below to one evaluation.
         src = self._bind_operand(arg)
         seed = self._list_at(arg_ty, src, '0')
-        if elt_ty != result_ty:
+        if elt_ty != acc_ty:
             # `accumulate` deduces `T` from its seed, so an uncast one would run
             # the whole fold in the element type.  Exact, by the check above.
-            seed = self._explicit_cast(seed, result_ty)
+            seed = self._explicit_cast(seed, acc_ty)
         fold = (
             f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
             f'{self._list_end(arg_ty, src)}, {seed})'
         )
+        if acc_ty != result_ty:
+            fold = self._explicit_cast(fold, result_ty)
         if isinstance(arg_ty, CppList) and arg_ty.size:
             # a *non-zero* length settles the guard; `size == 0` is falsy here
             # and keeps it, which is the case a `std::array<T, 0>` needs

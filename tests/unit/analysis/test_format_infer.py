@@ -4563,3 +4563,80 @@ def _range_bound(*bounds: int) -> FormatBound:
     info = FormatInfer.analyze(f.ast)
     (bound,) = [b for e, b in info.by_expr.items() if type(e).__name__.startswith('Range')]
     return bound
+
+
+# -- formats against runs -------------------------------------------------
+
+
+@fp.fpy(ctx=fp.REAL)
+def _sum_of_one(xs):
+    with fp.MPFixedContext(-1, fp.RM.RTZ):
+        s = sum(xs)
+    return s
+
+
+_ONE_DIGIT = fp.MPBFloatContext(1, -20, fp.RealFloat(c=1, exp=4), fp.RM.RAZ)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _sum_carrying(xs):
+    ys = [fp.digits(1025, -10, 2) for x in xs]
+    with _ONE_DIGIT:
+        s = sum(ys)
+    return s
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scale(zs):
+    for i in range(4):
+        zs[i] = zs[i] * 1024
+    return 0
+
+
+@fp.fpy(ctx=fp.REAL)
+def _callee_writes(xs):
+    ys = [x * 1 for x in xs]
+    t = _scale(ys)  # noqa: F841 -- the call's store is what is tested
+    rs = fp.empty(4)
+    for i in range(4):
+        rs[i] = ys[i] + xs[i]
+    return rs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _iterate_written(xs):
+    rs = fp.empty(4)
+    k = 0
+    for x in xs:
+        xs[3] = x * 1024
+        rs[k] = x * 2
+        with fp.INTEGER:
+            k = k + 1
+    return rs
+
+
+def _fp32s(n: int) -> list[ListType]:
+    return [ListType(RealType(fp.FP32), n)]
+
+
+_BIG = fp.FP32.maxval()
+
+
+@pytest.mark.parametrize('fn, arg_types, args', [
+    # the fold rounds only what it adds to the first element
+    (_sum_of_one, _fp32s(1), [[fp.Float(c=1, exp=-10)]]),
+    # each of the seven roundings away doubles the sum, overflowing past 16,
+    # though the exact total, about 8, fits
+    (_sum_carrying, _fp32s(8), [[_BIG] * 8]),
+    # the callee's store reaches the caller's list
+    (_callee_writes, _fp32s(4), [[_BIG] * 4]),
+    # a loop over a list reads what its body stored into it
+    (_iterate_written, _fp32s(4), [[_BIG] * 4]),
+], ids=['sum-of-one', 'sum-carrying', 'callee-writes', 'iterate-written'])
+def test_the_returned_format_holds_a_run(fn, arg_types, args):
+    ast = monomorphize(fn, args=arg_types).ast
+    (ret,) = [s.expr for s in ast.body.stmts if type(s).__name__ == 'ReturnStmt']
+    fmt = FormatInfer.analyze(ast).by_expr[ret]
+    v = fn(*args)
+    for x in (v if isinstance(v, list) else [v]):
+        assert (fmt.elt if isinstance(fmt, ListFormat) else fmt).representable_in(x), (fmt, x)

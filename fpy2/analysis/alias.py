@@ -591,6 +591,26 @@ class AliasAnalysis:
             return False
         return self._regions.find(ca) is self._regions.find(cb)
 
+    def may_write(self, region: Region) -> bool:
+        """Whether this function may store into *region*, or into a list it
+        holds, itself or through a call it hands one to."""
+        r: Region | None = region
+        while r is not None:
+            if r in self.written_regions or r in self.stored_regions or self.escapes_at(r):
+                return True
+            r = self.region_at(r)
+        return False
+
+    def written_params(self, func: FuncDef, def_use: DefineUseAnalysis) -> dict[int, Region]:
+        """The regions of *func*'s parameters it may store into, by position."""
+        out: dict[int, Region] = {}
+        for i, arg in enumerate(func.args):
+            if isinstance(arg.name, NamedId):
+                r = self.region_of(def_use.find_def_from_site(arg.name, arg))
+                if r is not None and self.may_write(r):
+                    out[i] = r
+        return out
+
     def may_change(self, d: Definition) -> bool:
         """Whether the list *d* names may have an element replaced, through
         any name here or by a call it is handed to."""

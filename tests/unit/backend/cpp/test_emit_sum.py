@@ -153,3 +153,16 @@ class TestAScaleOnlyTheCallerProvesFinite:
         got = _run(_guarded_fsum, _GUARDED_ARGS, f'int main() {{ {calls} }}\n')
         want = [float(_guarded_fsum(xs, y)).hex() for xs, y in cases]
         assert [float.fromhex(g).hex() for g in got.split()] == want
+
+
+@fp.fpy(ctx=fp.REAL)
+def _fp16_sum(xs):
+    with fp.FP16:
+        return sum(xs)
+
+
+def test_a_sum_without_a_native_add_is_refused():
+    """FP16 has storage (`float`) but no `+`: a `float` fold would not round each
+    step as FP16 does, which the interpreter does ([2048, 1, 1] is 2048)."""
+    with pytest.raises(CppCompileError, match='no `\\+`'):
+        CppCompiler().compile(_fp16_sum, arg_types=[ListType(RealType(fp.FP16), 4)])

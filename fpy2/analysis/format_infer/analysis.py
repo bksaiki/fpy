@@ -2735,33 +2735,23 @@ class _FormatInferInstance(Visitor):
         the result widens to the scope's format via :meth:`_op_bound`.
 
         Requires the list size to be statically known via
-        :class:`ArraySizeAnalysis`; otherwise falls back to
-        :meth:`_op_bound`.
-
-        The branches below are ordered so that the trivial cases
-        (``n == 0`` and ``n == 1``) are decided before any
-        abstractability check on the element format.
+        :class:`ArraySizeAnalysis`; otherwise the element format joined
+        with :meth:`_op_bound`: a length-one sum is unrounded.
         """
         n = self._known_iter_count(e.arg)
         if n is None:
-            return self._op_bound(e)
+            # the length may be one, and the first element is not rounded
+            return _join_bounds(arg_fmt.elt, self._op_bound(e))
 
         # ``sum([])`` is conventionally 0 — fits trivially in any scope.
         if n == 0:
             return SetFormat.from_value(Fraction(0))
 
         elt_fmt = arg_fmt.elt
-        # Single-element reduction: ``sum([x])`` evaluates to
-        # ``round_C(x)``.  Tighten to ``elt_fmt`` when it fits under
-        # the scope; otherwise the round may not be the identity.
+        # ``sum([x])`` is ``x``: the fold rounds only what it adds to the
+        # first element.
         if n == 1:
-            if isinstance(elt_fmt, SetFormat):
-                fitted = self._bound_if_fits(e, elt_fmt)
-            elif isinstance(elt_fmt, AbstractableFormat):
-                fitted = self._bound_if_fits(e, AbstractFormat.from_format(elt_fmt))
-            else:
-                fitted = None
-            return fitted if fitted is not None else self._op_bound(e)
+            return elt_fmt
 
         # ``n >= 2``: simulate ``n - 1`` pairwise additions through
         # AbstractFormat, then check the final accumulator against the
@@ -2774,8 +2764,15 @@ class _FormatInferInstance(Visitor):
         af_acc = af_elt
         for _ in range(n - 1):
             af_acc = af_acc + af_elt
-        fitted = self._bound_if_fits(e, af_acc)
-        return fitted if fitted is not None else self._op_bound(e)
+        # Where the accumulator fits, every step rounds to itself.  Where it
+        # does not, each of the `n - 1` roundings may carry, which one
+        # rounding of the total (`_bound_if_fits`'s overlap) misses.
+        resolved = self._resolve_active_ctx(e)
+        if resolved is not None and (resolved is REAL or round_is_identity(af_acc, resolved)):
+            fitted = self._bound_if_fits(e, af_acc)
+            if fitted is not None:
+                return fitted
+        return self._op_bound(e)
 
     def _range_elt_format(self, start: int, stop: int, step: int) -> FormatBound:
         """Format of the integers produced by ``range(start, stop, step)``
@@ -2953,8 +2950,25 @@ class _FormatInferInstance(Visitor):
         sub = self._analyze_callee(e)
         if sub is not None:
             self.by_call[e] = sub
+            self._callee_stores(e, sub)
             return sub.fn_fmt.ret_fmt
         return _bound_of_type(self.type_info.by_expr[e])
+
+    def _callee_stores(self, e: Call, sub: 'FormatAnalysis') -> None:
+        """What the callee may leave in a list argument, recorded as a store
+        here: the caller's list is the object it writes.  The callee's
+        definitions in its parameter's region describe that object at every
+        point, so their join bounds what it holds after the call."""
+        assert isinstance(e.fn, Function)
+        pre = self._pre_cache.get(e.fn.ast)
+        for i, region in pre.alias.written_params(sub.func, pre.def_use).items():
+            if not isinstance(arg := e.args[i], Var):
+                continue
+            fmts = [sub.by_def[d] for d in pre.alias.defs_in(region) if d in sub.by_def]
+            held = reduce(self._join, fmts)
+            if isinstance(held, ListFormat):
+                self._record_region_insert(
+                    self.def_use.find_def_from_use(arg), 1, held.elt, already=set())
 
     def _analyze_callee(self, e: Call) -> 'FormatAnalysis | None':
         """Recursive sub-analysis on the callee at this site.
@@ -3257,6 +3271,12 @@ class _FormatInferInstance(Visitor):
         self._visit_binding(stmt, stmt.target, iter_fmt.elt)
 
         def iterate():
+            if isinstance(stmt.iterable, Var):
+                # the loop reads the live list, so what the body stores into
+                # it reaches a later iteration's target
+                live = self._bound_of_def(self.def_use.find_def_from_use(stmt.iterable))
+                if isinstance(live, ListFormat):
+                    self._visit_binding(stmt, stmt.target, live.elt)
             self._visit_block(stmt.body, ctx)
 
         # If the iterable's length is statically known, drive the phi
