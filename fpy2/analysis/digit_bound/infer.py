@@ -314,7 +314,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _partial: dict[Definition, list[Terms] | None]
     _fields: dict[Definition, tuple[Terms | None, ...]]
     _elt_expr: dict[Definition, Expr]
-    _covered_write: set[Definition]
+    _covered_write: dict[Definition, Key]
+    """Each covering write, by the binder whose index it writes at."""
+    _loop_of: dict[Key, ForStmt]
     _lsb_vars: set[int]
     _index_sets: dict['_RangeKey | _EltKey | _WitnessKey | _LastKey | _ReadKey | _ApartKey', _IndexSet]
     _enumerators: dict['_RangeKey | _EltKey', list[Key]]
@@ -340,6 +342,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
     """The binder whose index each loop target is."""
     _outer_binders: tuple[Key, ...]
     """The caller's binders around the call this walk is."""
+    _callees: list['_DigitBoundInferInstance']
+    """The walks of the calls this one made, whose copies it replays last."""
     _walk: int
     """This walk's identity in its keys."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
@@ -380,7 +384,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._partial = {}
         self._fields = {}
         self._elt_expr = {}
-        self._covered_write = set()
+        self._covered_write = {}
+        self._loop_of = {}
         self._lsb_vars = set()
         self._index_sets = {}
         self._enumerators = {}
@@ -399,6 +404,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._index_binder = {}
         self._outer_binders = outer_binders
         self._walk = store.spaces.walk()
+        self._callees = []
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
         self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
@@ -427,8 +433,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_block(self.func.body, None)
         # a fact stated after a part was read, such as a `max` over the whole
         # list, still holds of the part
-        for inst in self._index_sets.values():
-            self._replay(inst)
+        self._replay_all()
         self.out.ret = self._merge_returns()
         self._summaries = self._summary_vars()
         self.out.assume_at = self._assumed
@@ -1608,6 +1613,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._replay(inst)
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
+    def _replay_all(self) -> None:
+        """Every index set's facts stated since, its callees' included: a
+        caller states some after the call returns."""
+        for inst in self._index_sets.values():
+            self._replay(inst)
+        for walk in self._callees:
+            walk._replay_all()
+
     def _replay(self, inst: _IndexSet) -> None:
         """Every fact stated since *inst* was last replayed, renamed onto it."""
         moving = _Varying(self.store.spaces, inst.elements)
@@ -1754,6 +1767,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         outer = self._gather, self._trip
         self._trip = None
         self.store.spaces.open(self._binder(stmt), self._binders)
+        self._loop_of[self._binder(stmt)] = stmt
         self._bind_iter(stmt.target, stmt.iterable, stmt, self._binder(stmt))
         # A list the body fills enters the loop holding whatever it already
         # does, which a partial write leaves in place.
@@ -1767,47 +1781,90 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._binders = binders
         self._loops = loops
         self._gather, self._trip = outer
-        # each joined phi's terms past the loop
-        exits: list[tuple[PhiDef, list[Terms]]] = []
+        # each phi's terms past the loop: the body's, or joined from these
+        exits: list[tuple[PhiDef, Terms | list[Terms] | None]] = []
+        shared: set[PhiDef] = set()
         for phi in self.def_use.phis[stmt]:
-            body_def = self.def_use.defs[phi.rhs]
+            body_def, pre_def = self.def_use.defs[phi.rhs], self.def_use.defs[phi.lhs]
             self._unify_elements(phi, body_def)
-            self._unify_elements(phi, self.def_use.defs[phi.lhs])
+            self._unify_elements(phi, pre_def)
             body = self.out.by_def.get(body_def)
-            pre = self.out.by_def.get(self.def_use.defs[phi.lhs])
-            if body is None:
+            pre = self.out.by_def.get(pre_def)
+            if self._covered_by(body_def, stmt, phi, _is_empty_alloc(pre_def)):
+                # This loop's own covering write -- its only write to the list
+                # -- so the body's terms describe the loop's element too.  Zero
+                # trips is vacuous: a covering write runs as many times as the
+                # list is long, so no trips means no elements.
+                if body is not None:
+                    self._share(phi, body)
+                    exits.append((phi, body))
+                shared.add(phi)
+                if body_def in self._fields:
+                    self._fields[phi] = self._fields[body_def]
+                if body_def in self._elt_expr:
+                    self._elt_expr[phi] = self._elt_expr[body_def]
+            elif body is None:
                 self._join(phi, self._written(stmt, phi, inner))
-                if (srcs := self._written(stmt, phi, inner, after=True)) is not None:
-                    exits.append((phi, srcs))
-            elif (_is_empty_alloc(self.def_use.defs[phi.lhs])
-                  or body_def in self._covered_write):
-                # Every iteration writes the same expression, so the body's
-                # terms describe the loop's element too.  Zero trips is
-                # vacuous in both these cases and only these: an `empty` has
-                # no element to describe, and a *covering* write runs as many
-                # times as the list is long, so no trips means no elements.
-                self._share(phi, body)
-            elif pre is not None:
+                exits.append((phi, self._written(stmt, phi, inner, after=True)))
+            elif pre is not None or _is_empty_alloc(pre_def):
                 # Otherwise the phi is what an iteration *starts* from -- the
                 # pre-loop value on the first pass, and on every pass if the
                 # loop never runs -- so only the join covers both.  A list
-                # that arrived with elements keeps them.
-                self._join(phi, [pre, self._before(stmt, body)])
-                last = self._copy(body, (self._binder(stmt),), ('last', id(stmt)), self._binders)
-                exits.append((phi, [pre, last]))
-            self._partial[phi] = self._partial.get(body_def)
-            if body_def in self._fields:
-                self._fields[phi] = self._fields[body_def]
-            if body_def in self._elt_expr:
-                self._elt_expr[phi] = self._elt_expr[body_def]
+                # that arrived with elements keeps them; an `empty`'s are
+                # uninitialized, and no bound has to reach them.
+                srcs = [] if pre is None or _is_empty_alloc(pre_def) else [pre]
+                self._join(phi, [*srcs, self._before(stmt, body)])
+                last: _LastKey = ('last', id(stmt))
+                exits.append((phi, [*srcs, self._copy(body, (self._binder(stmt),), last, self._binders)]))
+                if body_def in self._fields:
+                    self._fields[phi] = tuple(
+                        None if f is None else self._copy(f, (self._binder(stmt),), last, self._binders)
+                        for f in self._fields[body_def])
+            else:
+                exits.append((phi, None))
         # Past the loop a phi is its last iteration's value (or the pre-loop
         # one), varying with the loop no longer; the uses inside are walked,
-        # so only those after read these.
-        for phi, srcs in exits:
+        # so only those after read these.  Where nothing bounds it, it is
+        # fresh, carrying none of the facts an iteration's start has.
+        for phi in shared:
+            self._partial.pop(phi, None)
+        for phi, past in exits:
+            if isinstance(past, Terms):
+                self.out.by_def[phi] = past
+                continue
             terms = Terms()
             self._fresh_interval(terms, phi, f'x{len(self.out.by_def)}')
-            self._bracket(terms, phi, srcs)
+            if past:
+                self._bracket(terms, phi, past)
             self.out.by_def[phi] = terms
+            if self.def_use.defs[phi.rhs] in self._partial:
+                self._partial[phi] = past
+            else:
+                self._partial.pop(phi, None)
+
+    def _writes_first(self, d_in: Definition, at: Key) -> bool:
+        """Is *d_in*, what a write into a list reads, the list as the iteration
+        of the loop *at* started -- no write before it on its path, but loops
+        inside *at* re-entered?  One after it is the phi's to see
+        (:meth:`_covered_by`)."""
+        phis = self.def_use.phis.get(self._loop_of[at], ())
+        d = d_in
+        while isinstance(d, PhiDef) and d.is_loop and d not in phis:
+            d = self.def_use.defs[d.lhs]
+        return d in phis
+
+    def _covered_by(self, d: Definition, loop: ForStmt, phi: PhiDef, empty: bool) -> bool:
+        """Does every path through *loop*'s body leave the list *phi* as
+        *loop*'s own covering write left it?  A path writing nothing leaves an
+        element uninitialized where the list entered `empty`, which no bound
+        has to reach."""
+        if d is phi:
+            return empty
+        if self._covered_write.get(d) == self._binder(loop):
+            return True
+        if isinstance(d, PhiDef) and not d.is_loop:
+            return all(self._covered_by(self.def_use.defs[i], loop, phi, empty) for i in (d.lhs, d.rhs))
+        return False
 
     def _visit_assign(self, stmt: Assign, ctx):
         self._visit_expr(stmt.expr, ctx)
@@ -1904,7 +1961,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
               if covers and isinstance(stmt.indices[0], Var) else None)
         if at is None and stmt.expr in self._gathered and self._carried(d_in) == []:
             at = self._gather_binder(stmt.indices[0])
-        if (at is None or at not in self._binders
+        if (at is None or at not in self._binders or not self._writes_first(d_in, at)
                 or not self.store.spaces.correspond(at, self._elements(d))):
             prior = self._carried(d_in)
             self._partial[d] = None if src is None or prior is None else [*prior, src]
@@ -1923,7 +1980,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             src = last(Terms(src.msb, src.lsb, val))
             val = src.value
             self._share(d, src)
-        self._covered_write.add(d)
+        self._covered_write[d] = at
         self._elt_expr[d] = stmt.expr
         if isinstance(stmt.expr, TupleExpr):
             # A list of tuples has no element term of its own, so the fields
@@ -2013,12 +2070,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
             Terms(self._msb_of(a), self._lsb_of(a), self.value_of(a))
             for a in e.args
         )
-        sub = _DigitBoundInferInstance(
+        walk = _DigitBoundInferInstance(
             e.fn.ast, view, self.store, args,
             lambda i: self._lit_of(e.args[i]),
             outer=lambda: self._assumed(e),
             outer_binders=self._binders,
-        ).analyze()
+        )
+        sub = walk.analyze()
+        self._callees.append(walk)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows

@@ -21,7 +21,8 @@ and a partial write's elements joined pointwise (Phase 5); see
 [The soundness bugs fixed](#the-soundness-bugs-fixed).  A covering write
 under an inner loop and a comprehension of several clauses, unsound in the
 store since v0.2.4, are fixed too (Phase 10).  A whole-branch review found five
-more classes, two reaching a format (Part IV, "After Phase 11"; Phases 12-15).
+more classes, two reaching a format, fixed in Phases 13-15 (Part IV, "After
+Phase 11").
 
 ## Part I: semantics and soundness
 
@@ -1182,8 +1183,8 @@ premise holds there.  An audit reads the premises off this table.
 | element reads at a binder's target | `_visit_expr`'s covering `ListRef`, `_visit_assign`, `_unpack_elt`; `_indexed_at` | holds |
 | element reads elsewhere | `_at_index`, `_at_index_set`, `_instance`, `_copy`, `_replay` | holds |
 | correspondence | `_bind_elt`, `_indexed_at`, `_unify_elements`, `_corresponds`; `_visit_expr`'s `ListComp` (one clause); `_visit_indexed_assign` (the index's binder, or `_gather_binder`), all through `IndexSpaces.correspond` | holds (Phase 14) |
-| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | **departs**: exits on some paths only (Phase 15) |
-| writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses | **departs**: a covering write that is not the only one (Phase 15) |
+| sharing | `_share`, `_bind_elt`, `_visit_expr`'s `Var`, `_visit_call`, parameters in `analyze` | holds; every phi has terms past its loop (Phase 15) |
+| writes | `_visit_indexed_assign` (a copy over the binders inside the index's), `_carried`, `_written`; `_join_at` for several clauses; `_writes_first`, `_covered_by` | holds (Phase 15) |
 | branches | `_visit_branches`, `_merge_arms`, `_untaken`, guards | holds |
 | loops | `_visit_for`'s joins, `_before` | holds (Phase 5); a `while` states nothing |
 | calls | `_visit_call`, `analyze` | holds |
@@ -1315,8 +1316,6 @@ designs to C++):
 
 ### What is left
 
-- **Five classes of store bugs** from the whole-branch review, two reaching a
-  format (Part IV, "After Phase 11"): Phases 12-15.
 - **CDNA3's chain of FMAs** stays refused: its exit needs `e_max + 4`, and
   per-add rules give `e_max + 30`.  An open item.
 - **Replay cost.**  A copy replays every constraint naming a moving variable,
@@ -1871,16 +1870,47 @@ corpus outputs byte for byte Phase 13's, the same 6 refused; the C++ corpus
 
 #### Phase 15 - Writes and exits
 
-- A covering write shares only where it is the loop's only write to the list in
-  an iteration; the share path for a loop's phi only where the body's
-  definition is that loop's own covering write.  Otherwise the phi joins and
-  exits as any carried list.
-- Every phi gets exit terms: the body's where the share is valid, joined ones
-  otherwise, including a phi read in its loop and an unknown prior.  A list's
-  last-iteration copy is its own, varying with its elements; `_partial` past the
-  loop holds the exit copies; `_fields` past the loop are copied with the exit.
+**Done.**
 
-Tests: classes III and IV's shapes pass; the generator's seeds; the corpus hash.
+- **A covering write's premise, by path** (`_writes_first`): what it reads is
+  the list as its loop's iteration started -- no write before it on its path,
+  inner loops re-entered allowed (Phase 10's last-inner-iteration copy).  A
+  write after it is the phi's to see: **a loop's phi shares the body only where
+  every path through it ends in that loop's own covering write**
+  (`_covered_by`), or, for a list that entered `empty`, writes nothing (an
+  uninitialized element needs no bound).  Covering writes in both arms of an
+  `if` qualify; an outer loop refilling a list in an inner one does not, and
+  joins and exits as any carried list.
+- **Every phi gets terms past its loop:** the body's on the share path --
+  *replacing* the phi's, so a phi read inside its loop no longer leaks its
+  iteration-start terms -- joined ones otherwise, and fresh ones where nothing
+  bounds it.  Tuple fields past a join are copied at the last iteration.
+- **`_partial` past the loop holds the exit's sources** (the last writers'
+  copies), not the body's, so a later partial write cannot reuse in-loop
+  sources.  A shared or joined phi leaves `_partial`, and `_carried` reads its
+  exit terms.
+- **Two things the corpus forced, beyond the plan:**
+  - *A callee's copies are replayed at its caller's end* (`_replay_all`, over
+    `_callees`): a caller states facts after the call -- `t_fdpa`'s envelope
+    over `es`, after `join(prods, [c])` copied `prods` -- which the raw
+    in-loop sources reached by sharing variables and copies only by replay.
+    Without it, 51 of 62 C++ designs refused once `_partial` stopped leaking.
+  - *The share path is decided before whether the body has terms*: a list of
+    booleans (`t39[t40] = p == 0`, read by `all(t39)`) has none, and its
+    element expression is what `all` reads.  Block-scaled FP4 refused without
+    it.
+- Tried and reverted: making a copy of an `lsb` variable one too (so its grid
+  keeps the exception).  A copy inherits only the keys outside the moved
+  classes, and the replay does not re-record what bounds it, so a copied grid
+  looked uniform where its bound varied with the element (three seeds).
+
+Measured: the seven Phase 15 reproductions pass, now shapes (32 in all); 386
+analysis tests and all 64 seeds pass; the C++ corpus at 60/62, all agreeing,
+55 s.  The corpus hash was not rerun (the agreed cadence: `compile.py` for a
+rule change).
+
+    .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
+    cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
 
 ### After the last phase
 

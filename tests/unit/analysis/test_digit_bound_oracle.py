@@ -317,39 +317,6 @@ def _list_scalar_exit(xs):
     return out
 
 
-SHAPES = {
-    'paired-sums': (_paired_sums, [ListType(RealType(fp.FP32), 2)]),
-    'carried': (_carried, _L4),
-    'reversed-write': (_reversed_write, _L4),
-    'inner-write': (_inner_write, _L4),
-    'product': (_product, [ListType(RealType(fp.FP32), 2), ListType(RealType(fp.FP16), 2)]),
-    'outer-max': (_outer_max, _L4),
-    'fused': (_fused, _L4x2),
-    'affine': (_affine, _L4),
-    'covering': (_covering, _L4),
-    'nested-inner-index': (_nested_inner_index, _L4),
-    'carried-list': (_carried_list, _L4),
-    'branch': (_branch, _L4),
-    'inner-write-paired': (_inner_write_paired, _L4x2),
-    'gather-counter': (_gather_counter, _L4),
-    'gather-counter-copied': (_gather_counter_copied, _L4),
-    'gather-one-index': (_gather_one_index, _L4),
-    'gather-inner': (_gather_inner, _L4),
-    'after-loop': (_after_loop, _L4),
-    'callee-in-loop': (_callee_in_loop, _L4),
-    'nested-cover': (_nested_cover, _L4),
-    'product-of-one': (_product_of_one, _L4),
-    'comp-in-loop': (_comp_in_loop, _L4),
-    'parts-paired': (_parts_paired, _L3),
-    'shared-part': (_shared_part, _L4),
-    'list-scalar-exit': (_list_scalar_exit, _L4),
-}
-
-
-# -- the bugs known, each a strict xfail naming the phase that fixes it --------
-
-
-
 @fp.fpy(ctx=fp.REAL)
 def _partial_then_cover(xs):
     out = fp.empty(4)
@@ -457,30 +424,45 @@ def _partial_leak(xs):
     return rs
 
 
-KNOWN = {
-    'partial-then-cover': (_partial_then_cover, _L4, 15),
-    'outer-rewrite': (_outer_rewrite, _L4x2, 15),
-    'outer-gather': (_outer_gather, _L4x2, 15),
-    'tuple-outer': (_tuple_outer, _L4x2, 15),
-    'read-then-cover': (_read_then_cover, _L4, 15),
-    'unknown-prior': (_unknown_prior, _L4, 15),
-    'partial-leak': (_partial_leak, _L4, 15),
+SHAPES = {
+    'paired-sums': (_paired_sums, [ListType(RealType(fp.FP32), 2)]),
+    'carried': (_carried, _L4),
+    'reversed-write': (_reversed_write, _L4),
+    'inner-write': (_inner_write, _L4),
+    'product': (_product, [ListType(RealType(fp.FP32), 2), ListType(RealType(fp.FP16), 2)]),
+    'outer-max': (_outer_max, _L4),
+    'fused': (_fused, _L4x2),
+    'affine': (_affine, _L4),
+    'covering': (_covering, _L4),
+    'nested-inner-index': (_nested_inner_index, _L4),
+    'carried-list': (_carried_list, _L4),
+    'branch': (_branch, _L4),
+    'inner-write-paired': (_inner_write_paired, _L4x2),
+    'gather-counter': (_gather_counter, _L4),
+    'gather-counter-copied': (_gather_counter_copied, _L4),
+    'gather-one-index': (_gather_one_index, _L4),
+    'gather-inner': (_gather_inner, _L4),
+    'after-loop': (_after_loop, _L4),
+    'callee-in-loop': (_callee_in_loop, _L4),
+    'nested-cover': (_nested_cover, _L4),
+    'product-of-one': (_product_of_one, _L4),
+    'comp-in-loop': (_comp_in_loop, _L4),
+    'parts-paired': (_parts_paired, _L3),
+    'shared-part': (_shared_part, _L4),
+    'list-scalar-exit': (_list_scalar_exit, _L4),
+    'partial-then-cover': (_partial_then_cover, _L4),
+    'outer-rewrite': (_outer_rewrite, _L4x2),
+    'outer-gather': (_outer_gather, _L4x2),
+    'tuple-outer': (_tuple_outer, _L4x2),
+    'read-then-cover': (_read_then_cover, _L4),
+    'unknown-prior': (_unknown_prior, _L4),
+    'partial-leak': (_partial_leak, _L4),
 }
-"""The bugs found by the whole-branch review: `(program, arg types, phase)`."""
 
 
 @pytest.mark.parametrize('shape', list(SHAPES))
 def test_the_store_holds_every_run(shape: str) -> None:
     fn, arg_types = SHAPES[shape]
-    assert check(fn, arg_types) == []
-
-
-@pytest.mark.parametrize('bug', [
-    pytest.param(b, marks=pytest.mark.xfail(strict=True, reason=f'Phase {KNOWN[b][2]}'))
-    for b in KNOWN
-])
-def test_a_known_bug_is_caught(bug: str) -> None:
-    fn, arg_types, _ = KNOWN[bug]
     assert check(fn, arg_types) == []
 
 
