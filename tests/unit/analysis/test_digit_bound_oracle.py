@@ -10,7 +10,7 @@ import pytest
 import fpy2 as fp
 from fpy2.types import ListType, RealType
 
-from .digit_bound_oracle import check, generate, load
+from .digit_bound_oracle import L4, check, generate, load
 
 # -- the shapes ----------------------------------------------------------
 
@@ -424,6 +424,63 @@ def _partial_leak(xs):
     return rs
 
 
+@fp.fpy(ctx=fp.REAL)
+def _zip_sibling(xs, ys):
+    z = zip(xs, ys)
+    out = fp.empty(4)
+    for j in range(4):
+        p, _ = z[j]
+        with fp.INTEGER:
+            e = max(fp.logb(xs[0]), -160)
+        with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+            out[j] = fp.round(p)
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def _zip_copy(xs, ys):
+    z = zip(xs, ys)
+    h = fp.empty(4)
+    for j in range(4):
+        p, _ = z[j]
+        h[j] = p
+    with fp.INTEGER:
+        e = max(fp.logb(h[0]), -160)
+    with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+        r = fp.round(h[3])
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _zip_nested(xs, ys):
+    z = zip(xs, ys)
+    out = fp.empty(4)
+    for i in range(4):
+        with fp.INTEGER:
+            e = max(fp.logb(xs[i]), -160)
+        for j in range(4):
+            p, _ = z[j]
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                out[j] = fp.round(p)
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def _inner_partial(xs, ys):
+    out = fp.empty(4)
+    rs = fp.empty(4)
+    for r in range(4):
+        s = ys[r] * 2
+        with fp.INTEGER:
+            k = 3 - r
+        for _ in range(1):
+            out[k] = s          # out[3] is ys[0] * 2, from the first iteration
+        e = fp.logb(s)
+        with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+            rs[r] = fp.round(out[3])
+    return rs
+
+
 SHAPES = {
     'paired-sums': (_paired_sums, [ListType(RealType(fp.FP32), 2)]),
     'carried': (_carried, _L4),
@@ -457,6 +514,10 @@ SHAPES = {
     'read-then-cover': (_read_then_cover, _L4),
     'unknown-prior': (_unknown_prior, _L4),
     'partial-leak': (_partial_leak, _L4),
+    'zip-sibling': (_zip_sibling, _L4x2),
+    'zip-copy': (_zip_copy, _L4x2),
+    'zip-nested': (_zip_nested, _L4x2),
+    'inner-partial': (_inner_partial, _L4x2),
 }
 
 
@@ -473,4 +534,4 @@ SEEDS = int(os.environ.get('DIGIT_BOUND_SEEDS', '32'))
 @pytest.mark.parametrize('seed', range(SEEDS))
 def test_the_store_holds_a_generated_program(seed: int, tmp_path) -> None:
     fn = load(generate(seed), tmp_path / f'gen{seed}.py')
-    assert check(fn, [ListType(RealType(fp.FP32), 4)] * 2) == []
+    assert check(fn, [L4, L4]) == []

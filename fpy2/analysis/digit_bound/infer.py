@@ -317,6 +317,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _covered_write: dict[Definition, Key]
     """Each covering write, by the binder whose index it writes at."""
     _loop_of: dict[Key, ForStmt]
+    _entered_empty: set[PhiDef]
+    """The loop phis of lists that entered their loop with no element."""
     _lsb_vars: set[int]
     _index_sets: dict['_RangeKey | _EltKey | _WitnessKey | _LastKey | _ReadKey | _ApartKey', _IndexSet]
     _enumerators: dict['_RangeKey | _EltKey', list[Key]]
@@ -386,6 +388,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._elt_expr = {}
         self._covered_write = {}
         self._loop_of = {}
+        self._entered_empty = set()
         self._lsb_vars = set()
         self._index_sets = {}
         self._enumerators = {}
@@ -1640,16 +1643,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return self._copy(body, (b,), ('witness', id(stmt)), (*self._binders, b))
 
     def _written(
-        self, stmt: ForStmt, phi: PhiDef, inner: set[Key], *, after: bool = False,
+        self, stmt: ForStmt, phi: PhiDef, inner: set[Key], *,
+        after: bool = False, without: Terms | None = None,
     ) -> list[Terms] | None:
         """What the partial writes into the list *phi* left at an element:
         each source at whichever iteration -- of the loop *stmt* and the
         binders *inner* to it -- wrote that element, varying with it.  During
         the loop the writer depends on the iteration too; *after* it, it is
-        the last writer, which does not."""
+        the last writer, which does not.  A source naming *without*'s `msb` is
+        left out."""
         srcs = self._partial.get(self.def_use.defs[phi.rhs])
         if srcs is None:
             return None
+        if without is not None:
+            srcs = [s for s in srcs if s.msb != without.msb]
         loop = () if after else (self._binder(stmt),)
         key: _WitnessKey | _LastKey = ('last', id(phi)) if after else ('witness', id(phi))
         binders = (*self._binders, *loop, self._elements(phi))
@@ -1769,10 +1776,24 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self.store.spaces.open(self._binder(stmt), self._binders)
         self._loop_of[self._binder(stmt)] = stmt
         self._bind_iter(stmt.target, stmt.iterable, stmt, self._binder(stmt))
-        # A list the body fills enters the loop holding whatever it already
-        # does, which a partial write leaves in place.
+        # A list the body fills enters each iteration holding whatever it did
+        # before the loop and whatever earlier iterations wrote, which a
+        # partial write leaves in place.  The latter is bounded once the body
+        # is walked, as `earlier`: not the phi's own terms, which the body's
+        # writes bound in turn.
+        earlier: dict[PhiDef, Terms] = {}
         for phi in self.def_use.phis[stmt]:
-            self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
+            prior = self._carried(self.def_use.defs[phi.lhs])
+            if prior is None:
+                self._partial[phi] = None
+                continue
+            if not prior:
+                self._entered_empty.add(phi)
+            binders, self._binders = self._binders, self._def_binders(phi)
+            earlier[phi] = Terms()
+            self._fresh_interval(earlier[phi], phi, f'w{len(self.out.by_def)}')
+            self._binders = binders
+            self._partial[phi] = [*prior, earlier[phi]]
         loops, self._loops = self._loops, (*self._loops, stmt)
         binders, self._binders = self._binders, (*self._binders, self._binder(stmt))
         opened, self._opened = self._opened, {self._binder(stmt)}
@@ -1781,6 +1802,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._binders = binders
         self._loops = loops
         self._gather, self._trip = outer
+        for phi, w in earlier.items():
+            # what an earlier iteration wrote: a source at another iteration
+            srcs = self._written(stmt, phi, inner, without=w)
+            if srcs:
+                self._bracket(w, phi, srcs)
         # each phi's terms past the loop: the body's, or joined from these
         exits: list[tuple[PhiDef, Terms | list[Terms] | None]] = []
         shared: set[PhiDef] = set()
@@ -1791,10 +1817,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             body = self.out.by_def.get(body_def)
             pre = self.out.by_def.get(pre_def)
             if self._covered_by(body_def, stmt, phi, _is_empty_alloc(pre_def)):
-                # This loop's own covering write -- its only write to the list
-                # -- so the body's terms describe the loop's element too.  Zero
-                # trips is vacuous: a covering write runs as many times as the
-                # list is long, so no trips means no elements.
+                # Every path ends in this loop's own covering write, or writes
+                # nothing into an `empty`, so the body's terms describe the
+                # loop's element too.  Zero trips is vacuous: a covering write
+                # runs as many times as the list is long.
                 if body is not None:
                     self._share(phi, body)
                     exits.append((phi, body))
@@ -1877,6 +1903,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if not isinstance(stmt.target, NamedId):
             return
         d = self.def_use.find_def_from_site(stmt.target, stmt)
+        if isinstance(stmt.expr, Zip):
+            # a `zip`'s element `k` holds each operand's element `k`
+            for a in stmt.expr.args:
+                if isinstance(a, Var):
+                    self._unify_elements(d, self.def_use.find_def_from_use(a))
         match stmt.expr:
             case ListRef(value=Var() as lst, index=Var() as idx) if self._covers(
                 idx, self._len_of(lst)
@@ -1959,7 +1990,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # element it never writes is uninitialized, so no bound need reach it).
         at = (self._index_binder.get(self.def_use.find_def_from_use(stmt.indices[0]))
               if covers and isinstance(stmt.indices[0], Var) else None)
-        if at is None and stmt.expr in self._gathered and self._carried(d_in) == []:
+        if at is None and stmt.expr in self._gathered and d_in in self._entered_empty:
             at = self._gather_binder(stmt.indices[0])
         if (at is None or at not in self._binders or not self._writes_first(d_in, at)
                 or not self.store.spaces.correspond(at, self._elements(d))):
