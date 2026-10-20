@@ -59,7 +59,6 @@ from .monomorphize import Monomorphize
 from .path import walk_exprs
 from .subst_var import SubstVar
 
-
 # ----------------------------------------------------------------------
 # FormatBound -> Type conversion, used only to feed `Monomorphize` at
 # callees — the spec key does *not* go through it.
