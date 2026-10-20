@@ -1422,7 +1422,9 @@ class _Emitter(Visitor):
         arg = self.emit(e.arg)
         ctx = self._active_ctx(e)
         if rounds_exactly(e, self.format_info.by_expr, ctx):
-            return arg
+            # nothing to round, but the result is held in its own storage
+            return self._maybe_cast(arg, self._storage(e.arg), self._storage(e),
+                                    self.format_info.by_expr.get(e))
         if isinstance(e, Cast) and not self.drop_asserts:
             raise TritonEmitError(
                 '`fp.cast` asserts its result is exact, which is not proven '
