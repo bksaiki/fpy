@@ -12,14 +12,20 @@ import pytest
 import fpy2 as fp
 from fpy2.analysis import FormatInfer
 from fpy2.analysis.digit_bound import (
+    DigitBoundAnalysis,
     DigitBoundInfer,
+    DigitBoundParams,
     DigitBoundStore,
     Term,
     Z3Solver,
 )
+from fpy2.analysis.digit_bound.spaces import Binder, Key
 from fpy2.strategies import monomorphize
 from fpy2.transform import CompToLoop
 from fpy2.types import ListType, RealType
+
+from .digit_bound_oracle import L4
+from .test_digit_bound_oracle import _carried, _outer_max, _paired_sums, _reversed_write
 
 
 def _analyze(fn, args, lower=None):
@@ -28,6 +34,11 @@ def _analyze(fn, args, lower=None):
     if lower is not None:
         ast = lower(ast)
     return ast, DigitBoundInfer.analyze(ast, FormatInfer.analyze(ast))
+
+
+def _finite(store: DigitBoundStore, t: Term) -> frozenset[int]:
+    """The literals saying *t* is finite."""
+    return frozenset(store.high(t))
 
 
 def _term(b, text: str):
@@ -307,30 +318,39 @@ class TestAGuardedConstraint:
         assert s.reaches([(x, 4)])
         assert not s.reaches([(x, 4)], frozenset({g}))
 
-    def test_an_instance_copies_a_universal_one_under_its_guard(self):
-        """"Every element of `xs` is finite" holds at every index or none --
-        and at every index only where it holds at all."""
+    def test_an_instance_keeps_one_its_copy_does_not_move(self):
+        """"Every element of `xs` is finite" does not vary with `xs`'s
+        elements, so a copy at another element is guarded by it too."""
         s = DigitBoundStore()
+        b = Binder(0, 1)
         elt = s.var('elt')
-        g = s.literal(universal=True)
+        s.spaces.mint(elt.coeffs[0][0].index, [b])
+        g = s.literal()
         s.le(elt, 3, guard=(g,))
         s.le(elt, 9)
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        subst: dict[int, Term] = {v.index: s.var('elt@0') for v, _ in elt.coeffs}
+        s.instance({s.spaces.find(b)}, subst, {}, set(), '@0')
         part = elt.rename(subst)
         assert s.maximum(part, frozenset({g})) == 3
         assert s.maximum(part) == 9
 
-    def test_an_instance_does_not_copy_it(self):
-        """A literal names one definition, not one per index."""
+    def test_an_instance_renames_one_varying_with_what_it_moves(self):
+        """A literal varying with the copied binder is another one at the
+        copy's point, as a variable is; a variable's own goes with it."""
         s = DigitBoundStore()
+        b = Binder(0, 1)
         elt = s.var('elt')
-        g = s.literal()
+        s.spaces.mint(elt.coeffs[0][0].index, [b])
+        g = s.literal([b])
         s.le(elt, 3, guard=(g,))
+        (h,) = s.high(elt)
+        s.le(elt, 5, guard=(h,))
         s.le(elt, 9)
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
-        assert s.maximum(elt.rename(subst), frozenset({g})) == 9
+        subst: dict[int, Term] = {v.index: s.var('elt@0') for v, _ in elt.coeffs}
+        s.instance({s.spaces.find(b)}, subst, {}, set(), '@0')
+        part = elt.rename(subst)
+        assert s.maximum(part, frozenset({g, h})) == 9
+        assert s.maximum(part, frozenset(s.high(part))) == 5
 
 
 class TestALoopCarriedScalarIsNotItsBody:
@@ -350,7 +370,7 @@ class TestALoopCarriedScalarIsNotItsBody:
         ast, b = _analyze(f, [RealType(fp.FP64), ListType(RealType(fp.FP16), 4)])
         ret = b.by_expr[ast.body.stmts[-1].expr]
         # `xs` tops out at 2**15 and `c` at 2**1023; `d` is `c` on the way in
-        assert b.store.maximum(ret.msb) == 1023
+        assert b.store.maximum(ret.msb, _finite(b.store, ret.msb)) == 1023
 
 
 class TestAZeroArmStatesNoMagnitude:
@@ -391,7 +411,7 @@ class TestARefinedBoundStaysOnItsPath:
         _, b = _analyze(fn, [RealType(fp.FP64)])
         logb = next(t.msb for d, t in b.by_def.items()
                     if str(d.name) == 'x' and t.msb is not None)
-        return b.store.maximum(logb)
+        return b.store.maximum(logb, _finite(b.store, logb))
 
     def test_an_assignment_does_not_export_the_guard(self):
 
@@ -436,7 +456,7 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
     def _max_logb(fn, text):
         _, b = _analyze(fn, [RealType(fp.FP16), RealType(fp.FP16)])
         _, t = _term(b, text)
-        return b.store.maximum(t.msb)
+        return b.store.maximum(t.msb, _finite(b.store, t.msb))
 
     def test_arithmetic_under_a_coarse_context_carries(self):
 
@@ -517,7 +537,7 @@ class TestAPartOfAListKeepsItsPairing:
         ):
             _, b = _analyze(fn, [ListType(RealType(fp.FP32), 8)], lower)
             out.append(max(
-                b.store.prec(t.msb, t.lsb, b.assume_at(e))
+                b.store.prec(t.msb, t.lsb, b.query_at(e))
                 for e, t in b.by_expr.items()
                 if e.format().startswith('fp.round')
             ))
@@ -572,24 +592,28 @@ class TestAPartOfAListKeepsItsPairing:
 
 
 class TestReplayingAtAnIndexSet:
-    """`instance` copies the facts that hold at every index onto fresh
-    variables.  One naming anything else may be an aggregate over the whole
-    list, true of the list and false of a part."""
+    """`instance` copies the facts naming a per-element variable onto fresh
+    variables, and shares the rest: every fact holds at every index, since the
+    walk states an aggregate's upper bound only on a copy of its own."""
 
-    def test_an_element_fact_is_copied_and_an_aggregate_is_not(self):
+    def test_an_element_fact_is_copied_and_the_rest_shared(self):
         s = DigitBoundStore()
-        elt, other, total = s.var('elt'), s.var('other'), s.var('total')
+        elt, other, top = s.var('elt'), s.var('other'), s.var('top')
+        b = Binder(0, 1)
+        for v, _ in (*elt.coeffs, *other.coeffs):
+            s.spaces.mint(v.index, [b])     # per element; `top` is not
         s.le(elt, other + 1)         # per element
-        s.le(total, elt + 2)         # an aggregate: `sum` over the list
+        s.le(elt, top)               # `top = max(xs)`, at every index
         s.le(other, 7)
+        s.le(top, 5)
 
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, 0, '@0')
+        subst: dict[int, Term] = {v.index: s.var('elt@0') for v, _ in elt.coeffs}
+        s.instance({s.spaces.find(b)}, subst, {}, set(), '@0')
         part = elt.rename(subst)
 
         assert part != elt                       # a copy, not the same variable
-        assert s.maximum(part) == 8              # `elt <= other + 1 <= 8`
-        assert s.maximum(total - part) == math.inf   # the aggregate stayed put
+        assert s.maximum(part) == 5              # `<= other + 1 <= 8`, and `<= top <= 5`
+        assert s.maximum(part - top) == 0        # `top` itself, shared
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -609,9 +633,8 @@ def _exponent0_zero(x, emin):
 
 class TestAPathOnlyANonFiniteValueReaches:
     """A return reached only where `x` is non-finite is not taken where it is
-    finite -- which the callee says of its result, and a caller that knows `x`
-    finite resolves.  A caller that does not keeps the sentinel: `exponent0`'s
-    `-1` is a finite value, and a position built from it is a real one."""
+    finite -- which the callee says of its result, and a caller resolves where
+    `x` is finite: past a check, or at a query about a finite rounding of it."""
 
     @staticmethod
     def _round_prec(callee, guarded: bool = True):
@@ -634,14 +657,14 @@ class TestAPathOnlyANonFiniteValueReaches:
 
         _, b = _analyze(checked if guarded else unchecked, [RealType(fp.FP32)])
         e, t = _term(b, 'fp.round(x)')
-        return b.store.prec(t.msb, t.lsb, b.assume_at(e))
+        return b.store.prec(t.msb, t.lsb, b.query_at(e))
 
     def test_the_early_return_does_not_join_the_exponent(self):
         # `e >= logb(x)` survives the merge, so the round spans one binade
         assert self._round_prec(_exponent0) == 12
 
-    def test_not_where_the_caller_does_not_know(self):
-        assert self._round_prec(_exponent0, guarded=False) > 12
+    def test_nor_where_the_caller_does_not_check(self):
+        assert self._round_prec(_exponent0, guarded=False) == 12
 
     def test_a_zero_guard_is_not_one(self):
         """A zero *is* a state the store describes, so its arm still joins."""
@@ -667,26 +690,7 @@ class TestAFloatRoundingKeepsTheBinade:
         for text, arg, carry in (('fp.round(x)', 'x', 1), ('fp.round(y)', 'y', 0)):
             _, t = _term(b, text)
             _, a = _term(b, arg)
-            assert b.store.maximum(t.msb - a.msb) == carry, text
-
-
-class TestAnEnvelopeHoldsAtEveryIndex:
-    """A `max` over a list bounds each element, so it bounds each element of a
-    part too; any other aggregate still stays with the whole list."""
-
-    def test_an_envelope_is_replayed_and_an_aggregate_is_not(self):
-        s = DigitBoundStore()
-        elt, top, total = s.var('elt'), s.var('top'), s.var('total')
-        s.envelope(elt, top)         # `top = max(xs)`
-        s.le(total, elt + 2)         # `sum` over the list
-        s.le(elt, 7)
-
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
-        part = elt.rename(subst)
-
-        assert s.maximum(part - top) == 0            # the envelope came along
-        assert s.maximum(total - part) == math.inf   # the aggregate stayed put
+            assert b.store.maximum(t.msb - a.msb, _finite(b.store, t.msb)) == carry, text
 
 
 class TestAnElementReadAnyWay:
@@ -698,7 +702,7 @@ class TestAnElementReadAnyWay:
     def _prec(fn):
         _, b = _analyze(fn, [ListType(RealType(fp.FP32), 8)])
         return max(
-            b.store.prec(t.msb, t.lsb, b.assume_at(e))
+            b.store.prec(t.msb, t.lsb, b.query_at(e))
             for e, t in b.by_expr.items()
             if e.format().startswith('fp.round')
         )
@@ -740,3 +744,188 @@ class TestAnElementReadAnyWay:
                 return fp.round(xs[1])
 
         assert self._prec(f) > 12
+
+
+class TestAnAggregateHasItsOwnWorstElement:
+    """An upper bound on a sum is a fact about its worst element, so each sum
+    is bounded on a copy of its own.  Two sums over paired lists whose maxima
+    sit at different indices cannot share one: at `[2**60, 2**-60]` both are
+    about `2**60`, their product about `2**120`."""
+
+    def test_the_store_reaches_the_product(self):
+        _, b = _analyze(_paired_sums, [ListType(RealType(fp.FP32), 2)])
+        e, t = _term(b, '(s1 * s2)')
+        assert 120 <= b.store.maximum(t.msb, b.query_at(e)) < math.inf   # E(p) is 120
+
+    def test_the_formats_hold_the_values(self):
+        ast = monomorphize(_paired_sums, args=[ListType(RealType(fp.FP32), 2)]).ast
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        fmt = next(b for e, b in info.by_expr.items() if e.format() == '(p + p)')
+        assert fmt.representable_in(fp.REAL.round(2 * (2.0 ** 60 + 2.0 ** -60) ** 2))
+
+
+class TestAnElementReadInsideAnOuterLoop:
+    """The `max` moves with the outer loop and not with `xs`'s index, so a
+    part of `xs` keeps it rather than a copy."""
+
+    def test_the_max_reaches_the_part(self):
+        assert TestAnElementReadAnyWay._prec(_outer_max) == 12
+
+
+@fp.fpy(ctx=fp.REAL)
+def _logbs(ys):
+    return [fp.logb(y) for y in ys]
+
+
+def _sig_of(b: DigitBoundAnalysis, t: Term) -> frozenset[Key]:
+    """What *t*'s variables vary over."""
+    return frozenset().union(*(b.store.spaces.signature(v.index) for v, _ in t.coeffs))
+
+
+class TestIndexSpaces:
+    """What each variable varies over, read off the index spaces the walk records."""
+
+    @staticmethod
+    def _sig(b: DigitBoundAnalysis, text: str, field: str = 'msb') -> frozenset[Key]:
+        _, t = _term(b, text)
+        return _sig_of(b, getattr(t, field))
+
+    def test_a_comprehension_pairs_its_list_with_its_source(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(x) for x in xs]
+            return es
+
+        _, b = _analyze(f, [L4])
+        assert self._sig(b, 'xs') <= self._sig(b, 'es')
+
+    def test_a_list_of_lists_has_an_index_per_dimension(self):
+        """The rows are the literal's own index; their elements, `ys`'s."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(ys):
+            xss = [[y * 2 for y in ys], [y for y in ys]]
+            return xss
+
+        _, b = _analyze(f, [L4])
+        ys, xss = self._sig(b, 'ys'), self._sig(b, 'xss')
+        assert ys < xss and len(xss) == len(ys) + 1
+
+    def test_a_row_read_at_an_index_moves_the_rows_alone(self):
+        """`xss[0]` is a copy over the rows; its elements still vary with
+        `ys`'s index, which another read at index 0 does not move."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(ys):
+            xss = [[y * 2 for y in ys], [y for y in ys]]
+            row = xss[0]
+            return row
+
+        _, b = _analyze(f, [L4])
+        ys, xss, row = self._sig(b, 'ys'), self._sig(b, 'xss'), self._sig(b, 'xss[0]')
+        assert ys <= row and not (row & (xss - ys))
+
+    def test_an_outer_loops_max_varies_with_the_loop_alone(self):
+        """`e` is minted under `j`, and is a reduction over `es`: it varies
+        with `j` and not with `xs`'s index."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                es = [fp.logb(x) for x in xs]
+                e = max(es)
+                out[j] = e
+            return out
+
+        _, b = _analyze(f, [L4])
+        elements, e = self._sig(b, 'xs'), self._sig(b, 'max(es)', 'value')
+        assert e and not (e & elements)
+        assert elements <= self._sig(b, 'es') and e <= self._sig(b, 'es')
+
+    def test_a_value_after_its_loop_varies_with_it_no_longer(self):
+        """Inside the loop `acc` is an iteration's start, which varies with
+        `i` and so with `xs`'s index; after it, the last iteration's, which
+        does not."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            acc = xs[0]
+            for i in range(len(xs)):
+                acc = acc + xs[i]
+            return acc * 2
+
+        _, b = _analyze(f, [L4])
+        elements = self._sig(b, 'xs[i]')
+        uses = [_sig_of(b, t.msb) for e, t in b.by_expr.items() if e.format() == 'acc']
+        assert len(uses) == 2
+        assert any(u & elements for u in uses) and any(not (u & elements) for u in uses)
+
+    def test_a_callee_analyzed_alone_knows_the_loop_around_its_call(self):
+        """The C++ backend analyzes a callee alone, continuing its caller's
+        store.  The loop around the call is one the callee runs inside, not
+        its list's index: the result's elements do not correspond with it."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                ys = [x * 2 for x in xs]
+                es = _logbs(ys)
+                out[j] = es[0]
+            return out
+
+        _, b = _analyze(f, [L4])
+        sub = next(iter(b.by_call.values())).params
+        assert sub.outer
+        callee = monomorphize(_logbs, args=[L4]).ast
+        alone = DigitBoundInfer.analyze(
+            callee, FormatInfer.analyze(callee),
+            DigitBoundParams(b.store, sub.args, frozenset(), sub.outer))
+        spaces = alone.store.spaces
+        _, t = _term(alone, '[fp.logb(y) for y in ys]')
+        clause = {k for v, _ in t.msb.coeffs for k in spaces.keys(v.index)} - set(sub.outer)
+        assert clause and all(spaces.find(k) != spaces.find(sub.outer[0]) for k in clause)
+
+    def test_a_callee_corresponds_with_its_caller(self):
+        """A callee's comprehension over its parameter pairs with the caller's
+        list, and what it mints varies with the loop around the call."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            out = fp.empty(2)
+            for j in range(2):
+                es = _logbs(xs)
+                out[j] = es[0]
+            return out
+
+        _, b = _analyze(f, [L4])
+        es = self._sig(b, '_logbs(xs)')
+        assert self._sig(b, 'xs') <= es
+        assert len(es) > len(self._sig(b, 'xs'))   # and the loop's class
+
+
+class TestAJoinHoldsAtAnotherIndex:
+    """A loop's phi is the value from the iteration *before*, and an element a
+    partial write left is from whichever iteration wrote it: neither join is a
+    fact about the index the phi is read at."""
+
+    BIG = (2 ** 24 - 1) * 2.0 ** 76
+
+    def test_a_carried_value_is_from_the_iteration_before(self):
+        ast = monomorphize(_carried, args=[L4]).ast
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        fmt = next(v for e, v in info.by_expr.items() if e.format() == 'fp.round(prev)')
+        xs = [fp.FP32.round(self.BIG), *(fp.FP32.round(1.0) for _ in range(3))]
+        assert fmt.representable_in(_carried(xs)[1])
+
+    def test_a_partial_write_is_from_another_index(self):
+        """`out[i]` is `2 * xs[n - 1 - i]`, which no bound on `xs[i]` reaches."""
+        _, b = _analyze(_reversed_write, [L4])
+        _, out = _term(b, 'out[i]')
+        _, xs = _term(b, 'xs[i]')
+        lits = frozenset(b.store.not_neg_inf(xs.msb))
+        bound = b.store.maximum(out.msb - xs.msb, lits)
+        # at `[2**-149, 1, 1, 2**128 - 2**104]`, `out[0]` has msb 128 and `xs[0]` -149
+        assert bound >= 128 + 149
