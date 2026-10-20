@@ -1912,6 +1912,28 @@ rule change).
     .venv/bin/pytest -q -n 8 tests/unit/analysis/test_digit_bound_oracle.py tests/unit/analysis/test_digit_bound.py tests/unit/analysis/test_format_infer.py
     cd examples/mmasim && ../../.venv/bin/python compile.py -j 8 -r 256
 
+#### Phase 16 - Typed keys
+
+**Done.**  The walk's keys were tuples tagged by string literals
+(`('binder', walk, id, clause)`, `('witness', id)`, `('c', k)`, ...), with
+`Key = Hashable`, so nothing checked that one family could not be passed, or
+collide, where another was meant.  Now frozen dataclasses:
+
+- `spaces.py`: `Binder`, `Elements`; `Key = Binder | Elements`.
+- `infer.py`: index sets `_Range`, `_Elts`, `_Witness`, `_Last`, `_Read`,
+  `_Apart` (`_IndexKey`); a range operand is `int | Definition`, untagged,
+  since the two types already tell them apart.
+- `solver.py`: `Constraint.op` is the enum `Rel` (`LE`, `EQ`, `LE_MAX`), not
+  `'<='`/`'=='`/`'<=max'`, whose encoding fell through to the disjunction on
+  any other string; fields reordered `op, lhs, rhs, guard`.
+
+Left as strings: store variable names and the copy suffixes (`_IndexSet.tag`)
+that build them, which are display labels only (z3 names carry the index), and
+the checker's reading kinds `'E'`/`'G'`/`'V'`, which are test-side.
+
+Measured: 390 analysis tests pass; ruff and mypy clean; the corpus hash
+matches Phase 15's, 0 of 141 differ (so R1 and R2 changed none either).
+
 ### After the last phase
 
     .venv/bin/pytest -q -n 8 tests/unit

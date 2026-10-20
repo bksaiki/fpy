@@ -16,7 +16,7 @@ from .infer import (
     FormatView,
     Terms,
 )
-from .solver import Constraint, Solver, Term, Z3Solver
+from .solver import Constraint, Rel, Solver, Term, Z3Solver
 from .store import DigitBoundStore
 
 __all__ = [
@@ -27,6 +27,7 @@ __all__ = [
     'DigitBoundParams',
     'DigitBoundStore',
     'FormatView',
+    'Rel',
     'Solver',
     'Term',
     'Terms',

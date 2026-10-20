@@ -10,7 +10,7 @@ out of the constraints and the store decidable.  What the variables mean is
 import math
 from collections.abc import Container, Iterable, Sequence
 
-from .solver import Constraint, Solver, Term, Z3Solver, _Var
+from .solver import Constraint, Rel, Solver, Term, Z3Solver, _Var
 from .spaces import IndexSpaces
 
 __all__ = ['DigitBoundStore']
@@ -135,7 +135,7 @@ class DigitBoundStore:
                             frontier.append(v.index)
                 # keep the guard
                 self._add(Constraint(
-                    c.lhs.rename(subst), c.op,
+                    c.op, c.lhs.rename(subst),
                     tuple(t.rename(subst) for t in c.rhs), c.guard,
                 ))
 
@@ -165,7 +165,7 @@ class DigitBoundStore:
 
     def le(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs <= rhs``, only where every literal in *guard* holds."""
-        self._add(Constraint(lhs, '<=', (_as_term(rhs),), guard))
+        self._add(Constraint(Rel.LE, lhs, (_as_term(rhs),), guard))
 
     def ge(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs >= rhs``."""
@@ -174,7 +174,7 @@ class DigitBoundStore:
     def eq(self, lhs: Term, rhs: Term | int) -> None:
         """``lhs == rhs``.  The walk states one-directional bounds and never
         reaches for this; it is here for a constraint set built by hand."""
-        self._add(Constraint(lhs, '==', (_as_term(rhs),)))
+        self._add(Constraint(Rel.EQ, lhs, (_as_term(rhs),)))
 
     def le_max(
         self, lhs: Term, rhs: Iterable[Term | int], *, guard: tuple[int, ...] = (),
@@ -189,7 +189,7 @@ class DigitBoundStore:
         if len(terms) == 1:
             self.le(lhs, terms[0], guard=guard)
         elif terms:
-            self._add(Constraint(lhs, '<=max', terms, guard))
+            self._add(Constraint(Rel.LE_MAX, lhs, terms, guard))
 
     def ge_min(
         self, lhs: Term, rhs: Iterable[Term | int], *, guard: tuple[int, ...] = (),

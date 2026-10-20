@@ -19,7 +19,7 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import DefaultVisitor
@@ -41,7 +41,7 @@ from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
 from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
 from ..value_class import ValueClass, ValueClassAnalysis, ValueClassInfer
-from .spaces import IndexSpaces, Key
+from .spaces import Binder, Elements, IndexSpaces, Key
 from .store import DigitBoundStore, Term
 
 __all__ = [
@@ -53,33 +53,64 @@ __all__ = [
     'Terms',
 ]
 
-_Operand: TypeAlias = tuple[Literal['c'], int] | tuple[Literal['d'], Definition]
+_Operand: TypeAlias = int | Definition
 """A range operand's identity: a literal by its value, a variable by its
 definition."""
 
-_ONE: _Operand = ('c', 1)
 
-_RangeKey: TypeAlias = tuple[_Operand, _Operand, _Operand]
-"""A range `range(a, b, s)` as `(a, b, s)`."""
+@dataclass(frozen=True)
+class _Range:
+    """`range(start, stop, step)`."""
 
-_EltKey: TypeAlias = tuple[Literal['elt'], _Operand, _Operand, _Operand]
-"""The elements `a + s * k` for `k` over `range(n)`, as `('elt', a, s, n)`."""
+    start: _Operand
+    stop: _Operand
+    step: _Operand = 1
 
-_WitnessKey: TypeAlias = tuple[Literal['witness'], int]
-"""An index an existential picks -- an aggregate's worst element, a loop's
-iteration before, an element's writer -- by what picks it."""
 
-_ReadKey: TypeAlias = tuple[Literal['read'], Key]
-"""The elements read at a binder's index whose lists' spaces correspond with a
-binder nested with it, by the binder."""
+@dataclass(frozen=True)
+class _Elts:
+    """The elements `start + step * k` for `k` over `range(n)`."""
 
-_ApartKey: TypeAlias = tuple[Literal['apart'], '_RangeKey | _EltKey', int]
-"""An index set enumerated by a binder nested with the one enumerating it
-first: the *n*-th such, apart from the rest."""
+    start: _Operand
+    step: _Operand
+    n: _Operand
 
-_LastKey: TypeAlias = tuple[Literal['last'], int]
-"""A loop's last iteration, by the loop's identity, or a partial write's last
-writer, by its phi's."""
+
+@dataclass(frozen=True)
+class _Witness:
+    """An index an existential picks -- an aggregate's worst element, a loop's
+    iteration before, an element's writer -- by the `id` of what picks it."""
+
+    of: int
+
+
+@dataclass(frozen=True)
+class _Last:
+    """A loop's last iteration, by the loop's `id`, or a partial write's last
+    writer, by its phi's."""
+
+    of: int
+
+
+@dataclass(frozen=True)
+class _Read:
+    """The elements read at *binder*'s index whose lists' spaces correspond
+    with a binder nested with it."""
+
+    binder: Key
+
+
+@dataclass(frozen=True)
+class _Apart:
+    """An index set enumerated by a binder nested with the one enumerating it
+    first: the *n*-th such, apart from the rest."""
+
+    of: '_Range | _Elts'
+    n: int
+
+
+_IndexKey: TypeAlias = _Range | _Elts | _Witness | _Last | _Read | _Apart
+"""An index set a copy is taken over."""
 
 
 class _Varying:
@@ -320,10 +351,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _entered_empty: set[PhiDef]
     """The loop phis of lists that entered their loop with no element."""
     _lsb_vars: set[int]
-    _index_sets: dict['_RangeKey | _EltKey | _WitnessKey | _LastKey | _ReadKey | _ApartKey', _IndexSet]
-    _enumerators: dict['_RangeKey | _EltKey', list[Key]]
+    _index_sets: dict[_IndexKey, _IndexSet]
+    _enumerators: dict[_Range | _Elts, list[Key]]
     """The binders enumerating each index set, one per index set apart."""
-    _gather: tuple[_RangeKey, Definition] | None
+    _gather: tuple[_Range, Definition] | None
     _gathered: set[Expr]
     _returns: list[tuple[Expr, Terms]]
     _classes_cache: ValueClassAnalysis | None
@@ -465,11 +496,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _binder(self, node: Stmt | Expr, clause: int = 0) -> Key:
         """A loop's, or a comprehension clause's, key: this walk's own, so two
         calls to one function keep theirs apart."""
-        return ('binder', self._walk, id(node), clause)
+        return Binder(self._walk, id(node), clause)
 
     def _elements(self, of: Expr | Definition) -> Key:
         """The key of the list *of*'s element space."""
-        return ('elements', self._walk, id(of))
+        return Elements(self._walk, id(of))
 
     def _unify_elements(self, a: Expr | Definition, b: Expr | Definition) -> None:
         """*a* and *b* hold one list's elements, where they are lists."""
@@ -488,9 +519,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _read_apart(self, t: Terms, d_lst: Definition, binder: Key) -> Terms:
         """*t*, of the list *d_lst*'s element, at *binder*'s index: a copy
-        every list read apart there shares, `('read', binder)`."""
+        every list read apart there shares."""
         around = (*self.store.spaces.around(binder), binder)
-        return self._copy(t, (self._elements(d_lst),), ('read', binder), around)
+        return self._copy(t, (self._elements(d_lst),), _Read(binder), around)
 
     def _element(self, d_lst: Definition, binder: Key | None) -> Terms:
         """The list *d_lst*'s element at *binder*'s index: its summary, or
@@ -1471,12 +1502,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return False
         return self._loop_index.get(self.def_use.find_def_from_use(index)) == length
 
-    def _range_key(self, e: Expr) -> _RangeKey | None:
+    def _range_key(self, e: Expr) -> _Range | None:
         """An identity for a range, so two loops over the same one land on
         the same index set."""
         match e:
             case Range2():
-                step: _Operand | None = _ONE
+                step: _Operand | None = 1
             case Range3():
                 step = self._part_key(e.third)
             case _:
@@ -1484,25 +1515,25 @@ class _DigitBoundInferInstance(DefaultVisitor):
         start, stop = self._part_key(e.first), self._part_key(e.second)
         if start is None or stop is None or step is None:
             return None
-        return (start, stop, step)
+        return _Range(start, stop, step)
 
     def _part_key(self, e: Expr) -> _Operand | None:
         """*e* as an :data:`_Operand`, or `None`."""
         const = self.view.int_value(e)
         if const is not None:
-            return ('c', const)
+            return const
         if isinstance(e, Var):
-            return ('d', self.def_use.find_def_from_use(e))
+            return self.def_use.find_def_from_use(e)
         return None
 
-    def _elt_key(self, d: Definition) -> _EltKey | None:
+    def _elt_key(self, d: Definition) -> _Elts | None:
         """The index set of *d* if it is `a + s * k` for `k` over
         `range(n)`."""
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return None
         return self._elt_key_of(d.site.expr)
 
-    def _elt_key_of(self, e: Expr) -> _EltKey | None:
+    def _elt_key_of(self, e: Expr) -> _Elts | None:
         """The index set of *e* if it is `a + s * k` for `k` over
         `range(n)`."""
         if not isinstance(e, Add):
@@ -1516,9 +1547,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     continue
                 if self.def_use.find_def_from_use(k) is not self._trip[0]:
                     continue
-                b = _ONE if s is None else self._part_key(s)
+                b = 1 if s is None else self._part_key(s)
                 if b is not None:
-                    return ('elt', a, b, self._trip[1])
+                    return _Elts(a, b, self._trip[1])
         return None
 
     def _at_index(self, lst: Var, idx: Expr) -> Terms | None:
@@ -1529,7 +1560,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return self._at_index_set(lst, idx)
         k = self.view.int_value(idx)
         if k is not None:
-            return self._instance(lst, (('c', k), ('c', k + 1), _ONE))
+            return self._instance(lst, _Range(k, k + 1))
         key = self._elt_key_of(idx)
         return None if key is None else self._instance(lst, key, self._trip_binder())
 
@@ -1546,7 +1577,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         ``prods`` gathered over the evens keep their pairing.
         """
         d_idx = self.def_use.find_def_from_use(idx)
-        key: _RangeKey | _EltKey | None = self._elt_key(d_idx)
+        key: _Range | _Elts | None = self._elt_key(d_idx)
         if key is None:
             if self._gather is None or d_idx is not self._gather[1]:
                 return None
@@ -1558,7 +1589,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """The binder of the trip count an `a + s * k` index counts by."""
         return None if self._trip is None else self._index_binder.get(self._trip[0])
 
-    def _enumerated(self, key: '_RangeKey | _EltKey', binder: Key | None) -> '_RangeKey | _EltKey | _ApartKey':
+    def _enumerated(self, key: _Range | _Elts, binder: Key | None) -> _Range | _Elts | _Apart:
         """The index set *key*, as *binder* enumerates it: one with the binders
         that enumerate it already, where *binder* corresponds with theirs --
         both run over it in order, so their indices are one -- else one apart."""
@@ -1567,12 +1598,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         firsts = self._enumerators.setdefault(key, [])
         for n, b in enumerate(firsts):
             if b == binder or self.store.spaces.correspond(binder, b):
-                return key if n == 0 else ('apart', key, n)
+                return key if n == 0 else _Apart(key, n)
         firsts.append(binder)
         n = len(firsts) - 1
-        return key if n == 0 else ('apart', key, n)
+        return key if n == 0 else _Apart(key, n)
 
-    def _instance(self, lst: Var, key: '_RangeKey | _EltKey', binder: Key | None = None) -> Terms:
+    def _instance(self, lst: Var, key: _Range | _Elts, binder: Key | None = None) -> Terms:
         """*lst*'s element summary renamed for the index set *key*, as *binder*
         enumerates it; see :meth:`_at_index_set`."""
         d_lst = self.def_use.find_def_from_use(lst)
@@ -1590,13 +1621,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
         src = self.out.by_expr.get(e.arg)
         if src is None or src.msb is None:
             return None
-        return self._copy(src, (self._elements(e.arg),), ('witness', id(e))).msb
+        return self._copy(src, (self._elements(e.arg),), _Witness(id(e))).msb
 
     def _copy(
         self,
         src: Terms,
         elements: Iterable[Key],
-        key: '_RangeKey | _EltKey | _WitnessKey | _LastKey | _ReadKey | _ApartKey',
+        key: _IndexKey,
         binders: tuple[Key, ...] | None = None,
     ) -> Terms:
         """*src* renamed onto the index set *key*: at another index of
@@ -1640,7 +1671,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         loop's iterations, which the loop's phis share and which varies with
         the iteration it precedes."""
         b = self._binder(stmt)
-        return self._copy(body, (b,), ('witness', id(stmt)), (*self._binders, b))
+        return self._copy(body, (b,), _Witness(id(stmt)), (*self._binders, b))
 
     def _written(
         self, stmt: ForStmt, phi: PhiDef, inner: set[Key], *,
@@ -1658,7 +1689,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if without is not None:
             srcs = [s for s in srcs if s.msb != without.msb]
         loop = () if after else (self._binder(stmt),)
-        key: _WitnessKey | _LastKey = ('last', id(phi)) if after else ('witness', id(phi))
+        key: _Witness | _Last = _Last(id(phi)) if after else _Witness(id(phi))
         binders = (*self._binders, *loop, self._elements(phi))
         return [self._copy(s, inner, key, binders) for s in srcs]
 
@@ -1666,7 +1697,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """Bound the list *e*'s element by *src* at a witness over the binders
         *over*, varying with *e*'s elements."""
         if src is not None:
-            w = self._copy(src, over, ('witness', id(e)), (*self._binders, self._elements(e)))
+            w = self._copy(src, over, _Witness(id(e)), (*self._binders, self._elements(e)))
             self._bracket(terms, e, [w])
 
     def _gather_binder(self, idx: Expr) -> Key | None:
@@ -1840,7 +1871,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # uninitialized, and no bound has to reach them.
                 srcs = [] if pre is None or _is_empty_alloc(pre_def) else [pre]
                 self._join(phi, [*srcs, self._before(stmt, body)])
-                last: _LastKey = ('last', id(stmt))
+                last = _Last(id(stmt))
                 exits.append((phi, [*srcs, self._copy(body, (self._binder(stmt),), last, self._binders)]))
                 if body_def in self._fields:
                     self._fields[phi] = tuple(
@@ -2002,7 +2033,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         inner, outer = self._binders[i:], self._binders[:i]
 
         def last(t: Terms) -> Terms:
-            return self._copy(t, inner, ('witness', id(stmt)), outer) if inner else t
+            return self._copy(t, inner, _Witness(id(stmt)), outer) if inner else t
 
         # A list of exponents needs its element's *value*, not its `logb`: that
         # is what a rounding position built from it cancels against.

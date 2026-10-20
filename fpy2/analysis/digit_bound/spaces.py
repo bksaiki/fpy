@@ -9,12 +9,34 @@ classes of that correspondence are the index spaces; a variable's
 ``docs/todos/digit-bound-inference.md``, Part I, "Layer 2".
 """
 
-from collections.abc import Container, Hashable, Iterable
+from collections.abc import Container, Iterable
+from dataclasses import dataclass
+from typing import TypeAlias
 
 from ...utils import Unionfind
 
-Key = Hashable
-"""A binder or a list's element space, as the walk names it."""
+
+@dataclass(frozen=True)
+class Binder:
+    """A loop, or a comprehension's clause, in one walk."""
+
+    walk: int
+    node: int
+    """The loop's or comprehension's `id`."""
+    clause: int = 0
+
+
+@dataclass(frozen=True)
+class Elements:
+    """A list's element space, in one walk."""
+
+    walk: int
+    of: int
+    """The list expression's or definition's `id`."""
+
+
+Key: TypeAlias = Binder | Elements
+"""A binder or a list's element space."""
 
 
 class IndexSpaces:

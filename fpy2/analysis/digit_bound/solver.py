@@ -9,6 +9,7 @@ means.
 
 import math
 from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Protocol, TypeAlias
 
 import z3
@@ -100,20 +101,26 @@ class Term:
         return ' + '.join(parts)
 
 
+class Rel(Enum):
+    """A constraint's relation between its sides."""
+
+    LE = auto()
+    EQ = auto()
+    LE_MAX = auto()
+    """``lhs <= max(rhs)``: a disjunction rather than anything affine, and the
+    shape every upper bound through a ``max`` takes."""
+
+
 @dataclass(frozen=True)
 class Constraint:
     """One constraint of the store.
-
-    ``op`` is ``'<='``, ``'=='``, or ``'<=max'`` -- the last meaning
-    ``lhs <= max(rhs)``, which is a disjunction rather than anything affine and
-    the shape every upper bound through a ``max`` takes.
 
     A *guard* makes it conditional: it holds where every literal named does,
     and a query says which literals it assumes.
     """
 
+    op: Rel
     lhs: Term
-    op: str
     rhs: tuple[Term, ...]
     guard: tuple[int, ...] = ()
 
@@ -282,12 +289,13 @@ class Z3Solver:
     def _encode(self, into: _Z3Solver, constraint: Constraint) -> None:
         lhs = self._to_z3(constraint.lhs)
         rhs = [self._to_z3(r) for r in constraint.rhs]
-        if constraint.op == '==':
-            rel = lhs == rhs[0]
-        elif constraint.op == '<=':
-            rel = lhs <= rhs[0]
-        else:
-            rel = z3.Or([lhs <= r for r in rhs])
+        match constraint.op:
+            case Rel.EQ:
+                rel = lhs == rhs[0]
+            case Rel.LE:
+                rel = lhs <= rhs[0]
+            case Rel.LE_MAX:
+                rel = z3.Or([lhs <= r for r in rhs])
         if constraint.guard:
             rel = z3.Implies(z3.And([self._lit(g) for g in constraint.guard]), rel)
         into.add(rel)
