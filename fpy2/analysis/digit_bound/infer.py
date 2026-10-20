@@ -187,10 +187,6 @@ class FormatView(Protocol):
     scopes: dict[ContextScope, Context | PartialContext]
     """Each context scope's resolved context, concrete or partial."""
 
-    changed_elsewhere: frozenset[Definition]
-    """Definitions whose list a store through another name, or by a callee,
-    may change while they are current."""
-
     def has_finite(self, of: Expr | Definition) -> bool:
         """Does *of*'s format hold any finite value?"""
         ...
@@ -442,12 +438,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
             self._fresh_interval(terms, d, f'd{len(self.out.by_def)}')
         return terms
 
-    def _tied(self, d: Definition) -> bool:
-        """Whether *d*'s terms may be stated through what built it: not for a
-        list something else may store into afterwards, which only its format
-        bounds."""
-        return d not in self.view.changed_elsewhere
-
     def _share(self, d: Definition, src: Terms) -> None:
         """Adopt *src*'s terms for *d*, field by field, where *d* has none.
 
@@ -460,8 +450,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
         unrelated -- so the lookup mints nothing, since `_fresh_interval`
         would seed a `logb` and the share could never fire.
         """
-        if not self._tied(d):
-            return
         dst = self.out.by_def.setdefault(d, Terms())
         dst.msb = dst.msb if dst.msb is not None else src.msb
         dst.lsb = dst.lsb if dst.lsb is not None else self._elt_lsb(d, src)
@@ -473,7 +461,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         One source without a term leaves the join unstated: the bound is a
         claim about all of them.
         """
-        if not srcs or not self._tied(d):
+        if not srcs:
             return
         terms = self._def(d)
         msbs = [s.msb for s in srcs if s.msb is not None]
@@ -1615,7 +1603,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     self._share(d, self._def(d_src))
             case _:
                 src = self.out.by_expr.get(stmt.expr)
-                if src is None or not self._tied(d):
+                if src is None:
                     return
                 terms = self._def(d)
                 # One-directional, not an equality.  `_def` seeds this

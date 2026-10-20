@@ -1806,10 +1806,6 @@ class FormatAnalysis:
     filled in.  A scope absent here never resolved past what
     :class:`ContextUse` gave."""
 
-    changed_elsewhere: frozenset[Definition]
-    """Definitions whose list a store through another name, or by a callee,
-    may change while they are current."""
-
     by_call: dict[Call, 'FormatAnalysis']
     """
     Per-call-site sub-analyses — the :class:`FormatAnalysis` graph
@@ -1904,8 +1900,6 @@ class _FormatInferInstance(Visitor):
     _range_set_threshold: int
     _set_format_threshold: int
     _widen: bool
-    _changed_elsewhere: set[Definition]
-    _stmt: Stmt | None
 
     def __init__(
         self,
@@ -1933,8 +1927,6 @@ class _FormatInferInstance(Visitor):
         self._region_inserts: dict[
             Region, list[tuple[int, FormatBound, frozenset[Definition]]]
         ] = {}
-        self._changed_elsewhere = set()
-        self._stmt = None
         self.by_expr = {}
         self.by_call = {}
         self._pre_cache = pre_cache
@@ -3149,19 +3141,6 @@ class _FormatInferInstance(Visitor):
             already={d_use, d_def},
         )
 
-    def _live_at(self, stmt: Stmt) -> set[Definition]:
-        """The definitions current at *stmt*: those reaching it, and through a
-        loop's phi, what the body defines for the next iteration."""
-        out: set[Definition] = set()
-        pending = list(self.def_use.reach[stmt].values())
-        while pending:
-            d = pending.pop()
-            if d not in out:
-                out.add(d)
-                if isinstance(d, PhiDef) and d.is_loop:
-                    pending.append(self.def_use.defs[d.rhs])
-        return out
-
     def _insert_count(self) -> int:
         """How many stores :meth:`_record_region_insert` has recorded."""
         return sum(map(len, self._region_inserts.values()))
@@ -3179,11 +3158,6 @@ class _FormatInferInstance(Visitor):
         """
         if region is None:
             return
-        assert self._stmt is not None
-        for d in self._live_at(self._stmt) - already:
-            d_region = self.alias.region_of(d)
-            if d_region is not None and self._store_paths(d_region, region, depth):
-                self._changed_elsewhere.add(d)
         record = self._region_inserts.setdefault(region, [])
         entry = (depth, insert_fmt, frozenset(already))
         if entry in record:
@@ -3391,11 +3365,8 @@ class _FormatInferInstance(Visitor):
         pass
 
     def _visit_block(self, block: StmtBlock, ctx: None):
-        outer = self._stmt
         for stmt in block.stmts:
-            self._stmt = stmt
             self._visit_statement(stmt, ctx)
-        self._stmt = outer
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FunctionFormat:
         """Initialize parameter / free-variable formats, visit the
@@ -3499,7 +3470,6 @@ class _FormatInferInstance(Visitor):
             partial_eval=self.pre.partial_eval,
             digit_bound=self._digit_bound,
             scopes=self._scope_ctx_cache,
-            changed_elsewhere=frozenset(self._changed_elsewhere),
             by_call=self.by_call,
         )
 
