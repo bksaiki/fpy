@@ -9,7 +9,7 @@ benchmark produces metadata, raw measurements, validation records, and plots.
 
 - `fpy-core`: the raw compiled operator, given prequantized values in its C++
   compute type. This is the primary arithmetic-kernel comparison.
-- `fpy-storage`: the public FPy wrapper, given storage-format inputs. This
+- `fpy-quantize`: the public FPy wrapper, given storage-format inputs. This
   includes storage-to-compute adaptation inside the timed call.
 - `mmasim`: the equivalent eager MMA-Sim `dpa` arithmetic model, given
   storage-format inputs.
@@ -25,7 +25,7 @@ For finite normal inputs at batch size 65,536, `fpy-core` was faster than
 eager MMA-Sim for all 14 designs. The median speedup across designs was 1.61x;
 the range was 1.11x to 5.15x.
 
-| Design | FPy core M DPA/s | FPy storage M DPA/s | MMA-Sim M DPA/s | Core speedup | Storage speedup |
+| Design | FPy core M DPA/s | FPy quantize M DPA/s | MMA-Sim M DPA/s | Core speedup | Quantize speedup |
 |---|---:|---:|---:|---:|---:|
 | `nv.volta.f16.f32` | 7.11 | 7.16 | 5.34 | 1.33x | 1.34x |
 | `nv.turing.f16.f32` | 5.26 | 5.26 | 3.54 | 1.49x | 1.48x |
@@ -115,12 +115,12 @@ was 5.15x for the very small fixed-size FP64 FMA model.
    `fpy-core` receives already-quantized values widened to the generated C++
    compute type, normally FP32. MMA-Sim receives storage-typed tensors and
    performs the normalization and conversions required by its implementation.
-   The `fpy-storage` series includes FPy's corresponding input adaptation and
+   The `fpy-quantize` series includes FPy's corresponding input adaptation and
    therefore provides a useful second bound, but it is not structurally
    identical to MMA-Sim's input path.
 
    A focused Ampere BF16 audit found that this distinction did not explain its
-   result: at batch 65,536, `fpy-core`, `fpy-storage`, and eager MMA-Sim took
+   result: at batch 65,536, `fpy-core`, `fpy-quantize`, and eager MMA-Sim took
    approximately 12.15 ms, 12.52 ms, and 14.22 ms respectively. Giving
    MMA-Sim the same widened values took approximately 14.76 ms. This check is
    reassuring for that design, but it is not proof for every format.
@@ -133,7 +133,7 @@ was 5.15x for the very small fixed-size FP64 FMA model.
 
 5. **NVFP4 adapter timing is deliberately asymmetric.** There is no native
    Torch FP4 tensor dtype in this path. Both arithmetic kernels receive
-   unpacked, already-quantized E2M1 values, while `fpy-storage` invokes TorchAO
+   unpacked, already-quantized E2M1 values, while `fpy-quantize` invokes TorchAO
    quantization again inside the timed public wrapper. Its 0.09x headline
    result measures that adapter cost and should not be compared with the raw
    arithmetic-kernel ratio of 1.33x.

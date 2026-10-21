@@ -30,8 +30,8 @@ def plot_results(rows: list[dict[str, Any]], designs: list[str], output: Path) -
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    implementations = ("fpy-core", "fpy-storage", "mmasim")
-    colors = {"fpy-core": "#0072B2", "fpy-storage": "#009E73", "mmasim": "#D55E00"}
+    implementations = ("fpy-core", "fpy-quantize", "mmasim")
+    colors = {"fpy-core": "#0072B2", "fpy-quantize": "#009E73", "mmasim": "#D55E00"}
     for workload in sorted({row["workload"] for row in rows}):
         workload_rows = [row for row in rows if row["workload"] == workload]
         height = math.ceil(len(designs) / 4)
@@ -77,7 +77,7 @@ def plot_results(rows: list[dict[str, Any]], designs: list[str], output: Path) -
                 (row["implementation"], row["batch_size"]): row for row in design_rows
             }
             batches = sorted({row["batch_size"] for row in design_rows})
-            for implementation in ("fpy-core", "fpy-storage"):
+            for implementation in ("fpy-core", "fpy-quantize"):
                 points = [
                     (
                         batch,
@@ -122,25 +122,25 @@ def print_headline(
     threads = next(row["threads"] for row in rows if row["workload"] == workload)
     print(f"Headline: workload={workload}, batch={batch}, threads={threads}")
     print(
-        f"{'design':25} {'core DPA/s':>13} {'storage DPA/s':>14} {'MMA-Sim DPA/s':>15} {'core':>8} {'storage':>9}"
+        f"{'design':25} {'core DPA/s':>13} {'quantize DPA/s':>14} {'MMA-Sim DPA/s':>15} {'core':>8} {'quantize':>9}"
     )
     for design in designs:
         fpy = selected.get((design, "fpy-core"))
-        storage = selected.get((design, "fpy-storage"))
+        quantize = selected.get((design, "fpy-quantize"))
         mmasim = selected.get((design, "mmasim"))
-        if not fpy or not storage or not mmasim:
+        if not fpy or not quantize or not mmasim:
             print(f"{design:25} {'invalid':>64}")
             continue
         core_speedup = fpy["dpa_per_second"] / mmasim["dpa_per_second"]
-        storage_speedup = storage["dpa_per_second"] / mmasim["dpa_per_second"]
+        quantize_speedup = quantize["dpa_per_second"] / mmasim["dpa_per_second"]
         unstable = (
-            max(fpy["relative_iqr"], storage["relative_iqr"], mmasim["relative_iqr"])
+            max(fpy["relative_iqr"], quantize["relative_iqr"], mmasim["relative_iqr"])
             > 0.10
         )
         print(
-            f"{design:25} {fpy['dpa_per_second']:13.3g} {storage['dpa_per_second']:14.3g} "
+            f"{design:25} {fpy['dpa_per_second']:13.3g} {quantize['dpa_per_second']:14.3g} "
             f"{mmasim['dpa_per_second']:15.3g} {core_speedup:7.2f}x "
-            f"{storage_speedup:8.2f}x{' !' if unstable else ''}"
+            f"{quantize_speedup:8.2f}x{' !' if unstable else ''}"
         )
 
 

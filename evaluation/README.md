@@ -9,11 +9,11 @@ is timed. Input generation, model construction, compilation, and validation
 are outside the timed region. Each configuration measures three paths:
 
 - `fpy-core`: prequantized values passed directly to the compiled operator
-- `fpy-storage`: storage-format values passed through the public FPy adapter
+- `fpy-quantize`: storage-format values passed through the public FPy adapter
 - `mmasim`: storage-format values passed to eager MMA-Sim `dpa`
 
 Quantization is outside the arithmetic-only `fpy-core` and MMA-Sim comparison.
-The storage path times the FPy adapter's conversions and, for NVFP4, its
+The quantize path times the FPy adapter's conversions and, for NVFP4, its
 TorchAO quantization.
 
 ## Results
@@ -26,11 +26,11 @@ because those FPy models do not yet compile to C++.
 
 For normal inputs at batch size 65,536, `fpy-core` was faster than eager
 MMA-Sim for all 14 designs. Its median speedup across designs was **1.61x**,
-with a range of **1.11x to 5.15x**. The storage-input FPy path had a median
+with a range of **1.11x to 5.15x**. The `fpy-quantize` path had a median
 speedup of **1.57x**; NVFP4 is the exception because its public wrapper repeats
 TorchAO E2M1 quantization inside the timed call.
 
-| Design | FPy core M DPA/s | FPy storage M DPA/s | MMA-Sim M DPA/s | Core speedup | Storage speedup |
+| Design | FPy core M DPA/s | FPy quantize M DPA/s | MMA-Sim M DPA/s | Core speedup | Quantize speedup |
 |---|---:|---:|---:|---:|---:|
 | `nv.volta.f16.f32` | 7.11 | 7.16 | 5.34 | 1.33x | 1.34x |
 | `nv.turing.f16.f32` | 5.26 | 5.26 | 3.54 | 1.49x | 1.48x |
@@ -154,7 +154,7 @@ directory and prints the headline table. Use `--workload` or `--batch-size` to
 select a different headline while retaining plots for every measured workload;
 use `--output` to write plots elsewhere.
 
-The reported core and storage speedups divide the corresponding FPy throughput
+The reported core and quantize speedups divide the corresponding FPy throughput
 by eager MMA-Sim throughput, so values greater than one favor FPy. A `!` in
 the console summary marks a series whose interquartile range exceeds 10% of
 its median. Results describe CPU simulation performance on the recorded Mac

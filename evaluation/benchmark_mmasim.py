@@ -67,7 +67,7 @@ class Prepared:
     """Inputs and zero-argument callables for one timed configuration."""
 
     fpy: Callable[[], Tensor]
-    fpy_storage: Callable[[], Tensor]
+    fpy_quantize: Callable[[], Tensor]
     mmasim: Callable[[], Tensor]
 
 
@@ -311,12 +311,12 @@ def prepare_case(
     c_mmasim = torch.full((batch,), c_value, dtype=case.accumulator_dtype)
     c_fpy = torch.tensor(c_value, dtype=case.accumulator_dtype).item()
     fpy_op = getattr(torch.ops.fpy2_models, case.op_name).default
-    fpy_storage_op = getattr(fpy2_models, case.op_name)
+    fpy_quantize_op = getattr(fpy2_models, case.op_name)
 
     if case.kind == "dpa":
         return Prepared(
             fpy=lambda: fpy_op(a_fpy, b_fpy, c_fpy),
-            fpy_storage=lambda: fpy_storage_op(a_mmasim, b_mmasim, c_fpy),
+            fpy_quantize=lambda: fpy_quantize_op(a_mmasim, b_mmasim, c_fpy),
             mmasim=lambda: case.reference.dpa(a_mmasim, b_mmasim, c_mmasim),
         )
 
@@ -327,7 +327,7 @@ def prepare_case(
         beta_mmasim = torch.full((batch, 1), beta_fpy, dtype=case.scale_dtype)
         return Prepared(
             fpy=lambda: fpy_op(a_fpy, b_fpy, c_fpy, alpha_fpy, beta_fpy),
-            fpy_storage=lambda: fpy_storage_op(
+            fpy_quantize=lambda: fpy_quantize_op(
                 a_mmasim,
                 b_mmasim,
                 c_fpy,
@@ -348,7 +348,7 @@ def prepare_case(
         beta_fpy = beta_storage.float()
         return Prepared(
             fpy=lambda: fpy_op(a_fpy, b_fpy, c_fpy, alpha_fpy, beta_fpy),
-            fpy_storage=lambda: fpy_storage_op(
+            fpy_quantize=lambda: fpy_quantize_op(
                 a_mmasim,
                 b_mmasim,
                 c_fpy,
@@ -380,12 +380,12 @@ def validate(prepared: Prepared) -> dict[str, Any]:
     """Return a serializable bitwise-validation result."""
     with torch.no_grad():
         actual = prepared.fpy()
-        storage_actual = prepared.fpy_storage()
+        quantize_actual = prepared.fpy_quantize()
         expected = prepared.mmasim()
     expected_bits = _integer_view(expected)
     for implementation, candidate in (
         ("fpy-core", actual),
-        ("fpy-storage", storage_actual),
+        ("fpy-quantize", quantize_actual),
     ):
         if candidate.shape != expected.shape or candidate.dtype != expected.dtype:
             return {
@@ -746,11 +746,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     continue
 
                 prepared.fpy()
-                prepared.fpy_storage()
+                prepared.fpy_quantize()
                 prepared.mmasim()
                 implementations = [
                     ("fpy-core", prepared.fpy),
-                    ("fpy-storage", prepared.fpy_storage),
+                    ("fpy-quantize", prepared.fpy_quantize),
                     ("mmasim", prepared.mmasim),
                 ]
                 for replicate in range(args.replicates):
