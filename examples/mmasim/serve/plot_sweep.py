@@ -3,10 +3,12 @@ The sweep's plots, from `sweep.py`'s table.
 
 Per metric, a panel per parameter and a line per anchor; the anchor's own
 value ringed, a refused point an x on the floor; categorical values unjoined.
-Writes `<results>/plots/sweep/<metric>.png`.
+Writes `<results>/plots/<table>/<metric>.png`; `--table` takes
+`sweep.py --end-to-end`'s too.
 
     python serve/plot_sweep.py                      # from examples/mmasim
     python serve/plot_sweep.py --metrics backward_normwise flips
+    python serve/plot_sweep.py --table sweep-e2e-Qwen3-0.6B.csv
 """
 
 import argparse
@@ -41,17 +43,27 @@ METRICS: dict[str, tuple[str, Callable[[float], float]]] = {
     'magnitude_bias': ('magnitude bias (u)', lambda v: v / U),
     'bias': ('bias (u)', lambda v: v / U),
     'flips': ('flipped codes (log10 share)', lambda v: math.log10(v) if v > 0 else math.nan),
+    'kl': ('KL(R1 || design), frozen (log10)', lambda v: math.log10(v) if v > 0 else math.nan),
+    'disagree': ('top-1 disagreement with R1, frozen (log10 share)',
+                 lambda v: math.log10(v) if v > 0 else math.nan),
+    'rerounded': ('activation elements its own run re-rounds (log10 share)',
+                  lambda v: math.log10(v) if v > 0 else math.nan),
 }
 """Each metric as plotted: its label, and the transform from `local.py`'s
 value."""
 
 DEFAULT = ('backward_normwise', 'backward', 'backward_max', 'magnitude_bias')
+DEFAULT_E2E = ('kl', 'disagree', 'rerounded')
+"""The defaults for `sweep.py --end-to-end`'s table."""
 
 SYMLOG = {'bias', 'magnitude_bias'}
 """Metrics signed and spanning decades: a symmetric log axis, linear within 1 u."""
 
 LOG2 = {'L'}
 """Parameters that double: a log2 axis."""
+
+FLOORS = ('--', ':', '-.')
+"""Each scheme's floor line (`floor_kl`: R1 rounded toward zero), in order."""
 
 
 def _value(v: str) -> int | str:
@@ -90,6 +102,9 @@ def panel(ax: plt.Axes, rows: list[dict], param: str, metric: str, anchors: list
             if r['status'] != 'ok':
                 ax.plot(pos[_value(r['value'])], 0.03, marker='x', color=color, markersize=6,
                         transform=shift, clip_on=False, zorder=3)
+    if metric == 'kl':
+        for scheme, dash in zip(_floors(rows), FLOORS):
+            ax.axhline(f(_floors(rows)[scheme]), color=MUTED, linestyle=dash, linewidth=1, zorder=1)
     ticks = [pos[v] for v in order]
     keep = _spaced(ticks) if numeric and param not in LOG2 else [True] * len(ticks)
     ax.set_xticks(ticks, [str(v) if k else '' for v, k in zip(order, keep)], fontsize=8)
@@ -104,6 +119,11 @@ def panel(ax: plt.Axes, rows: list[dict], param: str, metric: str, anchors: list
         ax.spines[side].set_visible(False)
     for side in ('left', 'bottom'):
         ax.spines[side].set_color(GRID)
+
+
+def _floors(rows: list[dict]) -> dict[str, float]:
+    """Each scheme's KL floor, where the table has one."""
+    return {r['scheme']: float(r['floor_kl']) for r in rows if r.get('floor_kl')}
 
 
 def _spaced(ticks: list[float]) -> list[bool]:
@@ -136,6 +156,10 @@ def figure(rows: list[dict], metric: str, out: Path) -> None:
     handles += [plt.Line2D([], [], color=MUTED, marker='o', markersize=11, markerfacecolor='none',
                            linestyle='', label="the anchor's own value"),
                 plt.Line2D([], [], color=MUTED, marker='x', linestyle='', label='refused by the compiler')]
+    if metric == 'kl':
+        handles += [plt.Line2D([], [], color=MUTED, linestyle=dash, linewidth=1,
+                               label=f'R1 rounded toward zero ({scheme})')
+                    for scheme, dash in zip(_floors(rows), FLOORS)]
     fig.legend(handles=handles, loc='outside upper center', ncol=min(4, len(handles)), fontsize=8,
                frameon=False)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -147,13 +171,18 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('--results', type=Path, default=RESULTS,
                     help="the outputs' root (default: %(default)s)")
-    ap.add_argument('--metrics', nargs='*', choices=list(METRICS), default=list(DEFAULT),
-                    help=f'metrics to plot (default: {" ".join(DEFAULT)})')
+    ap.add_argument('--table', default='sweep.csv',
+                    help='the table, under <results>/sweep (default: %(default)s)')
+    ap.add_argument('--metrics', nargs='*', choices=list(METRICS), default=None,
+                    help=f'metrics to plot (default: {" ".join(DEFAULT)}; end to end, '
+                    f'{" ".join(DEFAULT_E2E)})')
     args = ap.parse_args(argv)
-    with (args.results / 'sweep' / 'sweep.csv').open() as f:
+    table = args.results / 'sweep' / args.table
+    with table.open() as f:
         rows = list(csv.DictReader(f))
-    for metric in args.metrics:
-        out = args.results / 'plots' / 'sweep' / f'{metric}.png'
+    e2e = bool(rows) and 'kl' in rows[0]
+    for metric in args.metrics or (DEFAULT_E2E if e2e else DEFAULT):
+        out = args.results / 'plots' / table.stem / f'{metric}.png'
         figure(rows, metric, out)
         print(out)
     return 0

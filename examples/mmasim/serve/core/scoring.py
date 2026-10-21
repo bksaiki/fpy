@@ -15,7 +15,7 @@ import math
 import statistics
 import sys
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -113,13 +113,15 @@ class Totals:
 
 
 @torch.no_grad()
-def _log_probs(model: torch.nn.Module, seg: torch.Tensor, first: int = 1) -> Iterator[torch.Tensor]:
+def _log_probs(model: torch.nn.Module, seg: torch.Tensor, first: int = 1,
+               dtype: torch.dtype = torch.float32) -> Iterator[torch.Tensor]:
     """Next-token log-probabilities of *seg*'s tokens from *first* on, in
-    blocks of :data:`_ROWS` positions, `lm_head` applied a block at a time so
-    the whole `[t, vocab]` is never held."""
+    *dtype*, in blocks of :data:`_ROWS` positions (a quarter in FP64),
+    `lm_head` applied a block at a time so the whole `[t, vocab]` is never
+    held."""
     h = model.model(seg).last_hidden_state[0, first - 1:-1]
-    for block in h.split(_ROWS):
-        yield torch.log_softmax(model.lm_head(block).float(), -1)
+    for block in h.split(_ROWS // 4 if dtype == torch.float64 else _ROWS):
+        yield torch.log_softmax(model.lm_head(block).to(dtype), -1)
 
 
 def _keep(blocks: Iterable[torch.Tensor], kept: list[torch.Tensor]) -> Iterator[torch.Tensor]:
@@ -163,6 +165,72 @@ def evaluate(
     finally:
         run.mode = 'fp32'
     return totals
+
+
+@dataclass
+class Divergence:
+    """One run's distance from the exact run, per sequence: mean KL(R1 ||
+    run) and top-1 disagreement, and, frozen, the share of its activation
+    elements (and scales) that would round differently."""
+
+    kl: list[float] = field(default_factory=list)
+    disagree: list[float] = field(default_factory=list)
+    rerounded: list[float] = field(default_factory=list)
+    rescaled: list[float] = field(default_factory=list)
+
+    def add(self, ref: list[torch.Tensor], lps: Iterable[torch.Tensor]) -> None:
+        kl = differ = t = 0
+        for r, q in zip(ref, lps, strict=True):
+            r = r.to(q.device)
+            kl += float((r.exp() * (r - q)).sum())
+            differ += int((r.argmax(-1) != q.argmax(-1)).sum())
+            t += q.shape[0]
+        self.kl.append(kl / t)
+        self.disagree.append(differ / t)
+
+    def report(self) -> dict[str, float]:
+        """Means over sequences, each with its standard error."""
+        out: dict[str, float] = {}
+        for k in ('kl', 'disagree', 'rerounded', 'rescaled'):
+            if v := getattr(self, k):
+                out[k], out[f'{k}_se'] = stats.paired(v)
+        return out
+
+
+def frozen(
+    model: torch.nn.Module, run: swap.Run, segs: Iterable[torch.Tensor], modes: Sequence[str],
+    free: Collection[str] = (), *, progress: bool = False,
+) -> dict[str, dict[str, Divergence]]:
+    """Each of *modes* against *run*'s scheme's exact run over *segs*,
+    frozen to it (`swap.Frozen`), and those in *free* also as they run:
+    `{'frozen': ..., 'free': ...}`, by mode.  Log-probabilities in FP64: in
+    FP32, their rounding alone is a KL near 1e-9, above what a frozen run
+    can be."""
+    exact = f'{run.scheme.name}-exact'
+    out: dict[str, dict[str, Divergence]] = {'frozen': {}, 'free': {}}
+    try:
+        for i, seg in enumerate(segs):
+            run.mode, run.record, run.frozen = exact, swap.Frozen(), None
+            ref = [b.cpu() for b in _log_probs(model, seg, dtype=torch.float64)]
+            rec, run.record = run.record, None
+            for mode in modes:
+                run.mode = mode
+                for kind in ('frozen', 'free') if mode in free else ('frozen',):
+                    run.frozen = rec.replay() if kind == 'frozen' else None
+                    d = out[kind].setdefault(mode, Divergence())
+                    d.add(ref, _log_probs(model, seg, dtype=torch.float64))
+                    if run.frozen is not None:
+                        a, n, b, m = run.frozen.rerounded
+                        d.rerounded.append(a / n)
+                        if m:
+                            d.rescaled.append(b / m)
+            del rec
+            torch.cuda.empty_cache()
+            if progress:
+                print(f'segment {i + 1}', file=sys.stderr, flush=True)
+    finally:
+        run.mode, run.record, run.frozen = 'fp32', None, None
+    return out
 
 
 def median_first(firsts: Sequence[int | None]) -> float:

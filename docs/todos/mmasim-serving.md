@@ -84,7 +84,15 @@ quantity here moves enough to be worth correlating further.  Unpark for
 training (where DeepSeek-V3's concern lies), free generation, or a design
 whose error lies far outside these.
 
-The drivers and analysis this record names (`serve/stage2/`: `run.sh`, `after.sh`, `sweep.sh`, `splitk.sh`, `k0.sh`, `sweep.py`, `analyze.py`, `plot.py`) and their results were removed after commit `4809280`, which holds them.  Its changes to `serve/core` stay: the `<scheme>-exact-rtz` and `-exact-rand` runs (`swap.py`), references in host memory (`scoring.py`), and the local metrics (`metrics.py`).
+**Reopened (2026-10-20): frozen runs** (Record, "Frozen runs").  K₀ is
+re-rounding, not arithmetic: frozen to R1 (each layer multiplies R1's
+quantized input, its own offset from it passed through the weight
+unrounded), a design's KL is its arithmetic alone.  R1 rounded toward zero
+falls from K₀ (1.3e-02) to 1.2e-11; Hopper is 8x10^6 Blackwell; the width
+sweep is KL ∝ ε², 2.00 bits of KL a bit of normwise error.  Free runs stay
+the deployment view.
+
+The drivers and analysis this record names (`serve/stage2/`: `run.sh`, `after.sh`, `sweep.sh`, `splitk.sh`, `k0.sh`, `sweep.py`, `analyze.py`, `plot.py`) and their results were never committed (`4809280` does not hold them).  The width sweep's designs are the generator's Hopper E4M3 anchor with `F` stepped and `rho` toward zero at `min(F, 23)` bits: `F` 13 is Hopper's design, `F` 25 measures as Blackwell's.  Its changes to `serve/core` stay: the `<scheme>-exact-rtz` and `-exact-rand` runs (`swap.py`), references in host memory (`scoring.py`), and the local metrics (`metrics.py`).
 
 #### Decisions
 
@@ -586,6 +594,52 @@ local run redone (~15 min).
   `k`, 11.5-12.2 at long.  Attributing the dose to a `k` range needs designs
   that differ in one layer group at a time.
 
+##### Frozen runs (2026-10-20)
+
+`serve/frozen.py` (`scoring.frozen`, `swap.Frozen`): each segment runs R1
+once, recording each linear layer's raw input `x_R1` and quantized input;
+a frozen run's layer computes `matmul(Q(x_R1)) + (x - x_R1) @ W_q.T`.  Its
+arithmetic's error enters every layer and propagates through the rest; no
+activation rounds differently.  Free is the run as `perplexity.py` runs it.
+Log-softmax in FP64: in FP32 its rounding alone is a KL near 1e-9.
+Qwen3-0.6B, `fp8-row`, 10 segments:
+
+| run | KL vs R1, free | KL vs R1, frozen | re-rounded |
+|---|---|---|---|
+| R1 rounded toward zero | 1.288e-02 | 1.21e-11 | 0.006% |
+| R1 an ulp up or down | 1.299e-02 | 1.29e-11 | 0.007% |
+| nv.blackwell.e4m3.f32 | 1.301e-02 | 2.51e-11 | 0.009% |
+| nv.hopper.e4m3.f32 | 1.395e-02 | 1.98e-04 | 16% |
+| nv.ada.e4m3.f32 | 1.413e-02 | 1.98e-04 | 16% |
+
+(re-rounded: the share of activation elements the run's own input would
+quantize differently from R1's.)  The width sweep, frozen:
+
+| `F` | normwise | KL, frozen | re-rounded |
+|---|---|---|---|
+| 13 (Hopper) | -8.80 | 1.98e-04 | 16% |
+| 15 | -10.90 | 9.16e-06 | 4.5% |
+| 17 | -13.27 | 3.21e-07 | 1.2% |
+| 19 | -15.72 | 1.13e-08 | 0.35% |
+| 21 | -18.07 | 5.09e-10 | 0.08% |
+| 23 | -20.82 | 3.94e-11 | 0.02% |
+| 25 (Blackwell) | -21.09 | 2.51e-11 | 0.009% |
+
+- **K₀ is re-rounding.**  Frozen, R1 rounded toward zero is 1.2e-11; free,
+  1.3e-02.  Free, Blackwell cannot be told from R1 an ulp off at random;
+  frozen, it is 2x it, resolved.
+- **Frozen KL ∝ ε²:** 2.00 bits of KL a bit of normwise error over `F`
+  13-21 (R² 0.9996; each step 1.9-2.1), flattening toward the floor past
+  21.  The "not `ε²`" of the dose sweep is the re-rounding's, not the
+  arithmetic's.
+- **Not a bound on the free run.**  A quantizer absorbs most sub-cell
+  offsets and moves a few a whole step; frozen passes every one through.
+  Over where values fall in their cells the two agree on average (a
+  crossing's chance is its offset's share of the cell), so frozen is the
+  design's mean effect, free adds the re-rounding's variance, K₀.
+- **Validity:** re-rounded under 1% from `F` 17 on; Hopper's 16% makes its
+  frozen run the linearized effect of its arithmetic, not its own run.
+
 #### Open items
 
 ##### Is backward error sufficient across mechanisms?
@@ -1020,6 +1074,36 @@ the sub-FP32 roundings compiled, and after double rounding).
     against -22.7 and -22.2); Hopper's FP8 tree is 0.7 bits *better*
     (-13.1), its pairwise adds keeping 13 bits each where the fused sum
     truncates its terms to 13 bits below the largest.
+
+##### Phase 6 - The sweep end to end
+
+**Done** (2026-10-21; Qwen3-0.6B and Qwen3.5-0.8B, 10 segments,
+`results/sweep/sweep-e2e-<model>.csv`, plots in
+`results/plots/sweep-e2e-<model>/`).
+- `sweep.py --end-to-end` runs `frozen.py` per scheme over the same points:
+  frozen KL vs R1, top-1 disagreement and re-rounded share, the anchors free
+  too, R1 rounded toward zero as each scheme's floor (`floor_kl`, a dashed
+  line).  `plot_sweep.py --table` draws it as the local sweep.
+- **Cost:** 7 h (Qwen3-0.6B) and 8.5 h (Qwen3.5), not the 1.5 h 3.5 s a
+  pass predicts; not timed by scheme (`bf16` runs `lm_head`, 151k rows,
+  frozen; `fp8-row` leaves it to R0).
+- **Refused:** the 10 of local's (5 exact sums, 4 NV even-odd groups,
+  CDNA3's chain of FMAs).
+- **Anchors**, frozen KL (Qwen3-0.6B; Qwen3.5): Hopper E4M3 1.98e-04
+  (2.6e-05); Blackwell E4M3 2.5e-11 (1.2e-11); Ampere BF16 1.9e-10
+  (1.1e-10); Hopper BF16 8.6e-11 (6.5e-11); CDNA3 BF16 8.2e-12 (4.6e-12).
+  Floors: `fp8-row` 1.2e-11 (6.9e-12), `bf16` 2.0e-12 (1.0e-12).
+- **What the graphs show** (both models alike, Qwen3.5 lower):
+  - **`F`, `rho_bits`:** 9-12 decades, about two of KL per bit of local
+    error, plateauing where local error does (Hopper's FP8 past `F` 16).
+  - **`L`:** flat for Hopper's FP8; 1-2 decades over 2-64 for the others.
+  - **`ftz`:** 5 decades for Blackwell's FP8 (-10.6 to -5.7, log10).
+  - **`sum`:** a chain of FMAs 1.5-2 decades worse; a tree near the fused
+    sum, but for Hopper's FP8 0.8 decades better.
+  - **`rho_mode`:** down or up about a decade worse than toward zero; to
+    nearest 0.3-1.7 decades better.  Hopper's FP8 the same in every mode.
+  - **Re-rounded:** under 1% but for the Hopper-FP8-like points (11-16%)
+    and the narrowest `F` and `rho_bits`.
 
 ##### After the last phase
 

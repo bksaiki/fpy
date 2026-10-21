@@ -14,12 +14,19 @@ A run computes under a quantization scheme (`quant`, default `bf16`):
   elements through its kernel, the scheme's scales applied after it, per
   block of `k`, or by its instructions (:func:`gemm`).
 
+Any run but `fp32` can also be *frozen* to a recorded exact run
+(:class:`Frozen`): each layer multiplies the recorded quantized input, and
+its own input's offset from the recorded one passes through the quantized
+weight unrounded.  Its arithmetic's error propagates; no activation rounds
+differently.
+
 Everything outside the linear layers is left as it is: load the model in FP32
 so that is full precision in every run.  A linear layer with a bias is
 refused.
 """
 
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from types import MethodType
 from typing import Any, Literal
 
@@ -137,6 +144,51 @@ class Given:
 
 
 @dataclass
+class Frozen:
+    """One forward pass's linear-layer inputs, raw and quantized, in call
+    order; replayed, what the replaying run's own inputs would round
+    differently."""
+
+    inputs: list[tuple[torch.Tensor, quant.Quantized]] = field(default_factory=list)
+    at: int = 0
+    rerounded: list[int] = field(default_factory=lambda: [0, 0, 0, 0])
+    """Elements rounded differently, elements, scales changed, scales."""
+    _last: tuple[torch.Tensor, int] | None = field(default=None, repr=False)
+
+    def add(self, x: torch.Tensor, qa: quant.Quantized) -> None:
+        """Record *x* and its quantized *qa*, once for layers sharing *x*."""
+        if self._last is not None and self._last[0] is x and self._last[1] == x._version:
+            self.inputs.append(self.inputs[-1])
+            return
+        dtype = quant.DTYPES[qa.operand.elements]
+        small = dtype.itemsize == 1 and dtype.is_floating_point
+        e = qa.elements.to(dtype) if small else qa.elements
+        self.inputs.append((x.detach().reshape(-1, x.shape[-1]).clone(), replace(qa, elements=e)))
+        self._last = (x, x._version)
+
+    def replay(self) -> 'Frozen':
+        """These inputs, to replay from the first."""
+        return Frozen(self.inputs)
+
+    def next(self, own: Callable[[], quant.Quantized]) -> tuple[torch.Tensor, quant.Quantized]:
+        """The next recorded input and its quantized form; counted against
+        *own*, the replaying run's quantized input, once per recorded input."""
+        entry = self.inputs[self.at]
+        fresh = self.at == 0 or self.inputs[self.at - 1] is not entry
+        self.at += 1
+        x, qa = entry
+        qa = replace(qa, elements=qa.elements.float())
+        if fresh:
+            mine, r = own(), self.rerounded
+            r[0] += int((mine.elements != qa.elements).sum())
+            r[1] += qa.elements.numel()
+            if qa.scales is not None:
+                r[2] += int((mine.scales != qa.scales).sum())
+                r[3] += qa.scales.numel()
+        return x, qa
+
+
+@dataclass
 class Run:
     """How every patched `nn.Linear` computes; see :func:`patch`.  A weight
     is quantized by the scheme's RTN unless `given` for it; a layer whose
@@ -148,6 +200,10 @@ class Run:
     combine: kernels.Combine = 'linear'
     given: Given | None = None
     ignore: set[int] = field(default_factory=set)
+    record: Frozen | None = None
+    """While set, each layer's input is recorded on it."""
+    frozen: Frozen | None = None
+    """While set, each layer replays it (:class:`Frozen`)."""
     _weights: dict[tuple[int, int, str], tuple[torch.Tensor, quant.Quantized]] = field(
         default_factory=dict, compare=False, repr=False)
     """Each weight and its quantized form, by `id`, version and scheme."""
@@ -202,15 +258,25 @@ class Run:
     def linear(self, x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         if self.mode == 'fp32' or id(w) in self.ignore:
             return F.linear(x, w)
-        qa, qw = self.quantize(x, w), self.weight(w)
-        if (r := _EXACT.get(self.mode.removeprefix(f'{self.scheme.name}-exact'))) is not None:
-            y = exact(qa, qw, r)
-        elif self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
-            held = kernels.storage(self.mode)[1]
-            y = gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held), self.combine)
+        qw = self.weight(w)
+        if self.frozen is not None:
+            xr, qa = self.frozen.next(lambda: self.quantize(x, w))
+            wq = qw.elements if qw.scales is None and qw.tensor is None else qw.dequantize().float()
+            y = self._matmul(qa, qw, w) + (x.reshape(xr.shape) - xr) @ wq.T
         else:
-            raise ValueError(f'{self.mode!r} is not one of {modes(self.scheme)}')
+            qa = self.quantize(x, w)
+            if self.record is not None:
+                self.record.add(x, qa)
+            y = self._matmul(qa, qw, w)
         return y.reshape(*x.shape[:-1], w.shape[0])
+
+    def _matmul(self, qa: quant.Quantized, qw: quant.Quantized, w: torch.Tensor) -> torch.Tensor:
+        if (r := _EXACT.get(self.mode.removeprefix(f'{self.scheme.name}-exact'))) is not None:
+            return exact(qa, qw, r)
+        if self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
+            held = kernels.storage(self.mode)[1]
+            return gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held), self.combine)
+        raise ValueError(f'{self.mode!r} is not one of {modes(self.scheme)}')
 
 
 def patch(model: torch.nn.Module) -> Run:

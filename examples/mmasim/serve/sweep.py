@@ -6,10 +6,14 @@ Points are registered through `local.py --register`, compiled in parallel,
 and run one `local.py` pass per scheme; a refused point is a row with its
 reason.  Writes `<results>/sweep/sweep.csv` (a row per point: its
 parameters, status and metrics against the quantized operands' exact
-product) and `sweep.provenance.json`.
+product) and `sweep.provenance.json`.  `--end-to-end` runs `frozen.py`
+instead: each point's distance from the exact run, frozen to it (the
+anchors also free, and R1 rounded toward zero as the floor), in
+`sweep-e2e-<model>.csv`.
 
     python serve/sweep.py                          # from examples/mmasim
     python serve/sweep.py --anchors nv.hopper.e4m3.f32 --params F --tokens 512
+    python serve/sweep.py --end-to-end --model Qwen/Qwen3.5-0.8B
     python serve/sweep.py --list                   # the points, and stop
 """
 
@@ -128,6 +132,10 @@ def main(argv: list[str]) -> int:
                     help="the outputs' root (default: %(default)s)")
     ap.add_argument('-j', '--jobs', type=int, default=8,
                     help='processes compiling the designs (default: %(default)s)')
+    ap.add_argument('--end-to-end', action='store_true',
+                    help="run frozen.py instead of local.py (see above)")
+    ap.add_argument('--segments', type=int, default=10,
+                    help='with --end-to-end, WikiText-2 segments (default: %(default)s)')
     ap.add_argument('--list', action='store_true', help='print the points, and stop')
     args = ap.parse_args(argv)
 
@@ -143,23 +151,30 @@ def main(argv: list[str]) -> int:
     kernels.CACHE = cli.cache(args, 'kernels')
     refused = kernels.compile_designs(list(names.values()), args.jobs)
     out = args.results / 'sweep'
+    tag = args.model.rsplit('/', 1)[-1]
     metrics: dict[str, dict[str, str]] = {}
     for scheme in sorted({ANCHORS[p.anchor] for p in pts}):
         run = [names[d] for d in dict.fromkeys(p.design for p in pts if ANCHORS[p.anchor] == scheme)
                if names[d] not in refused]
         if not run:
             continue
-        json_out = out / f'local-{scheme}.json'
-        done = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parent / 'local.py'),
-             '--model', args.model, '--scheme', scheme, '--tokens', str(args.tokens),
-             '--register', str(Path(__file__).resolve()), '--results', str(args.results),
-             '-j', str(args.jobs), '-d', *run, '-o', str(json_out)], check=False)
+        common = ['--model', args.model, '--scheme', scheme, '--results', str(args.results),
+                  '--register', str(Path(__file__).resolve())]
+        if args.end_to_end:
+            script, json_out = 'frozen.py', out / f'e2e-{tag}-{scheme}.json'
+            anchors = [n for a in args.anchors if ANCHORS[a] == scheme and (n := names[CATALOG[a]]) in run]
+            extra = ['--segments', str(args.segments), '--matmuls', f'{scheme}-exact-rtz', *run,
+                     '--free', *anchors]
+        else:
+            script, json_out = 'local.py', out / f'local-{scheme}.json'
+            extra = ['--tokens', str(args.tokens), '-j', str(args.jobs), '-d', *run]
+        done = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / script),
+                               *common, *extra, '-o', str(json_out)], check=False)
         if done.returncode:
-            raise SystemExit(f'local.py under {scheme} exited {done.returncode}')
+            raise SystemExit(f'{script} under {scheme} exited {done.returncode}')
         with json_out.with_suffix('.csv').open() as f:
             for row in csv.DictReader(f):
-                if (row['reference'], row['group']) == ('quantized', 'all'):
+                if args.end_to_end or (row['reference'], row['group']) == ('quantized', 'all'):
                     metrics[row['design']] = row
     rows = []
     for p in pts:
@@ -171,14 +186,16 @@ def main(argv: list[str]) -> int:
                      'value': p.value, 'is_anchor': p.is_anchor,
                      'status': 'refused' if n in refused else 'ok', 'reason': refused.get(n, ''),
                      'design': n, **about,
+                     **({'floor_kl': metrics[f'{ANCHORS[p.anchor]}-exact-rtz']['kl']} if args.end_to_end else {}),
                      **{k: v for k, v in m.items()
                         if k not in ('model', 'reference', 'design', 'group')}})
-    outputs.write_csv(out / 'sweep.csv', rows)
-    outputs.write_json(out / 'sweep.provenance.json', {
+    table = out / (f'sweep-e2e-{tag}.csv' if args.end_to_end else 'sweep.csv')
+    outputs.write_csv(table, rows)
+    outputs.write_json(table.with_suffix('.provenance.json'), {
         'argv': sys.argv, **outputs.commit(),
         'settings': {k: v if isinstance(v, (int, list)) else str(v) for k, v in vars(args).items()}})
     print(f'{len(rows)} points, {len(names) - len(refused)} designs measured, '
-          f'{len(refused)} refused: {out / "sweep.csv"}')
+          f'{len(refused)} refused: {table}')
     return 0
 
 
