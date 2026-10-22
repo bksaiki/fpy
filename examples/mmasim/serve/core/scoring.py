@@ -134,13 +134,15 @@ def _keep(blocks: Iterable[torch.Tensor], kept: list[torch.Tensor]) -> Iterator[
 
 def evaluate(
     model: torch.nn.Module, run: swap.Run, segs: Iterable[torch.Tensor],
-    modes: Sequence[str], *, starts: Iterable[int] | None = None, progress: bool = False,
+    modes: Sequence[str], *, starts: Iterable[int] | None = None, seed: int = 0,
+    progress: bool = False,
 ) -> dict[str, Totals]:
     """R0 and each of *modes* over *segs*: every mode's totals, `fp32`'s
     first, each against R0 and a design also against *run*'s scheme's exact
     run, if among *modes*.  Each segment is predicted from its position in
     *starts* on (1: every token but the first).  *run* is
-    `swap.patch(model)`'s; its `split_k` / `combine` apply to every design."""
+    `swap.patch(model)`'s; its `split_k` / `combine` apply to every design.
+    A random-sign run's signs are *seed*'s and the segment's (`Run.reseed`)."""
     exact = f'{run.scheme.name}-exact'
     rest = sorted((m for m in modes if m != 'fp32'), key=lambda m: m != exact)
     totals = {mode: Totals() for mode in ('fp32', *rest)}
@@ -150,6 +152,7 @@ def evaluate(
             refs: dict[str, list[torch.Tensor] | None] = {}
             for mode, t in totals.items():
                 run.mode = mode
+                run.reseed(seed, i)
                 start = time.perf_counter()
                 kept: list[torch.Tensor] = []
                 lps = _log_probs(model, seg, first)
@@ -178,15 +181,24 @@ class Divergence:
     rerounded: list[float] = field(default_factory=list)
     rescaled: list[float] = field(default_factory=list)
 
-    def add(self, ref: list[torch.Tensor], lps: Iterable[torch.Tensor]) -> None:
+    def add(self, ref: list[torch.Tensor], lps: Iterable[torch.Tensor],
+            scored: torch.Tensor | None = None) -> None:
+        """One sequence: *lps* against *ref*'s blocks (pinned, on the host),
+        summed on the GPU and read once, over the positions *scored* marks
+        (every one if `None`)."""
         kl = differ = t = 0
         for r, q in zip(ref, lps, strict=True):
-            r = r.to(q.device)
-            kl += float((r.exp() * (r - q)).sum())
-            differ += int((r.argmax(-1) != q.argmax(-1)).sum())
+            r = r.to(q.device, non_blocking=True)
+            k, d = (r.exp() * (r - q)).sum(-1), r.argmax(-1) != q.argmax(-1)
+            if scored is not None:
+                m = scored[t:t + q.shape[0]].to(q.device)
+                k, d = k[m], d[m]
+            kl = kl + k.sum()
+            differ = differ + d.sum()
             t += q.shape[0]
-        self.kl.append(kl / t)
-        self.disagree.append(differ / t)
+        n = t if scored is None else int(scored.sum())
+        self.kl.append(float(kl) / n)
+        self.disagree.append(float(differ) / n)
 
     def report(self) -> dict[str, float]:
         """Means over sequences, each with its standard error."""
@@ -199,31 +211,36 @@ class Divergence:
 
 def frozen(
     model: torch.nn.Module, run: swap.Run, segs: Iterable[torch.Tensor], modes: Sequence[str],
-    free: Collection[str] = (), *, progress: bool = False,
+    free: Collection[str] = (), *, scored: Sequence[torch.Tensor] | None = None, seed: int = 0,
+    progress: bool = False,
 ) -> dict[str, dict[str, Divergence]]:
     """Each of *modes* against *run*'s scheme's exact run over *segs*,
-    frozen to it (`swap.Frozen`), and those in *free* also as they run:
-    `{'frozen': ..., 'free': ...}`, by mode.  Log-probabilities in FP64: in
+    frozen to it (`swap.Frozen`), and each of *free* as it runs:
+    `{'frozen': ..., 'free': ...}`, by mode; per segment, over the positions
+    its *scored* marks (each predicting the next token), if given.  Log-probabilities in FP64: in
     FP32, their rounding alone is a KL near 1e-9, above what a frozen run
-    can be."""
+    can be.  A random-sign run's signs are *seed*'s and the segment's
+    (`Run.reseed`), frozen or free alike."""
     exact = f'{run.scheme.name}-exact'
     out: dict[str, dict[str, Divergence]] = {'frozen': {}, 'free': {}}
+    pinned: list[torch.Tensor] = []
     try:
         for i, seg in enumerate(segs):
             run.mode, run.record, run.frozen = exact, swap.Frozen(), None
-            ref = [b.cpu() for b in _log_probs(model, seg, dtype=torch.float64)]
+            ref = [_pin(pinned, j, b) for j, b in enumerate(_log_probs(model, seg, dtype=torch.float64))]
             rec, run.record = run.record, None
-            for mode in modes:
+            for mode in dict.fromkeys([*modes, *free]):
                 run.mode = mode
-                for kind in ('frozen', 'free') if mode in free else ('frozen',):
+                for kind in [k for k, of in (('frozen', modes), ('free', free)) if mode in of]:
                     run.frozen = rec.replay() if kind == 'frozen' else None
+                    run.reseed(seed, i)
                     d = out[kind].setdefault(mode, Divergence())
-                    d.add(ref, _log_probs(model, seg, dtype=torch.float64))
+                    d.add(ref, _log_probs(model, seg, dtype=torch.float64), scored and scored[i])
                     if run.frozen is not None:
                         a, n, b, m = run.frozen.rerounded
-                        d.rerounded.append(a / n)
+                        d.rerounded.append(float(a) / n)
                         if m:
-                            d.rescaled.append(b / m)
+                            d.rescaled.append(float(b) / m)
             del rec
             torch.cuda.empty_cache()
             if progress:
@@ -231,6 +248,15 @@ def frozen(
     finally:
         run.mode, run.record, run.frozen = 'fp32', None, None
     return out
+
+
+def _pin(pinned: list[torch.Tensor], i: int, b: torch.Tensor) -> torch.Tensor:
+    """*b* copied to the *i*-th of *pinned*'s host buffers, made or remade
+    to its shape: the copies back to the GPU then run without blocking."""
+    if i >= len(pinned) or pinned[i].shape != b.shape:
+        buf = torch.empty(b.shape, dtype=b.dtype, pin_memory=True)
+        pinned[i:i + 1] = [buf]
+    return pinned[i].copy_(b)
 
 
 def median_first(firsts: Sequence[int | None]) -> float:

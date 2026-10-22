@@ -8,8 +8,9 @@ reason.  Writes `<results>/sweep/sweep.csv` (a row per point: its
 parameters, status and metrics against the quantized operands' exact
 product) and `sweep.provenance.json`.  `--end-to-end` runs `frozen.py`
 instead: each point's distance from the exact run, frozen to it (the
-anchors also free, and R1 rounded toward zero as the floor), in
-`sweep-e2e-<model>.csv`.
+anchors also free, and R1 an ulp up or down at random as the floor), in
+`sweep-e2e-<model>[-mtbench].csv`; `--free-only` then adds each point's free
+run to that table.
 
     python serve/sweep.py                          # from examples/mmasim
     python serve/sweep.py --anchors nv.hopper.e4m3.f32 --params F --tokens 512
@@ -65,7 +66,7 @@ def _set(name: str, v: Any) -> Callable[[generator.Design], generator.Design]:
 
 PARAMS: dict[str, tuple[Callable[[generator.Design], Any], list[tuple[Any, Callable]]]] = {
     'L': (lambda d: d.L, [(v, _set('L', v)) for v in (2, 4, 8, 16, 32, 64)]),
-    'F': (lambda d: d.F, [(v, _set('F', v)) for v in (8, 10, 13, 16, 19, 22, 25, 28, 32, 35)]),
+    'F': (lambda d: d.F, [(v, _set('F', v)) for v in (8, 10, 13, 16, 19, 22, 25, 28)]),
     'F2': (lambda d: d.F2, [(v, _set('F2', v)) for v in (16, 20, 24, 28, 31, 35)]),
     'rho_bits': (lambda d: d.rho.nbits - 1 - d.rho.es, [(v, _rho(bits=v)) for v in (7, 10, 13, 16, 19, 23)]),
     'rho_mode': (lambda d: d.rho.rm.name, [(v, _rho(mode=v)) for v in ('RTZ', 'RNE', 'RTN', 'RTP')]),
@@ -136,6 +137,12 @@ def main(argv: list[str]) -> int:
                     help="run frozen.py instead of local.py (see above)")
     ap.add_argument('--segments', type=int, default=10,
                     help='with --end-to-end, WikiText-2 segments (default: %(default)s)')
+    ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext',
+                    help='with --end-to-end, the workload (default: %(default)s)')
+    ap.add_argument('--free-only', action='store_true',
+                    help="with --end-to-end, run every point free only, into the existing table")
+    ap.add_argument('--seed', type=int, default=0,
+                    help="with --end-to-end, the segments' and random rounding's seed (default: %(default)s)")
     ap.add_argument('--list', action='store_true', help='print the points, and stop')
     args = ap.parse_args(argv)
 
@@ -151,7 +158,7 @@ def main(argv: list[str]) -> int:
     kernels.CACHE = cli.cache(args, 'kernels')
     refused = kernels.compile_designs(list(names.values()), args.jobs)
     out = args.results / 'sweep'
-    tag = args.model.rsplit('/', 1)[-1]
+    tag = args.model.rsplit('/', 1)[-1] + ('' if args.workload == 'wikitext' else f'-{args.workload}')
     metrics: dict[str, dict[str, str]] = {}
     for scheme in sorted({ANCHORS[p.anchor] for p in pts}):
         run = [names[d] for d in dict.fromkeys(p.design for p in pts if ANCHORS[p.anchor] == scheme)
@@ -163,8 +170,11 @@ def main(argv: list[str]) -> int:
         if args.end_to_end:
             script, json_out = 'frozen.py', out / f'e2e-{tag}-{scheme}.json'
             anchors = [n for a in args.anchors if ANCHORS[a] == scheme and (n := names[CATALOG[a]]) in run]
-            extra = ['--segments', str(args.segments), '--matmuls', f'{scheme}-exact-rtz', *run,
-                     '--free', *anchors]
+            frozen = [] if args.free_only else run
+            free = run if args.free_only else anchors
+            extra = ['--segments', str(args.segments), '-w', args.workload, '--seed', str(args.seed),
+                     '--matmuls', f'{scheme}-exact-rand', *frozen,
+                     '--free', f'{scheme}-exact-rand', *free]
         else:
             script, json_out = 'local.py', out / f'local-{scheme}.json'
             extra = ['--tokens', str(args.tokens), '-j', str(args.jobs), '-d', *run]
@@ -186,10 +196,19 @@ def main(argv: list[str]) -> int:
                      'value': p.value, 'is_anchor': p.is_anchor,
                      'status': 'refused' if n in refused else 'ok', 'reason': refused.get(n, ''),
                      'design': n, **about,
-                     **({'floor_kl': metrics[f'{ANCHORS[p.anchor]}-exact-rtz']['kl']} if args.end_to_end else {}),
+                     **({'floor_kl': metrics[f'{ANCHORS[p.anchor]}-exact-rand']['kl'],
+                         'k0_kl': metrics[f'{ANCHORS[p.anchor]}-exact-rand']['free_kl']}
+                        if args.end_to_end else {}),
                      **{k: v for k, v in m.items()
                         if k not in ('model', 'reference', 'design', 'group')}})
     table = out / (f'sweep-e2e-{tag}.csv' if args.end_to_end else 'sweep.csv')
+    if args.free_only:
+        # the frozen table's rows for these points, each point's free run added
+        key = lambda r: (r["anchor"], r["param"], str(r["value"]))
+        new = {key(r): r for r in rows}
+        with table.open() as f:
+            rows = [{**r, **{k: v for k, v in new[key(r)].items() if k.startswith('free_') or k == 'k0_kl'}}
+                    for r in csv.DictReader(f) if key(r) in new]
     outputs.write_csv(table, rows)
     outputs.write_json(table.with_suffix('.provenance.json'), {
         'argv': sys.argv, **outputs.commit(),

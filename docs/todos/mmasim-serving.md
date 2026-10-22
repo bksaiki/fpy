@@ -1336,6 +1336,116 @@ parentheses):
 - Calibration data shifts quantization results (Williams & Aletras), hence
   a chat workload next to prose.
 
+### End to end: frozen runs (the second evaluation)
+
+Local metrics are the per-matmul evaluation (built separately).  This one
+asks what local error cannot: how much of a design's error reaches the
+application's output, and whether it matters there.  Decided 2026-10-21
+from the frozen sweep (Stage 3, Phase 6; Record, "Frozen runs").
+
+| | Local | End to end |
+|---|---|---|
+| question | how accurate is each matmul? | how much of that error reaches the model's output, and does it matter there? |
+| metric | per-matmul error against the exact product | frozen KL(R1 \|\| design), in bits |
+| adds | -- | the model's and workload's weighting; error structure local means underweight; where differences stop showing in deployment |
+
+**Method** (`frozen.py`, `scoring.frozen`, `swap.Frozen`):
+- WikiText-2, teacher-forced, 10 random 2048-token segments, paired across
+  designs.
+- Reference R1: the same quantized model, exact matmuls (FP64, rounded once
+  to FP32).
+- Each design is its compiled kernel, *frozen* to R1: a layer multiplies
+  R1's quantized input `Q(x_R1)` by the design's arithmetic, and its own
+  input's offset passes through the weight unrounded, `+ (x - x_R1) W_q`.
+  Its arithmetic's error enters every layer and propagates; no activation
+  rounds differently from R1's.  Without this, any inexact design's
+  re-rounding costs K₀ and hides the arithmetic.
+- KL in FP64 log-softmax (FP32's rounding alone is ~1e-9).
+- Checks: R1 frozen is 0 exactly; KL ∝ ε² (slope 2.00, R² 0.9996, the
+  width sweep), as KL ≈ ½ δᵀFδ predicts.
+- Validity: the share of activation elements the design's own run would
+  round differently (`rerounded`).  Under ~1% the frozen run is the
+  design's; above (Hopper-like FP8 points, 11-16%), its linearized effect.
+
+**Metric: frozen KL(R1 || design),** mean per token, on a log axis, read
+against a calibration: the measured frozen KL of R1 with every matmul output
+rounded to `t` fraction bits, `t` 8-22 (`-exact-p<t>`; Monte Carlo
+arithmetic's virtual precision).  The calibration is the methods' evidence
+and unit (one decade of KL is ~1.7 bits of output precision); the figure
+leaves it out.
+- **The curves** (every scheme, both models, 10 segments, 2026-10-21;
+  `results/frozen/calib-*`): 2.0 bits of KL a bit of precision (KL ∝ ε²),
+  every scheme but `mxfp4` (2.4-3.6: its outputs often have so few bits that
+  rounding leaves them exact), until the floor.
+- **The floor is FP32 inference's own rounding**, R1 rounded toward zero (a
+  dashed line).  Freezing fixes the quantizer, not the model's FP32 norms,
+  attention and softmax: any perturbation re-rounds them, the mechanism of
+  K₀ a level down.  ~1e-11 under the FP8 and FP4 schemes (the curve flattens
+  from `t` ~15), ~2e-12 under `bf16` (~19).  A design at the floor injects
+  less error than FP32 inference's own rounding; it is reported so, not
+  ranked.
+- **Biased error compounds.**  Hopper's FP8 (truncation) is farther from R1
+  than R1 rounded to 8 fraction bits everywhere -- over 15 bits lost of
+  FP32's 23 -- where its local mean ULP error is 12.5 bits.  A chain of FMAs
+  and Blackwell's `ftz` sit above their local error too ("How it relates to
+  local").
+- **K₀,** the free run's re-rounding (R1 rounded toward zero, free: `fp8-row`
+  1.3e-02, `bf16` 6.7e-05), is reported beside the figure, not on it: above
+  the calibration's top, it would take extrapolating.
+
+**Harness: FP32** (decided 2026-10-21).  FP64 non-matmul operations were
+tried (Qwen3-0.6B, `F` and `rho_bits`, 10 x 1024 tokens, `results/fp64`):
+identical above the FP32 floor, the floor 40x lower under `fp8-row` (6x
+under `bf16`), resolving Blackwell-class FP8 designs.  Dropped: a second
+counterfactual, for differences below FP32 inference's own rounding, which
+no deployment shows; and 2048 tokens do not fit 12 GB.  Its code is gone.
+(A first reading of bits as `½ log2(KL / floor)` treated the floor as an
+ulp and understated what designs lose by ~4.7 bits; withdrawn with the
+fitted reading that followed it.)
+
+**How it relates to local** (141 sweep points; local from `sweep.csv`,
+Qwen3-0.6B; end to end as `½ log2 KL`, bits by the ε² law):
+
+| model | scheme | R² vs mean ULP error | slope | residual SD |
+|---|---|---|---|---|
+| Qwen3-0.6B | `fp8-row` | 0.96 | 0.86 | 1.1 bits |
+| Qwen3-0.6B | `bf16` | 0.98 | 1.02 | 0.8 bits |
+| Qwen3.5-0.8B | `fp8-row` | 0.99 | 0.89 | 0.5 bits |
+| Qwen3.5-0.8B | `bf16` | 0.99 | 1.04 | 0.6 bits |
+
+- Correlated, as expected: end to end is mostly local error carried
+  through the model.
+- **The residuals are what it adds.**  Blackwell's `ftz` +4.5 bits beyond
+  its local error (Qwen3.5 +2.2); a chain of FMAs +1.7; narrow `rho_bits`
+  -1.5 (the model tolerates it).  The same Hopper FP8 design is ~1.5 bits
+  milder on Qwen3.5.
+- From 10 segments of one workload; a second (`mtbench`) before the
+  residuals carry a claim.
+
+**The figure** (`plot_sweep.py`, `kl.png`): x a design parameter, y log10
+KL(ref ‖ design) on one scale across panels ("ref", R1, for the paper: the
+quantized model, every matmul exact and rounded once to FP32), a line per anchor, each
+scheme's FP32 floor dashed.  "Frozen" and the calibration are the
+methods'.
+
+**Cost:** profiled (2026-10-21), the design's emulated GEMM is 83%
+(`fp8-row`) to 91% (`bf16`) of a frozen pass; copies were 4-8%, now
+pinned and asynchronous (11% faster, bit-identical results).  Sweeps are
+bound by the compiled kernels.
+
+**A second workload: `mtbench`** (2026-10-21; Qwen3-0.6B, 10 conversations,
+the `F` and `rho_bits` axes, 77 designs; `sweep-e2e-Qwen3-0.6B-mtbench.csv`,
+plots beside WikiText-2's):
+- **The same measurement up to a constant:** log2 KL on MT-Bench is 1.00x
+  WikiText-2's, 0.7 bits lower under `fp8-row`, 0.4 under `bf16` (chat a
+  little less sensitive); Spearman 0.98 and 0.999; the floors lower alike
+  (7e-12, 1.3e-12).
+- **Its calibration** is the same, 2.0 bits of KL a bit; K₀ 7.7e-03
+  (`fp8-row`), 4.3e-05 (`bf16`).
+- **The residuals over local error recur,** design for design: the BF16
+  designs at `F` 22 +1.8 and +1.9 bits on both, at `rho_bits` 13 -1.4 and
+  -1.5.  Not run here: `ftz` and the chain of FMAs (other axes).
+
 ### Metrics
 
 `Y` is a layer's output matrix and `y` one element; `u = 2^-24`.  "log2"
@@ -1857,6 +1967,25 @@ Libraries split `k` (split-K, stream-K), which shortens each chain.
 - **Kernel speed:** the compiler's concern (`backend-triton.md`).
 
 ## Open items
+
+### How does a frozen run relate to the free one?
+
+At stake: whether frozen KL says anything about deployment beyond the
+noise-floor line.  Under the uniform quantization-noise model (Widrow &
+Kollár) a quantizer passes a small offset with gain ~1 on average, so
+frozen and free should agree on a linear metric (Δ NLL) in expectation;
+KL, quadratic, differs by K₀.  FP8's 3 mantissa bits strain the model.
+**Provisional:** the paper claims only what frozen defines (error at the
+output, quantization decisions fixed to R1).  Reopen to test: frozen and
+free Δ NLL on the width sweep, ~50 segments.
+
+### Do the end-to-end residuals hold on another workload?
+
+`ftz` (+4.5 bits), FMA chains (+1.7), narrow `rho_bits` (-1.5) are what
+end to end adds over local.  **Answered in part** (2026-10-21): on the `F`
+and `rho_bits` axes MT-Bench repeats WikiText-2's residuals design for
+design (End to end, "A second workload").  `ftz` and FMA chains, on other
+axes, are WikiText-2's alone; reopen with those axes on `mtbench`.
 
 ### Do forced and free-running divergence agree in rate?
 

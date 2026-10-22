@@ -96,7 +96,7 @@ def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
     """`args.runs` checked against `args.scheme`'s (all but R0 if not
     given)."""
     known = swap.modes(args.scheme)[1:]
-    if bad := [r for r in args.runs or () if r not in known]:
+    if bad := [r for r in args.runs or () if r not in (*known, *swap.calibration(args.scheme))]:
         ap.error(f'{args.scheme.name} has no matmul {", ".join(bad)} (only {", ".join(known)})')
     return args.runs or list(known)
 

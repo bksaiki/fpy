@@ -2,9 +2,11 @@
 The sweep's plots, from `sweep.py`'s table.
 
 Per metric, a panel per parameter and a line per anchor; the anchor's own
-value ringed, a refused point an x on the floor; categorical values unjoined.
+setting (the real hardware's) ringed, a refused point an x on the floor;
+categorical values unjoined.
 Writes `<results>/plots/<table>/<metric>.png`; `--table` takes
-`sweep.py --end-to-end`'s too.
+`sweep.py --end-to-end`'s too, its `kl` on one scale across panels, with
+each scheme's floor.
 
     python serve/plot_sweep.py                      # from examples/mmasim
     python serve/plot_sweep.py --metrics backward_normwise flips
@@ -22,13 +24,21 @@ import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib import transforms
+from matplotlib import ticker, transforms
 
 RESULTS = Path('results')
 
 COLORS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4')
 """The anchors' colours, in order."""
 MARKERS = ('o', 's', '^', 'D', 'v')
+NAMES = {'nv.hopper.e4m3.f32': 'Hopper', 'nv.blackwell.e4m3.f32': 'Blackwell',
+         'nv.hopper.bf16.f32': 'Hopper', 'nv.ampere.bf16.f32': 'Ampere', 'amd.cdna3.bf16': 'CDNA3'}
+"""The anchors as the legend names them, under their scheme's heading."""
+FAMILIES = {'fp8-row': 'FP8', 'bf16': 'BF16'}
+"""Each scheme's legend heading."""
+STYLES = {'fp8-row': '-', 'bf16': ':'}
+"""Each scheme's line style, its anchors' and its floor's: the family a
+second encoding beside each anchor's hue."""
 INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
 
 U = 2.0 ** -24
@@ -43,7 +53,7 @@ METRICS: dict[str, tuple[str, Callable[[float], float]]] = {
     'magnitude_bias': ('magnitude bias (u)', lambda v: v / U),
     'bias': ('bias (u)', lambda v: v / U),
     'flips': ('flipped codes (log10 share)', lambda v: math.log10(v) if v > 0 else math.nan),
-    'kl': ('KL(R1 || design), frozen (log10)', lambda v: math.log10(v) if v > 0 else math.nan),
+    'kl': ('log10 KL(ref ‖ design)', lambda v: math.log10(v) if v > 0 else math.nan),
     'disagree': ('top-1 disagreement with R1, frozen (log10 share)',
                  lambda v: math.log10(v) if v > 0 else math.nan),
     'rerounded': ('activation elements its own run re-rounds (log10 share)',
@@ -53,7 +63,7 @@ METRICS: dict[str, tuple[str, Callable[[float], float]]] = {
 value."""
 
 DEFAULT = ('backward_normwise', 'backward', 'backward_max', 'magnitude_bias')
-DEFAULT_E2E = ('kl', 'disagree', 'rerounded')
+DEFAULT_E2E = ('kl', 'rerounded')
 """The defaults for `sweep.py --end-to-end`'s table."""
 
 SYMLOG = {'bias', 'magnitude_bias'}
@@ -62,8 +72,9 @@ SYMLOG = {'bias', 'magnitude_bias'}
 LOG2 = {'L'}
 """Parameters that double: a log2 axis."""
 
-FLOORS = ('--', ':', '-.')
-"""Each scheme's floor line (`floor_kl`: R1 rounded toward zero), in order."""
+FLOOR_WIDTH = 1
+"""Each scheme's floor (`floor_kl`: R1 an ulp up or down at random, Monte
+Carlo arithmetic's random rounding), a thin grey line in the scheme's style."""
 
 
 def _value(v: str) -> int | str:
@@ -90,8 +101,8 @@ def panel(ax: plt.Axes, rows: list[dict], param: str, metric: str, anchors: list
                     key=lambda r: pos[_value(r['value'])])
         xs = [pos[_value(r['value'])] for r in ok]
         ys = [f(float(r[metric])) for r in ok]
-        ax.plot(xs, ys, color=color, linewidth=2 if numeric else 0, marker=marker, markersize=6,
-                zorder=2, markeredgecolor='white', markeredgewidth=1)
+        ax.plot(xs, ys, color=color, linewidth=2 if numeric else 0, marker=marker, markersize=6, zorder=2,
+                linestyle=STYLES.get(pts[0]['scheme'], '-'), markeredgecolor='white', markeredgewidth=1)
         for r, x, y in zip(ok, xs, ys):
             if r['is_anchor'] == 'True':
                 ax.scatter(x, y, s=150, facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
@@ -103,11 +114,14 @@ def panel(ax: plt.Axes, rows: list[dict], param: str, metric: str, anchors: list
                 ax.plot(pos[_value(r['value'])], 0.03, marker='x', color=color, markersize=6,
                         transform=shift, clip_on=False, zorder=3)
     if metric == 'kl':
-        for scheme, dash in zip(_floors(rows), FLOORS):
-            ax.axhline(f(_floors(rows)[scheme]), color=MUTED, linestyle=dash, linewidth=1, zorder=1)
-    ticks = [pos[v] for v in order]
-    keep = _spaced(ticks) if numeric and param not in LOG2 else [True] * len(ticks)
-    ax.set_xticks(ticks, [str(v) if k else '' for v, k in zip(order, keep)], fontsize=8)
+        floors = _floors(rows)
+        for scheme, y in floors.items():
+            ax.axhline(f(y), color=MUTED, linestyle=STYLES.get(scheme, '-'), linewidth=FLOOR_WIDTH, zorder=1)
+    if numeric and param not in LOG2:
+        # evenly spaced, not at the swept values: an anchor's own value falls between them
+        ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=6, integer=True, steps=[1, 2, 4, 5, 10]))
+    else:
+        ax.set_xticks([pos[v] for v in order], [str(v) for v in order], fontsize=8)
     if not numeric:
         ax.set_xlim(-0.5, len(order) - 0.5)
     if metric in SYMLOG:
@@ -126,15 +140,6 @@ def _floors(rows: list[dict]) -> dict[str, float]:
     return {r['scheme']: float(r['floor_kl']) for r in rows if r.get('floor_kl')}
 
 
-def _spaced(ticks: list[float]) -> list[bool]:
-    """Which of *ticks* to label: none within a twentieth of the span of the
-    last one labeled."""
-    gap = (max(ticks) - min(ticks)) / 20 if ticks else 0
-    keep, last = [], -math.inf
-    for t in ticks:
-        keep.append(t - last >= gap)
-        last = t if keep[-1] else last
-    return keep
 
 
 def figure(rows: list[dict], metric: str, out: Path) -> None:
@@ -144,27 +149,38 @@ def figure(rows: list[dict], metric: str, out: Path) -> None:
     cols = min(3, len(params))
     nrows = math.ceil(len(params) / cols)
     fig, axes = plt.subplots(nrows, cols, figsize=(4.2 * cols, 3.2 * nrows + 0.8), squeeze=False,
-                             constrained_layout=True)
+                             sharey=metric == 'kl', constrained_layout=True)
     for ax, param in zip(axes.flat, params):
         panel(ax, rows, param, metric, anchors)
     for ax in list(axes.flat)[len(params):]:
         ax.set_visible(False)
     fig.supylabel(METRICS[metric][0], fontsize=10, color=INK)
-    handles = [plt.Line2D([], [], color=c, marker=m, linewidth=2, label=f'{a} ({s})')
-               for a, c, m, s in zip(anchors, COLORS, MARKERS,
-                                     [next(r['scheme'] for r in rows if r['anchor'] == a) for a in anchors])]
-    handles += [plt.Line2D([], [], color=MUTED, marker='o', markersize=11, markerfacecolor='none',
-                           linestyle='', label="the anchor's own value"),
-                plt.Line2D([], [], color=MUTED, marker='x', linestyle='', label='refused by the compiler')]
-    if metric == 'kl':
-        handles += [plt.Line2D([], [], color=MUTED, linestyle=dash, linewidth=1,
-                               label=f'R1 rounded toward zero ({scheme})')
-                    for scheme, dash in zip(_floors(rows), FLOORS)]
-    fig.legend(handles=handles, loc='outside upper center', ncol=min(4, len(handles)), fontsize=8,
-               frameon=False)
+    _legend(fig, rows, metric, anchors)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=130)
     plt.close(fig)
+
+
+def _legend(fig: plt.Figure, rows: list[dict], metric: str, anchors: list[str]) -> None:
+    """One row: each scheme's family, bold, its anchors, then its floor.
+    Rings (as built) and xs (refused) are the caption's."""
+    scheme = {a: next(r['scheme'] for r in rows if r['anchor'] == a) for a in anchors}
+    floors = _floors(rows) if metric == 'kl' else {}
+    handles: list[plt.Line2D] = []
+    heads = []
+    for s in dict.fromkeys(scheme.values()):
+        heads.append(len(handles))
+        handles.append(plt.Line2D([], [], linestyle='', label=FAMILIES.get(s, s)))
+        handles += [plt.Line2D([], [], color=c, marker=m, linewidth=2, markeredgecolor='white',
+                               linestyle=STYLES.get(s, '-'), label=NAMES.get(a, a))
+                    for a, c, m in zip(anchors, COLORS, MARKERS) if scheme[a] == s]
+        if s in floors:
+            handles.append(plt.Line2D([], [], color=MUTED, linestyle=STYLES.get(s, '-'),
+                                      linewidth=FLOOR_WIDTH, label='±1 ulp'))
+    leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles), fontsize=8,
+                     frameon=False, handlelength=2.4, columnspacing=1.2)
+    for i in heads:
+        leg.get_texts()[i].set_fontweight('bold')
 
 
 def main(argv: list[str]) -> int:
@@ -173,6 +189,10 @@ def main(argv: list[str]) -> int:
                     help="the outputs' root (default: %(default)s)")
     ap.add_argument('--table', default='sweep.csv',
                     help='the table, under <results>/sweep (default: %(default)s)')
+    ap.add_argument('--params', nargs='*', default=None,
+                    help='only these parameters\' panels (default: all)')
+    ap.add_argument('--out', default=None,
+                    help='the plots\' directory under <results>/plots (default: the table\'s name)')
     ap.add_argument('--metrics', nargs='*', choices=list(METRICS), default=None,
                     help=f'metrics to plot (default: {" ".join(DEFAULT)}; end to end, '
                     f'{" ".join(DEFAULT_E2E)})')
@@ -180,11 +200,13 @@ def main(argv: list[str]) -> int:
     table = args.results / 'sweep' / args.table
     with table.open() as f:
         rows = list(csv.DictReader(f))
+    if args.params:
+        rows = [r for r in rows if r['param'] in args.params]
     e2e = bool(rows) and 'kl' in rows[0]
+    plots = args.results / 'plots' / (args.out or table.stem)
     for metric in args.metrics or (DEFAULT_E2E if e2e else DEFAULT):
-        out = args.results / 'plots' / table.stem / f'{metric}.png'
-        figure(rows, metric, out)
-        print(out)
+        figure(rows, metric, plots / f'{metric}.png')
+        print(plots / f'{metric}.png')
     return 0
 
 

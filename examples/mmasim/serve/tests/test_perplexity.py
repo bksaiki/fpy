@@ -85,3 +85,32 @@ def test_a_frozen_run_is_its_arithmetic_alone(model: torch.nn.Module, tokens: to
     assert set(got['free']) == {rtz}
     assert (run.mode, run.record, run.frozen) == ('fp32', None, None)
     swap.give(run, model, swap.BF16, {})
+
+
+def test_random_rounding_is_the_seeds_alone(model: torch.nn.Module, tokens: torch.Tensor) -> None:
+    """R1 an ulp up or down at random draws its signs from the seed and the
+    segment: the same seed gives the same KL, whatever ran before; another
+    seed, another."""
+    run = swap.patch(model)
+    segs = workloads.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
+    rand = 'bf16-exact-rand'
+    a = scoring.frozen(model, run, segs, [rand], seed=3)['frozen'][rand].kl
+    scoring.frozen(model, run, segs, ['bf16-exact-rtz', rand], seed=7)
+    b = scoring.frozen(model, run, segs, [rand], seed=3)['frozen'][rand].kl
+    c = scoring.frozen(model, run, segs, [rand], seed=4)['frozen'][rand].kl
+    assert a == b != c
+
+
+def test_divergence_averages_over_the_scored_positions() -> None:
+    """With a mask, KL and disagreement are means over the marked positions
+    alone, across blocks; without one, over every position."""
+    g = torch.Generator().manual_seed(0)
+    ref = torch.log_softmax(torch.randn(10, 7, generator=g, dtype=torch.float64), -1)
+    run = torch.log_softmax(torch.randn(10, 7, generator=g, dtype=torch.float64), -1)
+    kl = (ref.exp() * (ref - run)).sum(-1)
+    scored = torch.tensor([i % 3 == 0 for i in range(10)])
+    d = scoring.Divergence()
+    d.add(list(ref.split(4)), run.split(4), scored)
+    d.add(list(ref.split(4)), run.split(4))
+    assert math.isclose(d.kl[0], kl[scored].mean().item(), rel_tol=1e-12)
+    assert math.isclose(d.kl[1], kl.mean().item(), rel_tol=1e-12)

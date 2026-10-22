@@ -35,7 +35,7 @@ def main(argv: list[str]) -> int:
     segs = [segs[i] for i in workloads.pick(len(segs), args.segments or None, args.seed)]
     model, run, about = cli.load(args, designs=runs)
 
-    totals = scoring.evaluate(model, run, segs, runs, progress=True)
+    totals = scoring.evaluate(model, run, segs, runs, seed=args.seed, progress=True)
     results = {
         'model': args.model, 'scheme': args.scheme.name, **about,
         'context': workloads.CONTEXT, 'segments': len(segs), 'seed': args.seed,

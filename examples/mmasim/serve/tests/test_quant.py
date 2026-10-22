@@ -86,6 +86,18 @@ def test_elements_and_scales_are_in_the_schemes_formats(name: str) -> None:
                 assert float(ctx.round(v)) == v, (name, v)
 
 
+@pytest.mark.parametrize('name', quant.NAMES)
+def test_fp32_values_are_the_exact_ones_rounded_once(name: str) -> None:
+    """`values` is `dequantize` rounded to FP32, bit for bit, for both
+    operands over twelve binades."""
+    s = quant.scheme(name)
+    g = torch.Generator().manual_seed(2)
+    for op, shape in ((s.x, (4, 256)), (s.w, (192, 256))):
+        t = torch.randn(shape, generator=g) * 2.0 ** torch.randint(-6, 6, shape, generator=g)
+        q = quant.quantize(t, op)
+        assert torch.equal(q.values(), q.dequantize().float()), name
+
+
 def test_only_the_software_scaled_fp8_schemes_take_fnuz() -> None:
     assert quant.scheme('fp8-row:fnuz').w.elements == fp.S1E4M3
     for bad in ('mxfp8:fnuz', 'bf16:fnuz', 'fp8-row:e5m2'):

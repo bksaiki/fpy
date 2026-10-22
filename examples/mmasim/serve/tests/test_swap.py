@@ -125,3 +125,18 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
     for run.mode in swap.modes(scheme)[2:]:
         assert (_logits(model, tokens) - exact).abs().max() < quantizing
     run.mode, run.scheme = 'fp32', swap.BF16
+
+
+def test_a_calibration_run_rounds_to_its_precision() -> None:
+    """At 10 fraction bits the exact product rounds as FP16 does (in its
+    normal range); every calibration run is a known mode, the exact run's
+    rounding at its precision."""
+    g = torch.Generator().manual_seed(0)
+    p = torch.randn(4096, dtype=torch.float64, generator=g) * 2.0 ** torch.randint(-10, 10, (4096,), generator=g)
+    p = p[p.abs() >= 2.0 ** -14]
+    assert torch.equal(swap._fraction(p, 10), p.half().double())
+    assert torch.equal(swap._fraction(p, 22).float().double(), swap._fraction(p, 22))
+    fp8 = quant.SCHEMES['fp8-row']
+    assert [swap._exact_run(m, fp8) for m in swap.calibration(fp8)] == [('nearest', t) for t in swap.PRECISIONS]
+    assert swap._exact_run('fp8-row-exact-p99', fp8) is None
+    assert swap._exact_run('nv.hopper.e4m3.f32', fp8) is None
