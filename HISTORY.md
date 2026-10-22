@@ -1,5 +1,32 @@
 # Version History
 
+## 0.3.0 - 2026-10-22
+
+### License:
+ - relicensed from MIT to Apache 2.0; releases through 0.2.4 remain under MIT
+
+### Features:
+ - Analysis:
+   - format inference:
+     - refine from conditions of the form `abs(x) >= 2 ** k`
+     - tighter bounds for sums
+     - account for aliased arguments
+   - digit bound: precise handling of lists
+   - alias and escape: track tuple fields
+ - Backend:
+   - Triton:
+     - arithmetic rounding toward zero, down, up, and to odd
+     - double rounding through directed and wider intermediates
+
+### Fixes:
+ - Interpreter:
+   - sign of an exactly zero sum when rounding toward negative
+ - Analysis:
+   - format inference: list writes at different nesting levels and inside comprehensions
+   - alias: a call's retained values may land in any list it receives
+ - Backend:
+   - Triton: exact rounding held in its own storage
+
 ## 0.2.4 - 2026-10-12
 
 ### Features:
