@@ -38,6 +38,7 @@ from fpy2.backend.triton.normalize import normalize_module
 from fpy2.transform.const_fold import ConstFold
 
 OUT = ROOT / 'output' / 'rq1'
+CPP = OUT / 'cpp'
 GEMM = Path(__file__).with_name('gemm.hpp')
 CXX = os.environ.get('CXX', 'c++')
 # designs per shared library: one C++ compile reads the headers once
@@ -83,8 +84,12 @@ def designs() -> list[tuple[str, dict, generator.Design]]:
     return out
 
 
-def to_cpp(d: generator.Design) -> dict:
-    """*d* in C++, or why FPy refused it, and how long that took."""
+def to_cpp(item: tuple[str, generator.Design]) -> dict:
+    """Design *item* in C++, or why FPy refused it, and how long that took (cached in `CPP`)."""
+    name, d = item
+    path = CPP / f'{name}.json'
+    if path.exists():
+        return json.loads(path.read_text()) | {'cached': True}
     t0 = time.perf_counter()
     try:
         func, arg_types = generator.build(d)
@@ -96,7 +101,10 @@ def to_cpp(d: generator.Design) -> dict:
         out = {'src': src, 'entry': func.name}
     except Exception as e:
         out = {'reason': f'{type(e).__name__}: {e}'.splitlines()[0][:300]}
-    return out | {'secs': time.perf_counter() - t0}
+    out = out | {'secs': time.perf_counter() - t0}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out))
+    return out
 
 
 def _cxx() -> tuple[str, list[str]]:
@@ -289,9 +297,13 @@ def main(argv: list[str]) -> int:
     rows = [r for r in designs() if r[0] in args.formats]
     names = [generator.name(d) for _, _, d in rows]
     todo = dict(zip(names, (d for _, _, d in rows)))
-    print(f'compiling {len(todo)} designs', flush=True)
     t0 = time.perf_counter()
-    compiled = dict(zip(todo, mm.in_processes(to_cpp, todo.values(), args.jobs)))
+    compiled = {}
+    for i, (n, c) in enumerate(zip(todo, mm.in_processes(to_cpp, todo.items(), args.jobs)), 1):
+        compiled[n] = c
+        status = 'cached' if c.get('cached') else f'{c["secs"]:.1f}s'
+        print(f'[compile {i}/{len(todo)}] {n} {status}'
+              + (f' refused: {c["reason"]}' if 'reason' in c else ''), flush=True)
     t_compile = time.perf_counter() - t0
 
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(args.jobs) as pool:
@@ -312,11 +324,16 @@ def main(argv: list[str]) -> int:
 
             t0 = time.perf_counter()
             graded = {}
-            for n in dict.fromkeys(n for n, r in zip(names, rows) if r[0] == fmt and n in gemms):
+            mine = list(dict.fromkeys(n for n, r in zip(names, rows) if r[0] == fmt and n in gemms))
+            for i, n in enumerate(mine, 1):
                 t1 = time.perf_counter()
-                graded[n] = (grade(gemms[n], cases, args.jobs), time.perf_counter() - t1)
-                if len(graded) % 100 == 0:
-                    print(f'[{fmt}] graded {len(graded)}', flush=True)
+                fA = grade(gemms[n], cases, args.jobs)
+                graded[n] = (fA, time.perf_counter() - t1)
+                # the worst f_A / n: grade A below 1
+                worst = max(v / k for by_n in fA.values() for k, by_s in by_n.items()
+                            for v in by_s.values())
+                print(f'[{fmt} {i}/{len(mine)}] {n} {graded[n][1]:.1f}s worst f_A/n {worst:.3g}',
+                      flush=True)
 
             out = {'format': fmt, 'commit': commit, 'machine': platform.platform(), 'cxx': cxx,
                    'cpus': os.cpu_count(), 'jobs': args.jobs,
@@ -325,6 +342,7 @@ def main(argv: list[str]) -> int:
                    'designs': [{'name': n, 'tag': tag, 'about': generator.about(d),
                                 'refused': compiled[n].get('reason'),
                                 'compile_secs': compiled[n]['secs'],
+                                'compile_cached': compiled[n].get('cached', False),
                                 'grade_secs': graded[n][1] if n in graded else None,
                                 'fA': graded[n][0] if n in graded else None}
                                for n, (f, tag, d) in zip(names, rows) if f == fmt]}
