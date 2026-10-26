@@ -39,6 +39,7 @@ from fpy2.transform.const_fold import ConstFold
 
 OUT = ROOT / 'output' / 'rq1'
 CPP = OUT / 'cpp'
+GRADED = OUT / 'graded'
 GEMM = Path(__file__).with_name('gemm.hpp')
 CXX = os.environ.get('CXX', 'c++')
 # designs per shared library: one C++ compile reads the headers once
@@ -85,7 +86,7 @@ def designs() -> list[tuple[str, dict, generator.Design]]:
 
 
 def to_cpp(item: tuple[str, generator.Design]) -> dict:
-    """Design *item* in C++, or why FPy refused it, and how long that took (cached in `CPP`)."""
+    """Design item in C++, or why FPy refused it, and how long that took (cached in `CPP`)."""
     name, d = item
     path = CPP / f'{name}.json'
     if path.exists():
@@ -129,7 +130,7 @@ extern "C" __attribute__((visibility("default"))) void gemm_@I@(
 
 
 def build_lib(cmd: list[str], tmp: Path, batch: list[dict]) -> Path:
-    """One shared library for *batch* (`to_cpp` results), design `i` as `gemm_<i>`."""
+    """One shared library for batch (`to_cpp` results), design `i` as `gemm_<i>`."""
     parts = [mm._translation_unit(''), GEMM.read_text()]
     for i, c in enumerate(batch):
         parts.append(f'namespace d{i} {{\n{c["src"]}\n}}')
@@ -149,7 +150,7 @@ def _gemm(lib: ctypes.CDLL, i: int):
 
 
 def _mask(n: int, k: int, g: torch.Generator) -> torch.Tensor:
-    """*k* of *n* positions, at random."""
+    """k of n positions, at random."""
     m = torch.zeros(n, dtype=torch.bool)
     m[torch.randperm(n, generator=g)[:k]] = True
     return m
@@ -159,7 +160,7 @@ def _mask(n: int, k: int, g: torch.Generator) -> torch.Tensor:
 # seeds a fresh generator for each step, so every s draws the same values.
 
 def test_1c(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """*A*, *B*, and the rows and columns of the target entries."""
+    """A, B, and the rows and columns of the target entries."""
     g = torch.Generator().manual_seed(SEED)
     A, B = torch.randn(n, n, generator=g), torch.randn(n, n, generator=g)
     g = torch.Generator().manual_seed(SEED)
@@ -237,15 +238,16 @@ def _exact(A: torch.Tensor, Bt: torch.Tensor, I: torch.Tensor,
 
 
 def _quantize(X: torch.Tensor, fmt: str) -> torch.Tensor:
-    """*X* rounded to *fmt* (to nearest, ties to even), held in FP64."""
+    """X rounded to fmt (to nearest, ties to even), held in FP64."""
     q = quant.quantize(X, quant.Operand(FORMATS[fmt][0])).elements.double()
     # `FORMATS`' s takes every N(0, 1) draw below 6
     assert q.isfinite().all()
     return q
 
 
-def build_case(job: tuple[str, str, int, int]) -> Case:
-    """The `Case` of *job*: (format, test, `n`, `s`)."""
+def build_case(job: tuple[str, str, int, int]) -> tuple:
+    """The `Case` of job (format, test, `n`, `s`), with numpy arrays for tensors: a
+    tensor returned from a worker holds a file descriptor open."""
     fmt, test, n, s = job
     if test == '1c':
         A, B, I, J = test_1c(n, s)
@@ -261,7 +263,7 @@ def build_case(job: tuple[str, str, int, int]) -> Case:
         # below FP32's normals, even a correctly rounded result misses grade A
         keep = (exact == 0) | (exact.abs() >= FP32_UN)
         I, J, exact, size = I[keep], J[keep], exact[keep], size[keep]
-    return Case(test, n, s, A, Bt, I.contiguous(), J.contiguous(), exact, size)
+    return test, n, s, *(t.numpy() for t in (A, Bt, I.contiguous(), J.contiguous(), exact, size))
 
 
 def f_a(got: torch.Tensor, c: Case) -> float:
@@ -273,7 +275,7 @@ def f_a(got: torch.Tensor, c: Case) -> float:
 
 
 def grade(gemm, cases: list[Case], threads: int) -> dict:
-    """`f_A` of design *gemm* on each of *cases*, by test, `n` and `s`."""
+    """`f_A` of design gemm on each of cases, by test, `n` and `s`."""
     fA: dict = {}
     for c in cases:
         got = torch.empty(len(c.I), dtype=torch.float64)
@@ -317,23 +319,29 @@ def main(argv: list[str]) -> int:
         t_build = time.perf_counter() - t0
 
         for fmt in args.formats:
+            done = GRADED / fmt
+            done.mkdir(parents=True, exist_ok=True)
+            mine = list(dict.fromkeys(n for n, r in zip(names, rows) if r[0] == fmt and n in gemms))
+            left = [n for n in mine if not (done / f'{n}.json').exists()]
+            print(f'[{fmt}] {len(mine) - len(left)} graded already, {len(left)} to go', flush=True)
+
             t0 = time.perf_counter()
             jobs = [(fmt, test, n, s) for test in ('1c', '2c') for n in NS for s in FORMATS[fmt][2]]
-            cases = list(mm.in_processes(build_case, jobs, args.jobs))
+            cases = [Case(*c[:3], *map(torch.from_numpy, c[3:]))
+                     for c in mm.in_processes(build_case, jobs if left else [], args.jobs)]
             t_cases = time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            graded = {}
-            mine = list(dict.fromkeys(n for n, r in zip(names, rows) if r[0] == fmt and n in gemms))
-            for i, n in enumerate(mine, 1):
+            for i, n in enumerate(left, 1):
                 t1 = time.perf_counter()
                 fA = grade(gemms[n], cases, args.jobs)
-                graded[n] = (fA, time.perf_counter() - t1)
+                secs = time.perf_counter() - t1
+                (done / f'{n}.json').write_text(json.dumps({'fA': fA, 'secs': secs}))
                 # the worst f_A / n: grade A below 1
                 worst = max(v / k for by_n in fA.values() for k, by_s in by_n.items()
                             for v in by_s.values())
-                print(f'[{fmt} {i}/{len(mine)}] {n} {graded[n][1]:.1f}s worst f_A/n {worst:.3g}',
-                      flush=True)
+                print(f'[{fmt} {i}/{len(left)}] {n} {secs:.1f}s worst f_A/n {worst:.3g}', flush=True)
+            graded = {n: json.loads((done / f'{n}.json').read_text()) for n in mine}
 
             out = {'format': fmt, 'commit': commit, 'machine': platform.platform(), 'cxx': cxx,
                    'cpus': os.cpu_count(), 'jobs': args.jobs,
@@ -343,8 +351,8 @@ def main(argv: list[str]) -> int:
                                 'refused': compiled[n].get('reason'),
                                 'compile_secs': compiled[n]['secs'],
                                 'compile_cached': compiled[n].get('cached', False),
-                                'grade_secs': graded[n][1] if n in graded else None,
-                                'fA': graded[n][0] if n in graded else None}
+                                'grade_secs': graded[n]['secs'] if n in graded else None,
+                                'fA': graded[n]['fA'] if n in graded else None}
                                for n, (f, tag, d) in zip(names, rows) if f == fmt]}
             OUT.mkdir(parents=True, exist_ok=True)
             (OUT / f'{fmt}.json').write_text(json.dumps(out, indent=1))
