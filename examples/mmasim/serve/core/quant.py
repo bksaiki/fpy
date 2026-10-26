@@ -70,7 +70,7 @@ NAMES = (*SCHEMES, 'fp8-row:fnuz', 'fp8-block:fnuz')
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
 DTYPES = {
-    fp.BF16: torch.bfloat16,
+    fp.BF16: torch.bfloat16, fp.FP16: torch.float16,
     fp.MX_E4M3: torch.float8_e4m3fn, fp.MX_E5M2: torch.float8_e5m2,
     fp.S1E4M3: torch.float8_e4m3fnuz, fp.S1E5M2: torch.float8_e5m2fnuz,
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
