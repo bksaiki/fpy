@@ -16,7 +16,7 @@ MODELS = (
     ("nv.ampere.bf16.f32", "nv.ampere.bf16.f32.cpp"),
     ("nv.ada.e5m2.f32", "nv.ada.e5m2.f32.cpp"),
     ("nv.hopper.f16.f32", "nv.hopper.f16.f32.cpp"),
-    ("nv.blackwell.mxfp8", "nv.blackwell.mxfp8.cpp"),
+    ("nv.blackwell.mx.e5m2", "nv.blackwell.mx.e5m2.cpp"),
     ("nv.blackwell.nvfp4", "nv.blackwell.nvfp4.cpp"),
     ("amd.cdna2.bf16", "amd.cdna2.bf16.cpp"),
     ("amd.cdna2.f16", "amd.cdna2.f16.cpp"),

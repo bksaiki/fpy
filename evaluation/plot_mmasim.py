@@ -16,12 +16,51 @@ os.environ.setdefault("MPLCONFIGDIR", str(EVALUATION_ROOT / ".matplotlib"))
 def read_summaries(path: Path) -> list[dict[str, Any]]:
     with path.open(newline="") as source:
         rows: list[dict[str, Any]] = list(csv.DictReader(source))
+    # Older results also measured a "stress" workload; plot normal inputs only.
+    rows = [row for row in rows if row.get("workload", "normal") == "normal"]
     for row in rows:
+        row["dot_length"] = int(row["dot_length"])
         row["batch_size"] = int(row["batch_size"])
         row["threads"] = int(row["threads"])
         row["relative_iqr"] = float(row["relative_iqr"])
-        row["dpa_per_second"] = float(row["dpa_per_second"])
+        row["dots_per_second"] = float(row["dots_per_second"])
     return rows
+
+
+COLORS = {"fpy-core": "#2a78d6", "mmasim": "#eb6834"}
+PLOTS = {
+    "throughput": (
+        "Complete dot products per second",
+        "FPy versus eager MMA-Sim throughput",
+    ),
+    "speedup": ("FPy speedup over eager MMA-Sim", "FPy relative performance"),
+}
+
+
+def plot_points(
+    rows: list[dict[str, Any]], kind: str
+) -> dict[str, list[tuple[int, float]]]:
+    """Select throughput series or matched FPy/MMA-Sim ratios for one design."""
+    rates = {
+        implementation: {
+            row["batch_size"]: row["dots_per_second"]
+            for row in rows
+            if row["implementation"] == implementation
+        }
+        for implementation in COLORS
+    }
+    if kind == "speedup":
+        fpy, mmasim = rates["fpy-core"], rates["mmasim"]
+        rates = {
+            "fpy-core": {
+                batch: fpy[batch] / mmasim[batch]
+                for batch in fpy.keys() & mmasim.keys()
+            }
+        }
+    return {
+        implementation: sorted(values.items())
+        for implementation, values in rates.items()
+    }
 
 
 def plot_results(rows: list[dict[str, Any]], designs: list[str], output: Path) -> None:
@@ -29,118 +68,94 @@ def plot_results(rows: list[dict[str, Any]], designs: list[str], output: Path) -
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import EngFormatter, FuncFormatter
 
-    implementations = ("fpy-core", "fpy-quantize", "mmasim")
-    colors = {"fpy-core": "#0072B2", "fpy-quantize": "#009E73", "mmasim": "#D55E00"}
-    for workload in sorted({row["workload"] for row in rows}):
-        workload_rows = [row for row in rows if row["workload"] == workload]
-        height = math.ceil(len(designs) / 4)
-
-        fig, axes = plt.subplots(height, 4, figsize=(15, 3.2 * height), squeeze=False)
-        for axis, design in zip(axes.flat, designs):
-            design_rows = [row for row in workload_rows if row["design"] == design]
-            for implementation in implementations:
-                points = sorted(
-                    (
-                        row
-                        for row in design_rows
-                        if row["implementation"] == implementation
-                    ),
-                    key=lambda row: row["batch_size"],
-                )
-                if points:
-                    axis.plot(
-                        [row["batch_size"] for row in points],
-                        [row["dpa_per_second"] for row in points],
-                        marker="o",
-                        label=implementation,
-                        color=colors[implementation],
-                    )
-            axis.set_title(design, fontsize=9)
-            axis.set_xscale("log", base=2)
-            axis.set_yscale("log")
-            axis.grid(True, which="both", alpha=0.25)
-        for axis in axes.flat[len(designs) :]:
-            axis.set_visible(False)
-        axes.flat[0].legend()
-        fig.supxlabel("batch size (DPAs per call)")
-        fig.supylabel("DPAs per second")
-        fig.suptitle(f"FPy versus eager MMA-Sim throughput — {workload}")
-        fig.tight_layout()
-        fig.savefig(output / f"throughput-{workload}.png", dpi=180)
-        plt.close(fig)
-
-        fig, axes = plt.subplots(height, 4, figsize=(15, 3.2 * height), squeeze=False)
-        for axis, design in zip(axes.flat, designs):
-            design_rows = [row for row in workload_rows if row["design"] == design]
-            by_key = {
-                (row["implementation"], row["batch_size"]): row for row in design_rows
+    formatters = {
+        "throughput": EngFormatter(),
+        "speedup": FuncFormatter(lambda value, _: f"{value:g}×"),
+    }
+    positions = range(len(designs))
+    for length in sorted({row["dot_length"] for row in rows}):
+        selected = [row for row in rows if row["dot_length"] == length]
+        batches = sorted({row["batch_size"] for row in selected})
+        columns = min(3, len(batches))
+        height = math.ceil(len(batches) / columns)
+        for kind, (ylabel, title) in PLOTS.items():
+            # values[design][implementation][batch]
+            values = {
+                design: {
+                    implementation: dict(points)
+                    for implementation, points in plot_points(
+                        [row for row in selected if row["design"] == design], kind
+                    ).items()
+                }
+                for design in designs
             }
-            batches = sorted({row["batch_size"] for row in design_rows})
-            for implementation in ("fpy-core", "fpy-quantize"):
-                points = [
-                    (
-                        batch,
-                        by_key[implementation, batch]["dpa_per_second"]
-                        / by_key["mmasim", batch]["dpa_per_second"],
-                    )
-                    for batch in batches
-                    if (implementation, batch) in by_key and ("mmasim", batch) in by_key
-                ]
-                if points:
-                    axis.plot(
-                        [point[0] for point in points],
-                        [point[1] for point in points],
-                        marker="o",
+            series = ["fpy-core"] if kind == "speedup" else list(COLORS)
+            width = 0.8 / len(series)
+            fig, axes = plt.subplots(
+                height, columns, figsize=(6 * columns, 4.2 * height), squeeze=False
+            )
+            for axis, batch in zip(axes.flat, batches):
+                for index, implementation in enumerate(series):
+                    offset = (index - (len(series) - 1) / 2) * width
+                    axis.bar(
+                        [position + offset for position in positions],
+                        [
+                            values[design][implementation].get(batch, math.nan)
+                            for design in designs
+                        ],
+                        width * 0.9,
                         label=implementation,
-                        color=colors[implementation],
+                        color=COLORS[implementation],
                     )
-            axis.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
-            axis.set_title(design, fontsize=9)
-            axis.set_xscale("log", base=2)
-            axis.set_yscale("log")
-            axis.grid(True, which="both", alpha=0.25)
-        for axis in axes.flat[len(designs) :]:
-            axis.set_visible(False)
-        axes.flat[0].legend()
-        fig.supxlabel("batch size (DPAs per call)")
-        fig.supylabel("FPy speedup over eager MMA-Sim")
-        fig.suptitle(f"FPy relative performance — {workload}")
-        fig.tight_layout()
-        fig.savefig(output / f"speedup-{workload}.png", dpi=180)
-        plt.close(fig)
+                if kind == "speedup":
+                    axis.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
+                axis.set_title(f"batch {batch}", fontsize=10)
+                axis.set_xticks(
+                    list(positions), designs, rotation=60, ha="right", fontsize=7
+                )
+                axis.yaxis.set_major_formatter(formatters[kind])
+                axis.set_ylim(bottom=0)
+                axis.grid(True, axis="y", alpha=0.25)
+                axis.set_axisbelow(True)
+            for axis in axes.flat[len(batches) :]:
+                axis.set_visible(False)
+            if len(series) > 1:
+                axes.flat[0].legend()
+            for axis in axes[:, 0]:
+                axis.set_ylabel(ylabel)
+            fig.suptitle(f"{title} — length {length}")
+            fig.tight_layout()
+            fig.savefig(output / f"{kind}-{length}.png", dpi=180)
+            plt.close(fig)
 
 
 def print_headline(
-    rows: list[dict[str, Any]], designs: list[str], workload: str, batch: int
+    rows: list[dict[str, Any]],
+    designs: list[str],
+    batch: int,
+    length: int,
 ) -> None:
     selected = {
         (row["design"], row["implementation"]): row
         for row in rows
-        if row["workload"] == workload and row["batch_size"] == batch
+        if row["batch_size"] == batch and row["dot_length"] == length
     }
-    threads = next(row["threads"] for row in rows if row["workload"] == workload)
-    print(f"Headline: workload={workload}, batch={batch}, threads={threads}")
-    print(
-        f"{'design':25} {'core DPA/s':>13} {'quantize DPA/s':>14} {'MMA-Sim DPA/s':>15} {'core':>8} {'quantize':>9}"
-    )
+    print(f"Headline: batch={batch}, length={length}")
+    print(f"{'design':25} {'FPy dots/s':>13} {'MMA-Sim dots/s':>15} {'speedup':>9}")
     for design in designs:
         fpy = selected.get((design, "fpy-core"))
-        quantize = selected.get((design, "fpy-quantize"))
         mmasim = selected.get((design, "mmasim"))
-        if not fpy or not quantize or not mmasim:
-            print(f"{design:25} {'invalid':>64}")
+        if not fpy or not mmasim:
+            print(f"{design:25} invalid or untimed")
             continue
-        core_speedup = fpy["dpa_per_second"] / mmasim["dpa_per_second"]
-        quantize_speedup = quantize["dpa_per_second"] / mmasim["dpa_per_second"]
-        unstable = (
-            max(fpy["relative_iqr"], quantize["relative_iqr"], mmasim["relative_iqr"])
-            > 0.10
-        )
+        speedup = fpy["dots_per_second"] / mmasim["dots_per_second"]
+        unstable = max(fpy["relative_iqr"], mmasim["relative_iqr"]) > 0.10
         print(
-            f"{design:25} {fpy['dpa_per_second']:13.3g} {quantize['dpa_per_second']:14.3g} "
-            f"{mmasim['dpa_per_second']:15.3g} {core_speedup:7.2f}x "
-            f"{quantize_speedup:8.2f}x{' !' if unstable else ''}"
+            f"{design:25} {fpy['dots_per_second']:13.3g} "
+            f"{mmasim['dots_per_second']:15.3g} {speedup:8.2f}x"
+            f"{' !' if unstable else ''}"
         )
 
 
@@ -150,8 +165,8 @@ def main() -> None:
     parser.add_argument(
         "--output", type=Path, help="plot directory; defaults to results"
     )
-    parser.add_argument("--workload", default="normal")
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--dot-length", type=int)
     args = parser.parse_args()
 
     results = args.results.expanduser().resolve()
@@ -161,11 +176,15 @@ def main() -> None:
     if not rows:
         raise SystemExit("summary.csv contains no measurements")
     designs = list(dict.fromkeys(row["design"] for row in rows))
-    batch = args.batch_size or max(
-        row["batch_size"] for row in rows if row["workload"] == args.workload
-    )
+    batch = args.batch_size or max(row["batch_size"] for row in rows)
     plot_results(rows, designs, output)
-    print_headline(rows, designs, args.workload, batch)
+    lengths = (
+        [args.dot_length]
+        if args.dot_length
+        else sorted({row["dot_length"] for row in rows})
+    )
+    for length in lengths:
+        print_headline(rows, designs, batch, length)
 
 
 if __name__ == "__main__":

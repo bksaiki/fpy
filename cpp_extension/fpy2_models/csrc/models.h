@@ -45,27 +45,27 @@ float tr_fdpa(
 }
 
 namespace fpy_models::model_nv_ada_e5m2_f32 {
-double t_fdpa_chain(
+float t_fdpa_chain(
     const std::array<float, 16>&,
     const std::array<float, 16>&,
     float);
 }
 
 namespace fpy_models::model_nv_ampere_bf16_f32 {
-double t_fdpa_chain(
+float t_fdpa_chain(
     const std::array<float, 16>&,
     const std::array<float, 16>&,
     float);
 }
 
 namespace fpy_models::model_nv_ampere_tf32_f32 {
-double t_fdpa_chain(
+float t_fdpa_chain(
     const std::array<float, 8>&,
     const std::array<float, 8>&,
     float);
 }
 
-namespace fpy_models::model_nv_blackwell_mxfp8 {
+namespace fpy_models::model_nv_blackwell_mx_e5m2 {
 float st_fdpa(
     const std::array<float, 32>&,
     const std::array<float, 32>&,
