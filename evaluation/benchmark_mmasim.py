@@ -1,4 +1,4 @@
-"""Benchmark compiled FPy MMA arithmetic kernels against eager MMA-Sim."""
+"""Benchmark compiled FPy MMA fixed-length dot products against eager MMA-Sim."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import product
+from operator import itemgetter
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +39,12 @@ sys.path.insert(0, str(FPY_MODELS_ROOT))
 try:
     import fpy2_models
     from fpy2_models.ops import _quantize_tf32
-    from fpy2_models.quantization import quantize_e2m1
+    from torchao.prototype.mx_formats.kernels import (
+        f4_unpacked_to_f32,
+        unpack_uint4,
+    )
+    from torchao.prototype.mx_formats.mx_tensor import to_mx
+    from torchao.prototype.mx_formats.nvfp4_tensor import nvfp4_quantize
 except ImportError as exc:
     raise SystemExit(
         "Could not import the fpy2_models extension. Build it first with:\n"
@@ -50,16 +57,20 @@ class Case:
     """One pair of equivalent FPy and MMA-Sim arithmetic kernels."""
 
     name: str
-    op_name: str
     k: int
     storage_dtype: torch.dtype
-    accumulator_dtype: torch.dtype
     reference: object
     kind: str = "dpa"
     tf32: bool = False
-    scale_dtype: torch.dtype | None = None
-    scale_count: int = 0
-    operand_format: str = ""
+    scale_block: int | None = None
+
+    @property
+    def op_name(self) -> str:
+        return self.name.replace(".", "_")
+
+    @property
+    def accumulator_dtype(self) -> torch.dtype:
+        return torch.float64 if self.storage_dtype == torch.float64 else torch.float32
 
 
 @dataclass(frozen=True)
@@ -67,7 +78,6 @@ class Prepared:
     """Inputs and zero-argument callables for one timed configuration."""
 
     fpy: Callable[[], Tensor]
-    fpy_quantize: Callable[[], Tensor]
     mmasim: Callable[[], Tensor]
 
 
@@ -104,148 +114,110 @@ def build_cases(mmasim_root: Path) -> list[Case]:
     _configure_macos_compiler()
 
     try:
-        from mmasim.arithmetic import fdpa, fma, ftz_mul_add
+        from mmasim import amd, nv_ptx
     except (ImportError, RuntimeError) as exc:
         raise SystemExit(
-            "Could not import the local MMA-Sim arithmetic models. On macOS, "
+            "Could not import the local MMA-Sim simulators. On macOS, "
             "MMA-Sim's FP64 helper requires an OpenMP-capable compiler; install "
             "Homebrew LLVM or set CXX to one before running the benchmark.\n"
             f"Original error: {exc}"
         ) from exc
 
+    # MMA-Sim's instruction simulators select each design's arithmetic model
+    # and its parameters from the architecture and instruction type.
     return [
         Case(
             "nv.volta.f16.f32",
-            "nv_volta_f16_f32",
             8,
             torch.float16,
-            torch.float32,
-            fdpa.MMA_T_FDPA(23, "RZ-FP32", 4, -131),
-            operand_format="fp16",
+            nv_ptx.MMA("Volta", "m8n8k4.f32.f16.f16.f32"),
         ),
         Case(
             "nv.turing.f16.f32",
-            "nv_turing_f16_f32",
             16,
             torch.float16,
-            torch.float32,
-            fdpa.MMA_T_FDPA(24, "RZ-FP32", 8, -132),
-            operand_format="fp16",
+            nv_ptx.MMA("Turing", "m16n8k8.f32.f16.f16.f32"),
         ),
         Case(
             "nv.ampere.tf32.f32",
-            "nv_ampere_tf32_f32",
             8,
             torch.float32,
-            torch.float32,
-            fdpa.MMA_T_FDPA(24, "RZ-FP32", 4, -132),
+            nv_ptx.MMA("Ampere", "m16n8k8.f32.tf32.tf32.f32"),
             tf32=True,
-            operand_format="tf32",
         ),
         Case(
             "nv.ampere.bf16.f32",
-            "nv_ampere_bf16_f32",
             16,
             torch.bfloat16,
-            torch.float32,
-            fdpa.MMA_T_FDPA(24, "RZ-FP32", 8, -132),
-            operand_format="bf16",
+            nv_ptx.MMA("Ampere", "m16n8k16.f32.bf16.bf16.f32"),
         ),
         Case(
             "nv.ada.e5m2.f32",
-            "nv_ada_e5m2_f32",
             16,
             torch.float8_e5m2,
-            torch.float32,
-            fdpa.MMA_T_FDPA(13, "RZ-E8M13", 16, -132),
-            operand_format="e5m2",
+            nv_ptx.MMA("Ada Lovelace", "m16n8k16.f32.e5m2.e5m2.f32"),
         ),
         Case(
             "nv.hopper.f16.f32",
-            "nv_hopper_f16_f32",
             32,
             torch.float16,
-            torch.float32,
-            fdpa.MMA_T_FDPA(25, "RZ-FP32", 16, -133),
-            operand_format="fp16",
+            nv_ptx.WGMMA("Hopper", "m64n8k16.f32.f16.f16"),
         ),
         Case(
             "nv.blackwell.mxfp8",
-            "nv_blackwell_mxfp8",
             32,
             torch.float8_e5m2,
-            torch.float32,
-            fdpa.MMA_ST_FDPA(25, "RZ-FP32", 32, -133),
+            nv_ptx.TCGen05MMABlockScale(
+                "Blackwell", "m128n8k32.block32.f32.e5m2.e5m2.ue8m0"
+            ),
             kind="scaled",
-            scale_dtype=torch.float8_e8m0fnu,
-            scale_count=1,
-            operand_format="e5m2",
+            scale_block=32,
         ),
         Case(
             "nv.blackwell.nvfp4",
-            "nv_blackwell_nvfp4",
             64,
             torch.float32,
-            torch.float32,
-            fdpa.MMA_GST_FDPA(16, 35, "RZ-FP32", 64, -139),
+            nv_ptx.TCGen05MMABlockScale(
+                "Blackwell", "m128n8k64.block16.f32.e2m1.e2m1.ue4m3"
+            ),
             kind="group_scaled",
-            scale_dtype=torch.float8_e4m3fn,
-            scale_count=4,
-            operand_format="e2m1",
+            scale_block=16,
         ),
         Case(
             "amd.cdna2.bf16",
-            "amd_cdna2_bf16",
             4,
             torch.bfloat16,
-            torch.float32,
-            ftz_mul_add.MMA_FTZ_MUL_ADD(2),
-            operand_format="bf16",
+            amd.MFMA("CDNA2", "f32_32x32x4bf16"),
         ),
         Case(
             "amd.cdna2.f16",
-            "amd_cdna2_f16",
             4,
             torch.float16,
-            torch.float32,
-            ftz_mul_add.MMA_FTZ_MUL_ADD(4),
-            operand_format="fp16",
+            amd.MFMA("CDNA2", "f32_32x32x8f16"),
         ),
         Case(
             "amd.cdna3.f16",
-            "amd_cdna3_f16",
             8,
             torch.float16,
-            torch.float32,
-            fdpa.MMA_TR_FDPA(24, 31, "RNE-FP32", 8),
-            operand_format="fp16",
+            amd.MFMA("CDNA3", "f32_32x32x8_f16"),
         ),
         Case(
             "amd.cdna3.bf16",
-            "amd_cdna3_bf16",
             8,
             torch.bfloat16,
-            torch.float32,
-            fdpa.MMA_TR_FDPA(24, 31, "RNE-FP32", 8),
-            operand_format="bf16",
+            amd.MFMA("CDNA3", "f32_32x32x8_bf16"),
         ),
         Case(
             "amd.cdna3.bf8",
-            "amd_cdna3_bf8",
             16,
             torch.float8_e5m2fnuz,
-            torch.float32,
-            fdpa.MMA_GTR_FDPA(24, 31, "RNE-FP32", 16),
-            operand_format="bf8",
+            amd.MFMA("CDNA3", "f32_32x32x16_bf8_bf8"),
         ),
         Case(
             "fp64.fma",
-            "fp64_fma",
             4,
             torch.float64,
-            torch.float64,
-            fma.MMA_FMA(),
-            operand_format="fp64",
+            nv_ptx.MMA("Ampere", "m8n8k4.f64.f64.f64.f64"),
         ),
     ]
 
@@ -261,32 +233,13 @@ def select_cases(cases: Sequence[Case], filters: Sequence[str]) -> list[Case]:
     return selected
 
 
-def _source_values(case: Case, batch: int, workload: str, seed: int) -> Tensor:
+def _source_values(batch: int, seed: int, length: int) -> Tensor:
     generator = torch.Generator().manual_seed(seed)
-    if workload == "normal":
-        return (
-            torch.randn((batch, case.k), dtype=torch.float64, generator=generator) * 0.5
-        )
-
-    if case.operand_format == "e2m1":
-        tiny = 0.5
-    else:
-        tiny = float(torch.finfo(case.storage_dtype).smallest_normal)
-    values = torch.tensor(
-        [0.0, -0.0, tiny / 2.0, -tiny / 2.0, tiny, -tiny, 0.5, -0.5],
-        dtype=torch.float64,
-    )
-    offset = int(torch.randint(len(values), (), generator=generator).item())
-    indices = (torch.arange(batch * case.k) + offset) % len(values)
-    return values[indices].reshape(batch, case.k)
+    return torch.randn((batch, length), dtype=torch.float64, generator=generator) * 0.5
 
 
 def _operand_views(case: Case, source: Tensor) -> tuple[Tensor, Tensor]:
     """Return (MMA-Sim storage view, FPy C++ compute view)."""
-    if case.operand_format == "e2m1":
-        quantized = quantize_e2m1(source)
-        return quantized, quantized
-
     storage = source.to(case.storage_dtype)
     if case.tf32:
         return storage, _quantize_tf32(storage)
@@ -295,76 +248,67 @@ def _operand_views(case: Case, source: Tensor) -> tuple[Tensor, Tensor]:
     return storage, storage.float()
 
 
-def prepare_case(
-    case: Case,
-    batch: int,
-    workload: str,
-    seed: int,
-) -> Prepared:
-    """Prepare equivalent inputs and closures without timing setup work."""
-    a_source = _source_values(case, batch, workload, seed)
-    b_source = _source_values(case, batch, workload, seed + 1)
-    a_mmasim, a_fpy = _operand_views(case, a_source)
-    b_mmasim, b_fpy = _operand_views(case, b_source)
-
-    c_value = 0.125
-    c_mmasim = torch.full((batch,), c_value, dtype=case.accumulator_dtype)
-    c_fpy = torch.tensor(c_value, dtype=case.accumulator_dtype).item()
-    fpy_op = getattr(torch.ops.fpy2_models, case.op_name).default
-    fpy_quantize_op = getattr(fpy2_models, case.op_name)
-
-    if case.kind == "dpa":
-        return Prepared(
-            fpy=lambda: fpy_op(a_fpy, b_fpy, c_fpy),
-            fpy_quantize=lambda: fpy_quantize_op(a_mmasim, b_mmasim, c_fpy),
-            mmasim=lambda: case.reference.dpa(a_mmasim, b_mmasim, c_mmasim),
-        )
-
+def _block_scaled_operand(case: Case, source: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    """Return (MMA-Sim values, FPy values, scales) from TorchAO block quantization."""
+    source = source.float().contiguous()
     if case.kind == "scaled":
-        assert case.scale_dtype is not None
-        alpha_fpy, beta_fpy = 1.0, 2.0
-        alpha_mmasim = torch.full((batch, 1), alpha_fpy, dtype=case.scale_dtype)
-        beta_mmasim = torch.full((batch, 1), beta_fpy, dtype=case.scale_dtype)
-        return Prepared(
-            fpy=lambda: fpy_op(a_fpy, b_fpy, c_fpy, alpha_fpy, beta_fpy),
-            fpy_quantize=lambda: fpy_quantize_op(
-                a_mmasim,
-                b_mmasim,
-                c_fpy,
-                alpha_fpy,
-                beta_fpy,
-            ),
-            mmasim=lambda: case.reference.dpa(
-                a_mmasim, b_mmasim, c_mmasim, alpha_mmasim, beta_mmasim
-            ),
-        )
+        scales, values = to_mx(source, case.storage_dtype, case.scale_block)
+        return values, values.float(), scales
+    # Single-level NVFP4: the per-tensor scale lies outside the MMA.
+    scales, packed = nvfp4_quantize(source, case.scale_block)
+    values = f4_unpacked_to_f32(unpack_uint4(packed))
+    return values, values, scales
 
-    if case.kind == "group_scaled":
-        assert case.scale_dtype is not None
-        scale_source = torch.tensor([0.5, 1.0, 2.0, 4.0], dtype=torch.float32)
-        alpha_storage = scale_source.to(case.scale_dtype).repeat(batch, 1)
-        beta_storage = scale_source.flip(0).to(case.scale_dtype).repeat(batch, 1)
-        alpha_fpy = alpha_storage.float()
-        beta_fpy = beta_storage.float()
-        return Prepared(
-            fpy=lambda: fpy_op(a_fpy, b_fpy, c_fpy, alpha_fpy, beta_fpy),
-            fpy_quantize=lambda: fpy_quantize_op(
-                a_mmasim,
-                b_mmasim,
-                c_fpy,
-                alpha_storage,
-                beta_storage,
-            ),
-            mmasim=lambda: case.reference.dpa(
-                a_mmasim,
-                b_mmasim,
-                c_mmasim,
-                alpha_storage,
-                beta_storage,
-            ),
-        )
 
-    raise AssertionError(f"unknown case kind: {case.kind}")
+def prepare_case(case: Case, batch: int, seed: int, length: int = 1024) -> Prepared:
+    """Prepare full operands and chunk views outside the timed region.
+
+    Block-scaled designs carry one scale per block, sliced per model-sized
+    chunk for MMA-Sim. Both implementations start each invocation at zero and
+    preserve the model's accumulator rounding per chunk.
+    """
+    if length <= 0 or length % case.k:
+        raise ValueError(f"length must be a positive multiple of {case.k}")
+    a_source = _source_values(batch, seed, length)
+    b_source = _source_values(batch, seed + 1, length)
+    if case.kind == "dpa":
+        a_mmasim, a_fpy = _operand_views(case, a_source)
+        b_mmasim, b_fpy = _operand_views(case, b_source)
+        operands = [(a_mmasim, case.k), (b_mmasim, case.k)]
+        fpy_scales = ()
+    elif case.kind in ("scaled", "group_scaled"):
+        a_mmasim, a_fpy, a_scales = _block_scaled_operand(case, a_source)
+        b_mmasim, b_fpy, b_scales = _block_scaled_operand(case, b_source)
+        scales_per_chunk = case.k // case.scale_block
+        operands = [
+            (a_mmasim, case.k),
+            (b_mmasim, case.k),
+            (a_scales, scales_per_chunk),
+            (b_scales, scales_per_chunk),
+        ]
+        fpy_scales = (a_scales.float(), b_scales.float())
+    else:
+        raise AssertionError(f"unknown case kind: {case.kind}")
+    fpy_op = getattr(torch.ops.fpy2_models, case.op_name + "_dot").default
+    # Contiguous chunk tensors avoid charging MMA-Sim for strided input copies.
+    chunks = [
+        tuple(
+            tensor[:, i * width : (i + 1) * width].contiguous()
+            for tensor, width in operands
+        )
+        for i in range(length // case.k)
+    ]
+
+    def mmasim_dot() -> Tensor:
+        acc = torch.zeros((batch,), dtype=case.accumulator_dtype)
+        for a_chunk, b_chunk, *scales in chunks:
+            acc = case.reference.dpa(a_chunk, b_chunk, acc, *scales)
+        return acc
+
+    return Prepared(
+        fpy=lambda: fpy_op(a_fpy, b_fpy, *fpy_scales),
+        mmasim=mmasim_dot,
+    )
 
 
 def _integer_view(tensor: Tensor) -> Tensor:
@@ -380,47 +324,41 @@ def validate(prepared: Prepared) -> dict[str, Any]:
     """Return a serializable bitwise-validation result."""
     with torch.no_grad():
         actual = prepared.fpy()
-        quantize_actual = prepared.fpy_quantize()
         expected = prepared.mmasim()
     expected_bits = _integer_view(expected)
-    for implementation, candidate in (
-        ("fpy-core", actual),
-        ("fpy-quantize", quantize_actual),
-    ):
-        if candidate.shape != expected.shape or candidate.dtype != expected.dtype:
-            return {
-                "valid": False,
-                "implementation": implementation,
-                "reason": "shape or dtype mismatch",
-                "fpy_shape": list(candidate.shape),
-                "mmasim_shape": list(expected.shape),
-                "fpy_dtype": str(candidate.dtype),
-                "mmasim_dtype": str(expected.dtype),
-            }
-
-        candidate_bits = _integer_view(candidate)
-        differences = (candidate_bits != expected_bits).nonzero()
-        if differences.numel() == 0:
-            continue
-
-        flat_index = int(differences[0].item())
-        width = 32 if candidate.dtype == torch.float32 else 64
-        mask = (1 << width) - 1
+    if actual.shape != expected.shape or actual.dtype != expected.dtype:
         return {
             "valid": False,
-            "implementation": implementation,
-            "reason": "output bit mismatch",
-            "first_difference": flat_index,
-            "fpy_value": float(candidate.flatten()[flat_index]),
-            "mmasim_value": float(expected.flatten()[flat_index]),
-            "fpy_bits": (
-                f"0x{int(candidate_bits.flatten()[flat_index]) & mask:0{width // 4}x}"
-            ),
-            "mmasim_bits": (
-                f"0x{int(expected_bits.flatten()[flat_index]) & mask:0{width // 4}x}"
-            ),
+            "implementation": "fpy-core",
+            "reason": "shape or dtype mismatch",
+            "fpy_shape": list(actual.shape),
+            "mmasim_shape": list(expected.shape),
+            "fpy_dtype": str(actual.dtype),
+            "mmasim_dtype": str(expected.dtype),
         }
-    return {"valid": True}
+
+    actual_bits = _integer_view(actual)
+    differences = (actual_bits != expected_bits).nonzero()
+    if differences.numel() == 0:
+        return {"valid": True}
+
+    flat_index = int(differences[0].item())
+    width = 32 if actual.dtype == torch.float32 else 64
+    mask = (1 << width) - 1
+    return {
+        "valid": False,
+        "implementation": "fpy-core",
+        "reason": "output bit mismatch",
+        "first_difference": flat_index,
+        "fpy_value": float(actual.flatten()[flat_index]),
+        "mmasim_value": float(expected.flatten()[flat_index]),
+        "fpy_bits": (
+            f"0x{int(actual_bits.flatten()[flat_index]) & mask:0{width // 4}x}"
+        ),
+        "mmasim_bits": (
+            f"0x{int(expected_bits.flatten()[flat_index]) & mask:0{width // 4}x}"
+        ),
+    }
 
 
 def _quartiles(values: Sequence[float]) -> tuple[float, float, float]:
@@ -436,8 +374,8 @@ def time_callable(
     *,
     implementation: str,
     case: Case,
-    workload: str,
     batch: int,
+    length: int,
     threads: int,
     replicate: int,
     min_run_time: float,
@@ -455,8 +393,10 @@ def time_callable(
             {
                 "design": case.name,
                 "implementation": implementation,
-                "workload": workload,
                 "batch_size": batch,
+                "dot_length": length,
+                "model_width": case.k,
+                "chunks_per_dot": length // case.k,
                 "threads": threads,
                 "replicate": replicate,
                 "sample": sample,
@@ -468,82 +408,69 @@ def time_callable(
     return rows
 
 
-def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[Any, ...], list[float]] = defaultdict(list)
-    for row in rows:
-        key = (
-            row["design"],
-            row["implementation"],
-            row["workload"],
-            row["batch_size"],
-            row["threads"],
-        )
-        groups[key].append(row["seconds_per_call"])
+CONFIG_FIELDS = (
+    "design",
+    "implementation",
+    "batch_size",
+    "dot_length",
+    "model_width",
+    "threads",
+)
+config_key = itemgetter(*CONFIG_FIELDS)
+summary_order = itemgetter(
+    "design", "batch_size", "dot_length", "model_width", "implementation"
+)
+METRIC_FIELDS = (
+    "median_seconds_per_call",
+    "q1_seconds_per_call",
+    "iqr_seconds_per_call",
+    "relative_iqr",
+    "ns_per_dot",
+    "dots_per_second",
+    "terms_per_second",
+)
 
-    summaries: list[dict[str, Any]] = []
+
+def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = defaultdict(list)
+    for row in rows:
+        groups[config_key(row)].append(row["seconds_per_call"])
+
+    summaries = []
     for key, values in groups.items():
-        design, implementation, workload, batch, threads = key
+        config = dict(zip(CONFIG_FIELDS, key))
+        batch, length, width = (
+            config[k] for k in ("batch_size", "dot_length", "model_width")
+        )
         median, q1, iqr = _quartiles(values)
+        # Keep CSV columns in their established order.
+        threads = config.pop("threads")
         summaries.append(
             {
-                "design": design,
-                "implementation": implementation,
-                "workload": workload,
-                "batch_size": batch,
+                **config,
+                "chunks_per_dot": length // width,
                 "threads": threads,
                 "samples": len(values),
                 "median_seconds_per_call": median,
                 "q1_seconds_per_call": q1,
                 "iqr_seconds_per_call": iqr,
                 "relative_iqr": iqr / median,
-                "ns_per_dpa": median * 1e9 / batch,
-                "dpa_per_second": batch / median,
+                "ns_per_dot": median * 1e9 / batch,
+                "dots_per_second": batch / median,
+                "terms_per_second": batch * length / median,
             }
         )
-    return sorted(
-        summaries,
-        key=lambda row: (
-            row["workload"],
-            row["design"],
-            row["batch_size"],
-            row["implementation"],
-        ),
-    )
+    return sorted(summaries, key=summary_order)
 
 
 def enrich_measurements(
     rows: list[dict[str, Any]], summaries: list[dict[str, Any]]
 ) -> None:
     """Attach configuration aggregates to every normalized raw sample."""
-    by_key = {
-        (
-            row["design"],
-            row["implementation"],
-            row["workload"],
-            row["batch_size"],
-            row["threads"],
-        ): row
-        for row in summaries
-    }
+    by_key = {config_key(row): row for row in summaries}
     for row in rows:
-        summary = by_key[
-            (
-                row["design"],
-                row["implementation"],
-                row["workload"],
-                row["batch_size"],
-                row["threads"],
-            )
-        ]
-        for field in (
-            "median_seconds_per_call",
-            "q1_seconds_per_call",
-            "iqr_seconds_per_call",
-            "relative_iqr",
-            "ns_per_dpa",
-            "dpa_per_second",
-        ):
-            row[field] = summary[field]
+        summary = by_key[config_key(row)]
+        row.update((field, summary[field]) for field in METRIC_FIELDS)
 
 
 def _run_command(command: Sequence[str], cwd: Path | None = None) -> str | None:
@@ -627,12 +554,19 @@ def collect_metadata(args: argparse.Namespace, mmasim_root: Path) -> dict[str, A
         "parameters": {
             "design_filters": args.design,
             "batch_sizes": args.batch_sizes,
-            "workloads": args.workloads,
+            "dot_lengths": args.dot_lengths,
+            "initial_accumulator": 0,
+            "inputs": "normal(0, 0.5); MXFP8/NVFP4 block-quantized with TorchAO",
+            "fpy_chunk_loop": "native",
             "seed": args.seed,
             "replicates": args.replicates,
             "min_run_time": args.min_run_time,
         },
     }
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -654,14 +588,6 @@ def parse_int_list(value: str) -> list[int]:
     return values
 
 
-def parse_workloads(value: str) -> list[str]:
-    values = value.split(",")
-    unknown = set(values) - {"normal", "stress"}
-    if unknown:
-        raise argparse.ArgumentTypeError(f"unknown workloads: {sorted(unknown)}")
-    return values
-
-
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mmasim-root", type=Path, default=DEFAULT_MMASIM_ROOT)
@@ -674,10 +600,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-sizes",
         type=parse_int_list,
-        default=parse_int_list("1,16,256,4096,65536"),
+        default=parse_int_list("1,16,256"),
     )
     parser.add_argument(
-        "--workloads", type=parse_workloads, default=parse_workloads("normal,stress")
+        "--dot-lengths", type=parse_int_list, default=parse_int_list("1024,2048,8192")
     )
     parser.add_argument("--seed", type=int, default=20260928)
     parser.add_argument("--threads", type=int, default=1)
@@ -698,6 +624,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     mmasim_root = args.mmasim_root.expanduser().resolve()
     cases = select_cases(build_cases(mmasim_root), args.design)
 
+    for case in cases:
+        if any(length % case.k for length in args.dot_lengths):
+            raise SystemExit(
+                f"dot lengths must be multiples of {case.k} for {case.name}"
+            )
+
     if args.output is None:
         run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         output_dir = EVALUATION_ROOT / "results" / run_id
@@ -706,9 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=False)
 
     metadata = collect_metadata(args, mmasim_root)
-    (output_dir / "metadata.json").write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n"
-    )
+    write_json(output_dir / "metadata.json", metadata)
 
     validations: list[dict[str, Any]] = [
         {**entry, "status": "unsupported"} for entry in UNSUPPORTED
@@ -717,66 +647,63 @@ def main(argv: Sequence[str] | None = None) -> int:
     rng = random.Random(args.seed)
     started = time.monotonic()
 
-    for case_index, case in enumerate(cases):
-        for workload in args.workloads:
-            for batch in args.batch_sizes:
-                case_seed = args.seed + case_index * 1_000_003 + batch
-                prepared = prepare_case(case, batch, workload, case_seed)
-                result = validate(prepared)
-                validation = {
-                    "design": case.name,
-                    "workload": workload,
-                    "batch_size": batch,
-                    "seed": case_seed,
-                    **result,
-                }
-                validations.append(validation)
-                if not result["valid"]:
-                    print(
-                        f"INVALID {case.name} workload={workload} batch={batch}: "
-                        f"{result['reason']}",
-                        flush=True,
-                    )
-                    continue
-                if args.validate_only:
-                    print(
-                        f"VALID   {case.name} workload={workload} batch={batch}",
-                        flush=True,
-                    )
-                    continue
+    configurations = product(enumerate(cases), args.dot_lengths, args.batch_sizes)
+    for (case_index, case), length, batch in configurations:
+        case_seed = args.seed + case_index * 1_000_003 + batch
+        prepared = prepare_case(case, batch, case_seed, length)
+        result = validate(prepared)
+        validation = {
+            "design": case.name,
+            "instruction": f"{case.reference.arch} {case.reference.shape_and_type}",
+            "batch_size": batch,
+            "dot_length": length,
+            "model_width": case.k,
+            "seed": case_seed,
+            **result,
+        }
+        validations.append(validation)
+        label = f"{case.name} batch={batch} length={length}"
+        if not result["valid"]:
+            print(
+                f"INVALID {label}: {result['reason']}",
+                flush=True,
+            )
+            continue
+        if args.validate_only:
+            print(
+                f"VALID   {label}",
+                flush=True,
+            )
+            continue
 
-                prepared.fpy()
-                prepared.fpy_quantize()
-                prepared.mmasim()
-                implementations = [
-                    ("fpy-core", prepared.fpy),
-                    ("fpy-quantize", prepared.fpy_quantize),
-                    ("mmasim", prepared.mmasim),
-                ]
-                for replicate in range(args.replicates):
-                    rng.shuffle(implementations)
-                    for implementation, fn in implementations:
-                        rows.extend(
-                            time_callable(
-                                fn,
-                                implementation=implementation,
-                                case=case,
-                                workload=workload,
-                                batch=batch,
-                                threads=args.threads,
-                                replicate=replicate,
-                                min_run_time=args.min_run_time,
-                                rng=rng,
-                            )
-                        )
-                print(
-                    f"TIMED   {case.name} workload={workload} batch={batch}",
-                    flush=True,
+        prepared.fpy()
+        prepared.mmasim()
+        implementations = [
+            ("fpy-core", prepared.fpy),
+            ("mmasim", prepared.mmasim),
+        ]
+        for replicate in range(args.replicates):
+            rng.shuffle(implementations)
+            for implementation, fn in implementations:
+                rows.extend(
+                    time_callable(
+                        fn,
+                        implementation=implementation,
+                        case=case,
+                        batch=batch,
+                        length=length,
+                        threads=args.threads,
+                        replicate=replicate,
+                        min_run_time=args.min_run_time,
+                        rng=rng,
+                    )
                 )
+        print(
+            f"TIMED   {label}",
+            flush=True,
+        )
 
-    (output_dir / "validation.json").write_text(
-        json.dumps(validations, indent=2, sort_keys=True) + "\n"
-    )
+    write_json(output_dir / "validation.json", validations)
     summaries = summarize(rows)
     enrich_measurements(rows, summaries)
     write_csv(output_dir / "measurements.csv", rows)
@@ -789,9 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     metadata["invalid_configurations"] = sum(
         record.get("valid") is False for record in validations
     )
-    (output_dir / "metadata.json").write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n"
-    )
+    write_json(output_dir / "metadata.json", metadata)
     print(f"\nResults: {output_dir}")
     return 1 if metadata["invalid_configurations"] else 0
 

@@ -319,7 +319,7 @@ def _same(got: float, want: float) -> bool:
             or math.isnan(got) and math.isnan(want))
 
 
-def run_design(src: str, build: Build, draws: int, seed: int) -> int:
+def run_design(name: str, src: str, build: Build, draws: int, seed: int) -> int:
     """How many of *draws* random inputs the C++ *src* of design *build* gets
     bit for bit.  Every :data:`_HARD_EVERY`-th draw is heavy in hard cases.
     A run that aborts -- a failed assert -- misses every draw after it."""
@@ -335,7 +335,8 @@ def run_design(src: str, build: Build, draws: int, seed: int) -> int:
     ]
     with tempfile.TemporaryDirectory() as tmp:
         cpp, exe = Path(tmp) / 'run.cpp', Path(tmp) / 'run'
-        cpp.write_text(_translation_unit(src) + _DRIVER.replace('@ENTRY@', func.name))
+        entry = f'fpy_models::{_namespace(name)}::{func.name}'
+        cpp.write_text(_translation_unit(name, src) + _DRIVER.replace('@ENTRY@', entry))
         built = subprocess.run([*_CXX, '-o', str(exe), str(cpp)],
                                capture_output=True, text=True, check=False)
         if built.returncode:
@@ -356,14 +357,20 @@ def _compile_named(
     build = dict(DESIGNS)[name]
     try:
         src = compile_design(build)
-        return src, '', '', run_design(src, build, draws, seed) if draws else None
+        return src, '', '', run_design(name, src, build, draws, seed) if draws else None
     except Exception as ex:  # noqa: BLE001 -- any refusal is a result
         return None, type(ex).__name__, str(ex), None
 
 
-def _translation_unit(src: str) -> str:
-    """*src* with the headers it needs, so the file builds on its own."""
-    return '\n'.join(CPP_HEADERS) + '\n' + CPP_HELPERS + '\n' + src
+def _translation_unit(name: str, src: str) -> str:
+    """Add shared headers and isolate one generated design's symbols."""
+    body = CPP_HELPERS + '\n' + src
+    return (
+        '\n'.join(CPP_HEADERS)
+        + f'\n\nnamespace fpy_models::{_namespace(name)} {{\n'
+        + body
+        + '\n}\n'
+    )
 
 
 def _filename(name: str) -> str:
@@ -420,11 +427,11 @@ def main(argv: list[str]) -> int:
             note = f'  {ran}/{args.run} agree'
         if args.out is not None:
             path = args.out / _filename(name)
-            path.write_text(_translation_unit(src))
+            path.write_text(_translation_unit(name, src))
             note += f'  -> {path}'
         print(f'{name:{width}}  OK{note}')
         if args.emit:
-            print(f'\n// ==== {name} ====\n{_translation_unit(src)}\n')
+            print(f'\n// ==== {name} ====\n{_translation_unit(name, src)}\n')
     print(f'\n{ok}/{len(names)} compile')
     if args.run:
         print(f'{agree}/{len(names)} agree on every draw')
