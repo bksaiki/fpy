@@ -395,6 +395,48 @@ class TestAZeroArmStatesNoMagnitude:
         assert b.store.prec(total.msb, total.lsb) == 13
 
 
+class TestAFlushToZeroKeepsItsOperand:
+    """`t = z * 0` where `abs(z) < tiny`, else `z`: the zero arm is zero or
+    NaN, so has no digits, and `t` is finite only where `z` is -- the arm
+    taking `z` passes it on, and the other runs only where `z` is finite.  So
+    a finite `t` is bounded as a finite `z` is."""
+
+    @staticmethod
+    def _reach(f):
+        ast, b = _analyze(f, [RealType(fp.FP64)])
+        ret = b.by_expr[ast.body.stmts[-1].expr]
+        _, x = _term(b, 'x')
+        return b.store.maximum(ret.msb - x.msb, _finite(b.store, ret.msb))
+
+    def test_a_finite_result_rounds_its_operand(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP32:
+                z = fp.round(x)
+            if abs(z) < 2 ** -126:
+                t = z * 0
+            else:
+                t = z
+            return t
+
+        assert self._reach(f) == 1
+
+    def test_not_where_a_finite_arm_replaces_an_infinity(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP32:
+                z = fp.round(x)
+            if fp.isinf(z):
+                t = 0
+            else:
+                t = z
+            return t
+
+        assert self._reach(f) > 1
+
+
 @fp.fpy(ctx=fp.FP64)
 def _ident(x: fp.Real) -> fp.Real:
     """A callee that hands back the caller's own term."""

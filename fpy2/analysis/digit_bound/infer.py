@@ -276,6 +276,10 @@ class FormatView(Protocol):
         """Can *of* be an infinity or NaN?"""
         ...
 
+    def has_digits(self, of: Expr | Definition) -> bool:
+        """Does *of*'s format hold a finite non-zero value?"""
+        ...
+
     def int_range(self, of: Expr | Definition) -> tuple[int, int] | None:
         """The least and greatest values, when only integers are held."""
         ...
@@ -1616,6 +1620,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         phis = self.def_use.phis[stmt]
         then_lits = self._arm_non_finite(stmt, 0) if phis else []
         else_lits = self._arm_non_finite(stmt, 1) if phis else []
+        then_fin = self._arm_finite(stmt, 0) if phis else frozenset()
+        else_fin = self._arm_finite(stmt, 1) if phis else frozenset()
         for phi in phis:
             # `lhs` is the `then` arm of an `if`/`else`, but the *untaken*
             # path of a one-armed `if`, where the body is `rhs`.
@@ -1624,19 +1630,21 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 ift, iff = iff, ift
             self._unify_elements(phi, ift)
             self._unify_elements(phi, iff)
-            # An arm with no digits -- zero, or only infinities and NaN --
-            # states nothing, so it is dropped rather than joined, as
+            self._finite_backward(phi, then_fin | self._implied_by(ift), else_fin | self._implied_by(iff))
+            # An arm with no digits -- no finite non-zero value -- states
+            # nothing, so it is dropped rather than joined, as
             # `_visit_return` drops a path returning only infinities.
             # So is an arm leaving a built element unwritten: it is uninitialized.
             unwritten = {d for d in (ift, iff) if phi in self._in_build and d not in self._in_build}
             live = [
                 self.out.by_def.get(d)
                 for d in (ift, iff)
-                if self.view.int_value(d) != 0 and self.view.has_finite(d) and d not in unwritten
+                if self.view.has_digits(d) and d not in unwritten
             ]
             if live and all(t is not None for t in live):
                 # where an arm left out is not finite, so is the phi
-                dropped = not all(self.view.has_finite(d) for d in (ift, iff))
+                dropped = any(self.view.has_non_finite(d) for d in (ift, iff)
+                              if not self.view.has_digits(d))
                 self._bracket(self._def(phi), phi, live, finite=dropped)  # type: ignore[arg-type]
             if unwritten:
                 value = next((self._def_value(d) for d in (ift, iff) if d not in unwritten), None)
@@ -1652,6 +1660,30 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._untaken(phi, iff, (lit,))
             for lit in else_lits:
                 self._untaken(phi, ift, (lit,))
+
+    def _arm_finite(self, stmt: If1Stmt | IfStmt, arm: int) -> frozenset[int]:
+        """The literals "*d* is finite" for each *d* that arm *arm* of *stmt*
+        runs only where finite, and that is one value wherever *stmt* runs."""
+        non_finite = ValueClass.NAN | ValueClass.INF
+        return frozenset(
+            self._lit(d) for d, cls in self._classes.arm_facts.get(stmt, ((), ()))[arm]
+            if not cls & non_finite and _encloses(self._loops_of_def(d), self._loops)
+        )
+
+    def _implied_by(self, d: Definition) -> frozenset[int]:
+        """What *d* being finite implies."""
+        msb = self.out.by_def[d].msb if d in self.out.by_def else None
+        if msb is None or len(msb.coeffs) != 1:
+            return frozenset()
+        return self.store.closed(frozenset(self.store.high(msb)))
+
+    def _finite_backward(self, phi: Definition, ift: frozenset[int], iff: frozenset[int]) -> None:
+        """*phi* is finite only where the arm it took is, so it implies what
+        either arm, finite, would: *ift* and *iff*."""
+        msb = self._def(phi).msb if isinstance(self._type_of(phi), RealType) else None
+        for h in self.store.high(msb) if msb is not None else ():
+            for lit in ift & iff:
+                self.store.imply(h, lit)
 
     def _arm_non_finite(self, stmt: If1Stmt | IfStmt, arm: int) -> list[int]:
         """The literals "*d* is finite" for each *d* that arm *arm* (0 `then`, 1

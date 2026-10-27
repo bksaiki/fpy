@@ -1216,6 +1216,16 @@ def _has_finite(fmt: 'FormatBound') -> bool:
     return True
 
 
+def _has_digits(fmt: 'FormatBound') -> bool:
+    """Does *fmt* hold a finite non-zero value?  As :func:`_has_finite`, only
+    an exhaustive set can fail to."""
+    while isinstance(fmt, ListFormat):
+        fmt = fmt.elt
+    if isinstance(fmt, SetFormat):
+        return any(isinstance(v, Fraction) and v != 0 for v in fmt.values)
+    return True
+
+
 def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
     """``logb``'s least and greatest value over *fmt*, where each is finite.
 
@@ -1848,6 +1858,10 @@ class FormatAnalysis:
     def has_finite(self, of: 'Expr | Definition') -> bool:
         """Does *of*'s format hold any finite value?"""
         return _has_finite(self._bound(of))
+
+    def has_digits(self, of: 'Expr | Definition') -> bool:
+        """Does *of*'s format hold a finite non-zero value?"""
+        return _has_digits(self._bound(of))
 
     def has_non_finite(self, of: 'Expr | Definition') -> bool:
         """Can *of*, or an element of it, be an infinity or NaN?  Yes, where

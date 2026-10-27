@@ -234,10 +234,12 @@ def main(argv: list[str]) -> int:
     tag = args.model.rsplit('/', 1)[-1] + ('' if args.workload == 'wikitext' else f'-{args.workload}')
     kept: list[dict[str, str]] = []
     if args.grid and (done := args.results / 'sweep' / f'sweep-grid-{tag}.csv').exists():
-        # the grid's table grows: only its points not yet run, and only the grid's rows kept
+        # the grid's table grows: only its points not yet run (a refused one is retried), and
+        # only the grid's rows kept
         with done.open() as f:
             kept = list(csv.DictReader(f))
-        kept = [r for r in kept if (r['anchor'], r['value']) in {(p.anchor, p.value) for p in pts}]
+        kept = [r for r in kept
+                if r['status'] == 'ok' and (r['anchor'], r['value']) in {(p.anchor, p.value) for p in pts}]
         pts = [p for p in pts if (p.anchor, p.value) not in {(r['anchor'], r['value']) for r in kept}]
     names = {d: generator.name(d) for d in dict.fromkeys(p.design for p in pts)}
     if args.list:

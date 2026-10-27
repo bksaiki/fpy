@@ -142,7 +142,10 @@ operations (`+`, `-`, `*`, `round`, `sqrt`, `neg`, `abs`, `trunc` and kin, `2
 and through any value that is one of its sources (a phi, a join, a merged
 return, a selection): the operands' `high` implies the result's.  A `with`
 establishes what constructing its context requires (`MPFixedContext(e - 10)`
-needs `e` finite); an `if` arm runs under a literal of its own.  An exact rule
+needs `e` finite); an `if` arm runs under a literal of its own.  A branch phi
+is the taken arm's value, so `high(phi)` implies whatever both arms imply: what
+each arm's `high` implies, or a value its test proves finite (`abs(x) < t`
+proves `x` finite).  An exact rule
 needs `high` of its result only where finite operands can give a non-finite
 one.
 
@@ -208,7 +211,8 @@ share a copy.  Obligation: the copy's point is the index read (section 6).
   comprehension whose element has one zero path), the merge states the
   non-zero arm's bound below; the else arm proves a single-atom test's value
   non-zero.  An arm reached only where some `d` is not finite is dropped under
-  `high(d)`.
+  `high(d)`.  An arm with no finite non-zero value (`x * 0`) has no digits and
+  is dropped, under `high(phi)` where it may not be finite.
 - **A `for` loop** is one generic iteration.  A carried scalar's phi joins the
   pre-loop value with the body's at a copy over the loop, the iteration
   before; past the loop it is the pre-loop value or a copy at the last
