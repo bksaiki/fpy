@@ -1550,6 +1550,9 @@ class _Emitter(Visitor):
         ctx = self._active_ctx(e)
         integral = _integral_round(ctx)
         assert integral is not None
+        if have is TritonScalar.F16:
+            # libdevice has no FP16 roundings; FP32 holds every FP16 value and its integer exactly
+            arg, have = f'{arg}.to(tl.float32)', TritonScalar.F32
         code = f'{integral}({arg})'
         want = self._storage(e)
         if want.is_float() and not getattr(ctx, 'enable_neg_zero', True):

@@ -32,9 +32,10 @@ COLORS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4')
 """The anchors' colours, in order."""
 MARKERS = ('o', 's', '^', 'D', 'v')
 NAMES = {'nv.hopper.e4m3.f32': 'Hopper', 'nv.blackwell.e4m3.f32': 'Blackwell',
-         'nv.hopper.bf16.f32': 'Hopper', 'nv.ampere.bf16.f32': 'Ampere', 'amd.cdna3.bf16': 'CDNA3'}
+         'nv.hopper.bf16.f32': 'Hopper', 'nv.ampere.bf16.f32': 'Ampere', 'amd.cdna3.bf16': 'CDNA3',
+         'amd.cdna3.fp8': 'CDNA3'}
 """The anchors as the legend names them, under their scheme's heading."""
-FAMILIES = {'fp8-row': 'FP8', 'bf16': 'BF16'}
+FAMILIES = {'fp8-row': 'FP8', 'fp8-row:fnuz': 'FP8', 'bf16': 'BF16'}
 """Each scheme's legend heading."""
 STYLES = {'fp8-row': '-', 'bf16': ':'}
 """Each scheme's line style, its anchors' and its floor's: the family a

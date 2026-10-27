@@ -760,7 +760,7 @@ function and its argument types, as `compile.DESIGNS`' builders do.
 | | `F` | fraction bits kept | 13, 23-25, 35 |
 | | `L` | elements per instruction | 1 (FMA) - 64 |
 | joining `c` | `join` | `inside` (a fused sum's term, a tree's or chain's last add, in an exact sum); `separate`, the sum and `c` rounded down at `F2` and `F` bits and added | inside (NV); separate (CDNA3) |
-| | `F2` | | 31 (CDNA3) |
+| | `F2` | tied to `F`: `F2 = F + guard`, the join's adder `guard` bits wider than the sum (swept as `guard`, 2026-10-23) | 31 (CDNA3: `F` 24, `guard` 7) |
 | output | `rho` | precision, rounding mode: the accumulator format the next instruction's `c` is in | RZ FP32, RZ E8M13 (NV FP8), RNE FP16, RNE FP32 (AMD) |
 | per structure | `e_zero` (`None`: the model's default), special values | as the models derive them | not swept |
 
@@ -1104,6 +1104,46 @@ the sub-FP32 roundings compiled, and after double rounding).
     nearest 0.3-1.7 decades better.  Hopper's FP8 the same in every mode.
   - **Re-rounded:** under 1% but for the Hopper-FP8-like points (11-16%)
     and the narrowest `F` and `rho_bits`.
+
+##### Phase 7 - The design space
+
+**The design space is the main figure's grid** (decided 2026-10-25): every
+design the evaluation reports, and nothing it does not.  `sweep.GRID`: four
+anchors -- NVIDIA's fused sum, `c` joined inside (Blackwell E4M3, Hopper
+BF16), and AMD's separate join (CDNA3 BF16, CDNA3 E4M3 FNUZ under
+`fp8-row:fnuz`) -- each with `F` 10-28 (its own added: CDNA3's 24; `F2 = F +
+7` with it), `rho_bits` 13, 16, 23 and rounding toward zero or to nearest;
+its other fields as built.  **N = 180** (a test holds it).
+- `sweep.py --manifest` compiles the grid, launches each design once on a
+  GPU (Triton compiles a kernel at its first launch), and writes
+  `results/sweep/manifest.csv`: a row per design, its parameters, name and
+  status -- the local error's list, so the two evaluations cover one set.
+- Superseded: a wider space (2026-10-23, N = 576: two NVIDIA anchors x `F`
+  x 6 accumulators x roundings x fused, tree or chain x `L` 8, 16, 32;
+  `results/sweep/space.csv`, 516 run).  Its 60 refusals, all a tree's or
+  chain's add (or FMA) rounded to nearest below FP32 ("`Add` rounds to odd,
+  which is exact here only where its result is proven inside the format's
+  range"), are a compiler gap still open; no grid design reaches it.
+- Launching found two grid designs (BF16, `F` 10, a 13- or 16-bit
+  accumulator to nearest) that compiled but failed in Triton: the emitter
+  rounded an FP16-held value to the integers with `libdevice.nearbyint`,
+  which has no FP16; it now rounds in FP32 (`_integral`; `test_triton.py`'s
+  `hopper-bf16-f10-rne13`).
+
+##### Phase 8 - The grid end to end
+
+**Done** (2026-10-23; Qwen3.5-0.8B, WikiText-2, 10 segments).  `sweep.py
+--end-to-end --grid`: `SPACE`'s anchors, `F` 10-25 x `rho_bits` 13, 16, 23
+x toward zero or to nearest, 72 designs, frozen and free
+(`sweep-grid-Qwen3.5-0.8B.csv`); `plot_grid.py` draws them 2 x 2, FP8 and
+BF16 by as deployed and held to ref.
+- **Held to ref:** every accumulator's line follows one path until `F`
+  reaches its width, then flattens: the narrower width sets the error.  To
+  nearest flattens ~2 decades below toward zero; the FP32 accumulator falls
+  to the ±1 ulp line (BF16 to nearest at `F` 25 on it).
+- **As deployed:** FP8, every design on K₀ (~1e-02).  BF16 has a knee: `F`
+  10 and 13 above K₀, and a 13-bit accumulator above it at every `F` (-3.7
+  against -4.3, log10); 16 and 23 bits on K₀ from `F` 16.
 
 ##### After the last phase
 
