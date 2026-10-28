@@ -174,12 +174,14 @@ def evaluate(
 class Divergence:
     """One run's distance from the exact run, per sequence: mean KL(R1 ||
     run) and top-1 disagreement, and, frozen, the share of its activation
-    elements (and scales) that would round differently."""
+    elements (and scales) that would round differently; its seconds over
+    them all."""
 
     kl: list[float] = field(default_factory=list)
     disagree: list[float] = field(default_factory=list)
     rerounded: list[float] = field(default_factory=list)
     rescaled: list[float] = field(default_factory=list)
+    seconds: float = 0.0
 
     def add(self, ref: list[torch.Tensor], lps: Iterable[torch.Tensor],
             scored: torch.Tensor | None = None) -> None:
@@ -201,11 +203,13 @@ class Divergence:
         self.disagree.append(float(differ) / n)
 
     def report(self) -> dict[str, float]:
-        """Means over sequences, each with its standard error."""
+        """Means over sequences, each with its standard error, and the
+        total seconds."""
         out: dict[str, float] = {}
         for k in ('kl', 'disagree', 'rerounded', 'rescaled'):
             if v := getattr(self, k):
                 out[k], out[f'{k}_se'] = stats.paired(v)
+        out['seconds'] = self.seconds
         return out
 
 
@@ -232,10 +236,13 @@ def frozen(
             for mode in dict.fromkeys([*modes, *free]):
                 run.mode = mode
                 for kind in [k for k, of in (('frozen', modes), ('free', free)) if mode in of]:
+                    start = time.perf_counter()
                     run.frozen = rec.replay() if kind == 'frozen' else None
                     run.reseed(seed, i)
                     d = out[kind].setdefault(mode, Divergence())
                     d.add(ref, _log_probs(model, seg, dtype=torch.float64), scored and scored[i])
+                    torch.cuda.synchronize()
+                    d.seconds += time.perf_counter() - start
                     if run.frozen is not None:
                         a, n, b, m = run.frozen.rerounded
                         d.rerounded.append(float(a) / n)

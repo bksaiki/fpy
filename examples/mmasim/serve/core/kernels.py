@@ -14,6 +14,7 @@ import json
 import os
 import pickle
 import sys
+import time
 from collections.abc import Callable, Sequence
 from functools import cache, partial
 from pathlib import Path
@@ -63,6 +64,10 @@ _BUILDS: dict[str, Callable] = dict(DESIGNS)
 _KERNELS: dict[tuple[str, int | None], KernelSource] = {}
 """Each design compiled so far: over any `k` (`None`), or fused over one."""
 
+_SECONDS: dict[tuple[str, int | None], float] = {}
+"""Each of :data:`_KERNELS`' compile time, where known (a kernel cached
+before its time was kept has none)."""
+
 REGISTERED: dict[str, dict[str, Any] | None] = {}
 """Each :func:`register`ed design's description (its parameters), by name."""
 
@@ -95,11 +100,16 @@ def register(name: str, build: Callable, block: int, block_m: int,
 
 
 def tile(d: generator.Design) -> tuple[int, int]:
-    """*d*'s tile `(block, block_m)`, the catalog's fastest of its kind: tall
-    for a tree, narrower for `L` ≥ 64."""
+    """*d*'s tile `(block, block_m)`, the fastest of its kind at the model's
+    layer shapes: wider the more often `c` is added (short `L`, `c` after the
+    products), narrower for `L` ≥ 64."""
     if d.sum == 'tree':
-        return 16, 64
-    return (16, 1) if d.L >= 64 else (32, 1)
+        return (128 if d.join == 'separate' else 32), 1
+    if d.L >= 64:
+        return 16, 1
+    if d.L >= 32:
+        return 32, 1
+    return (64 if d.L >= 16 or d.join == 'separate' else 32), 1
 
 
 def register_design(d: generator.Design, name: str | None = None) -> str:
@@ -174,13 +184,24 @@ def _kernel(design: str, k: int | None = None) -> KernelSource:
     """*design*'s kernel over any `k` (`None`), or fused over *k*; cached, in
     memory and in :data:`CACHE`."""
     if (design, k) not in _KERNELS and not _load(design, k):
+        start = time.perf_counter()
         _KERNELS[design, k] = _compile(_BUILDS[design], k)
+        _SECONDS[design, k] = time.perf_counter() - start
         _store(design, k)
     return _KERNELS[design, k]
 
 
 def _compile(build: Callable, k: int | None) -> KernelSource:
     return ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)
+
+
+def compile_seconds(design: str) -> float | None:
+    """The seconds *design*'s kernels compiled in so far took to compile (`None`
+    if any's time is unknown, or none has)."""
+    ks = [key for key in _KERNELS if key[0] == design]
+    if not ks or any(key not in _SECONDS for key in ks):
+        return None
+    return sum(_SECONDS[key] for key in ks)
 
 
 @cache
@@ -201,19 +222,25 @@ def _path(design: str, k: int | None) -> Path | None:
 
 
 def _load(design: str, k: int | None) -> bool:
-    """Whether *design*'s kernel over *k* was in :data:`CACHE` (now in memory)."""
+    """Whether *design*'s kernel over *k* was in :data:`CACHE` (now in memory,
+    with its compile time if kept beside it)."""
     path = _path(design, k)
     if path is None or not path.exists():
         return False
     _KERNELS[design, k] = pickle.loads(path.read_bytes())
+    if (t := path.with_suffix('.json')).exists():
+        _SECONDS[design, k] = json.loads(t.read_text())['seconds']
     return True
 
 
 def _store(design: str, k: int | None) -> None:
-    """*design*'s kernel over *k* into :data:`CACHE`, whole or not at all."""
+    """*design*'s kernel over *k* into :data:`CACHE`, whole or not at all, and
+    its compile time beside it."""
     path = _path(design, k)
     if path is not None:
         outputs.replace(path, lambda f: pickle.dump(_KERNELS[design, k], f), binary=True)
+        if (design, k) in _SECONDS:
+            outputs.write_json(path.with_suffix('.json'), {'seconds': _SECONDS[design, k]})
 
 
 def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int] = ()) -> None:
@@ -244,23 +271,26 @@ def _compile_all(todo: Sequence[tuple[str, int | None]], jobs: int | None) -> di
     done = dict(zip([t[:2] for t in named], in_processes(_compile_or_refuse, named, jobs)))
     done.update({t: _compile_or_refuse((*t, _BUILDS[t[0]])) for t in todo if t not in done})
     refused = {}
-    for (d, k), (kernel, why) in done.items():
+    for (d, k), (kernel, why, seconds) in done.items():
         if kernel is None:
             refused[d, k] = why
         else:
-            _KERNELS[d, k] = kernel
+            _KERNELS[d, k], _SECONDS[d, k] = kernel, seconds
             _store(d, k)
     return refused
 
 
-def _compile_or_refuse(item: tuple[str, int | None, Callable | None]) -> tuple[KernelSource | None, str]:
+def _compile_or_refuse(
+    item: tuple[str, int | None, Callable | None],
+) -> tuple[KernelSource | None, str, float]:
     """A design's kernel, from its build, else (in a worker) by its MMA-Sim
-    name; or `None` and why it was refused."""
+    name, and the seconds it took; or `None` and why it was refused."""
     design, k, build = item
+    start = time.perf_counter()
     try:
-        return _compile(build or _BUILDS[design], k), ''
+        return _compile(build or _BUILDS[design], k), '', time.perf_counter() - start
     except Exception as ex:  # noqa: BLE001 -- a refusal is a result
-        return None, f'{type(ex).__name__}: {str(ex).splitlines()[0] if str(ex) else ""}'
+        return None, f'{type(ex).__name__}: {str(ex).splitlines()[0] if str(ex) else ""}', 0.0
 
 
 @cache

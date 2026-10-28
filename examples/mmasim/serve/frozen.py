@@ -7,7 +7,8 @@ error propagates, but no activation rounds differently from R1's, so a
 design's distance is its own and not the scheme's re-drawn quantization.
 Per matmul, KL(R1 || run) and top-1 disagreement over segments, and the
 share of activation elements (and scales) its own run would round
-differently; those in `--free` also as they run.  The workload: WikiText-2
+differently; those in `--free` also as they run; each run's seconds, and
+the seconds its kernels took to compile.  The workload: WikiText-2
 segments as in `perplexity.py`, every token scored; or MT-Bench's
 conversations (`-w mtbench`), R0's greedy replies teacher-forced (cached
 under `<results>/cache/mtbench`), only the replies' tokens scored.
@@ -22,7 +23,7 @@ import sys
 from pathlib import Path
 
 import torch
-from core import cli, outputs, scoring, workloads
+from core import cli, kernels, outputs, scoring, workloads
 
 
 def main(argv: list[str]) -> int:
@@ -65,6 +66,8 @@ def main(argv: list[str]) -> int:
         row = {'design': mode, **(got['frozen'][mode].report() if mode in got['frozen'] else {})}
         if mode in got['free']:
             row |= {f'free_{k}': v for k, v in got['free'][mode].report().items()}
+        if (t := kernels.compile_seconds(mode)) is not None:
+            row['compile_seconds'] = t
         rows.append(row)
     print(f'{"run":24} {"KL vs R1, frozen":>22} {"top-1":>9} {"re-rounded":>10} {"KL vs R1, free":>22}')
     for r in rows:

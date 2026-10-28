@@ -53,7 +53,8 @@ ANCHORS = {
 }
 """Each anchor of the one-at-a-time sweep and the scheme its designs run under."""
 
-SCHEMES = {**ANCHORS, 'nv.ada.e4m3.f32': 'fp8-row', 'amd.cdna2.bf16': 'bf16', 'amd.cdna3.fp8': 'fp8-row:fnuz'}
+SCHEMES = {**ANCHORS, 'nv.ada.e4m3.f32': 'fp8-row', 'amd.cdna2.bf16': 'bf16', 'amd.cdna3.fp8': 'fp8-row:fnuz',
+           'nv.blackwell.mx.e4m3': 'mxfp8'}
 """Every anchor's scheme, the grid's too."""
 
 
@@ -139,10 +140,11 @@ def points(anchors: list[str], params: list[str]) -> list[Point]:
 
 
 GRID = (('nv.hopper.bf16.f32', 'nv.ampere.bf16.f32', 'amd.cdna3.bf16', 'amd.cdna2.bf16',
-         'nv.blackwell.e4m3.f32', 'nv.hopper.e4m3.f32', 'nv.ada.e4m3.f32', 'amd.cdna3.fp8'),
+         'nv.blackwell.mx.e4m3', 'nv.hopper.e4m3.f32', 'nv.ada.e4m3.f32', 'amd.cdna3.fp8'),
         (10, 13, 16, 19, 22, 25, 28))
 """`--grid`'s anchors, each generation's BF16 and FP8 instruction (MMA-Sim's
-Blackwell BF16 is Hopper's, Ada's Ampere's; CDNA2 has no FP8), and the `F`
+Blackwell BF16 is Hopper's, Ada's Ampere's; CDNA2 has no FP8; Blackwell's FP8
+its block-scaled MXFP8, which unscaled is the same instruction), and the `F`
 each is swept over, its own added; a design that does not read `F` (CDNA2's
 tree) is its own alone.  Each anchor also with the other vendor's join:
 structures no hardware (and no MMA-Sim model) has."""
@@ -187,10 +189,9 @@ def _launch(designs: list[tuple[str, str]]) -> dict[str, str]:
     failed = {}
     for name, scheme in designs:
         s = quant.scheme(scheme)
-        x, w = (quant.quantize(torch.randn(r, 256, device='cuda'), op).elements for r, op in ((64, s.x), (128, s.w)))
-        held = kernels.storage(name)
+        qx, qw = (quant.quantize(torch.randn(r, 256, device='cuda'), op) for r, op in ((64, s.x), (128, s.w)))
         try:
-            kernels.matmul(x.to(held[0]), kernels.prepare(w, held[1], 1), name)
+            swap.gemm(name, s, qx, qw, kernels.prepare(qw.elements, kernels.storage(name)[1], 1))
             torch.cuda.synchronize()
         except Exception as ex:  # noqa: BLE001 -- a failure is a result
             failed[name] = f'{type(ex).__name__} at launch: {str(ex).strip().splitlines()[-1][:200]}'
@@ -258,7 +259,8 @@ def main(argv: list[str]) -> int:
         about = {p.design: {k: v for k, v in generator.about(p.design).items() if k != 'exact'} for p in pts}
         rows = [{'anchor': p.anchor, 'format': SCHEMES[p.anchor], 'design': names[p.design],
                  'status': 'refused' if names[p.design] in refused else 'ok',
-                 'reason': refused.get(names[p.design], ''), **about[p.design]} for p in pts]
+                 'reason': refused.get(names[p.design], ''),
+                 'compile_seconds': kernels.compile_seconds(names[p.design]), **about[p.design]} for p in pts]
         outputs.write_csv(out / 'manifest.csv', rows)
         print(f'{len(rows)} designs, {len(rows) - len(refused)} run, {len(refused)} refused: '
               f'{out / "manifest.csv"}')
@@ -296,12 +298,13 @@ def main(argv: list[str]) -> int:
         about.pop('exact')
         n = names[p.design]
         m = metrics.get(n, {})
+        # empty for a scheme with no point run
+        floor = metrics.get(f'{SCHEMES[p.anchor]}-exact-rand', {})
         rows.append({'anchor': p.anchor, 'scheme': SCHEMES[p.anchor], 'param': p.param,
                      'value': p.value, 'is_anchor': p.is_anchor,
                      'status': 'refused' if n in refused else 'ok', 'reason': refused.get(n, ''),
                      'design': n, **about,
-                     **({'floor_kl': metrics[f'{SCHEMES[p.anchor]}-exact-rand']['kl'],
-                         'k0_kl': metrics[f'{SCHEMES[p.anchor]}-exact-rand']['free_kl']}
+                     **({'floor_kl': floor.get('kl', ''), 'k0_kl': floor.get('free_kl', '')}
                         if args.end_to_end else {}),
                      **{k: v for k, v in m.items()
                         if k not in ('model', 'reference', 'design', 'group')}})

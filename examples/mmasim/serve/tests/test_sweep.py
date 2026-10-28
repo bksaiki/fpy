@@ -83,7 +83,7 @@ def test_a_figure_draws_from_the_table_alone(tmp_path: Path) -> None:
 
 
 def test_the_grid_draws_from_its_table_alone(tmp_path: Path) -> None:
-    """Two formats, an anchor each over `F`, its join own and swapped, frozen
+    """Two formats, an anchor each over `F`, c added with the products and after them, frozen
     and free, and one that does not read `F`: a PNG."""
     spec = importlib.util.spec_from_file_location(
         'plot_grid', Path(__file__).resolve().parents[1] / 'plot_grid.py')
@@ -91,11 +91,11 @@ def test_the_grid_draws_from_its_table_alone(tmp_path: Path) -> None:
     plot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(plot)
     row = {'status': 'ok', 'floor_kl': '1e-12', 'k0_kl': '1e-2'}
-    rows = [{**row, 'scheme': sch, 'anchor': a, 'value': f'F={f}{sw}', 'F': str(f),
+    rows = [{**row, 'scheme': sch, 'anchor': a, 'value': f'F={f}{sw}', 'F': str(f), 'join': j,
              'is_anchor': str(f == 25 and not sw), 'kl': str(2.0 ** -f), 'free_kl': str(1e-2 + 2.0 ** -f)}
-            for sch, a in (('fp8-row', 'nv.blackwell.e4m3.f32'), ('bf16', 'nv.hopper.bf16.f32'))
-            for f in (10, 16, 25) for sw in ('', ' join=swapped')]
-    rows.append({**row, 'scheme': 'bf16', 'anchor': 'amd.cdna2.bf16', 'value': 'F=24', 'F': '24',
+            for sch, a in (('fp8-row', 'nv.blackwell.mx.e4m3'), ('bf16', 'nv.hopper.bf16.f32'))
+            for f in (10, 16, 25) for sw, j in (('', 'inside'), (' join=swapped', 'separate'))]
+    rows.append({**row, 'scheme': 'bf16', 'anchor': 'amd.cdna2.bf16', 'value': 'F=24', 'F': '24', 'join': 'inside',
                  'is_anchor': 'True', 'kl': '1e-9', 'free_kl': '1e-2'})
     out = tmp_path / 'g.png'
     plot.figure(rows, out)
