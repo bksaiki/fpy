@@ -2,11 +2,10 @@
 The designs' Triton matmuls, as a linear layer's `x @ W.T`.
 
 Each design compiles once with `m`, `n` and `k` symbolic; `k` must be a
-multiple of the design's length.  A scaled product also compiles once per
-static `k`, in one kernel (:func:`fused`).  Its inputs hold values of its input
-formats in the kernel's storage dtype; the result is its FP32 accumulator.
-:func:`linear` does it all per call; `swap` calls :func:`prepare` once per
-weight and :func:`matmul` per call.
+multiple of the design's length.  A block-scaled design compiles once per
+static `k` instead, its instructions chained in one kernel (:func:`fused`).
+Its inputs hold values of its input formats in the kernel's storage dtype
+(:func:`storage`); the result is its FP32 accumulator (:func:`matmul`).
 """
 
 import hashlib
@@ -18,7 +17,7 @@ import time
 from collections.abc import Callable, Sequence
 from functools import cache, partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import torch
 
@@ -53,11 +52,6 @@ TILES: dict[str, tuple[int, int]] = {
 """Each design and its fixed tile `(block, block_m)`, the fastest per
 `bench/speed.py --best`."""
 
-FUSED_ROWS: dict[str, int] = {'nv.blackwell.mxfp4': 32, 'nv.blackwell.nvfp4': 32}
-"""Past this many rows a scaled design's launches beat its one kernel
-(:func:`fused`); an unlisted design always runs in one kernel."""
-
-Combine = Literal['linear', 'tree']
 
 _BUILDS: dict[str, Callable] = dict(DESIGNS)
 
@@ -84,8 +78,7 @@ _ROWS = 65535
 """Rows per launch at most: CUDA's grid limit on its second axis."""
 
 _ELEMS = 1 << 26
-"""Output elements per block of rows: bounds the partials' memory under
-`split_k > 1`, and a launch's size."""
+"""Output elements per block of rows: bounds a launch's size."""
 
 
 def register(name: str, build: Callable, block: int, block_m: int,
@@ -158,7 +151,7 @@ def applicable(design: str, scheme: quant.Scheme) -> bool:
     if (x, w) != (scheme.x.elements.format(), scheme.w.elements.format()):
         return False
     if not block_scaled(design):
-        return scheme.applied in ('none', 'epilogue', 'k-blocks')
+        return scheme.applied in ('none', 'epilogue')
     s, arg = scheme.x.scaling, _args(design)[3]
     scale = getattr(arg, 'elt', arg)
     return (scheme.applied == 'instruction' and scale.fmt == s.fmt.format()
@@ -306,19 +299,6 @@ def storage(design: str) -> tuple[torch.dtype, ...]:
     return tuple(_torch_dtype(held[i]) for i in ((0, 1, 3) if block_scaled(design) else (0, 1)))
 
 
-def prepare(w: torch.Tensor, dtype: torch.dtype, split_k: int = 1) -> torch.Tensor:
-    """*w* `[n, k]`, holding a design's weight values, in *dtype* as
-    `[split_k, n, k / split_k]` contiguous slices of `k`: a view of *w* at
-    `split_k = 1` when it is in *dtype* already."""
-    n, k = w.shape
-    if split_k < 1 or k % split_k:
-        raise ValueError(f'`k` = {k} does not split into {split_k} slices')
-    b = w.to(dtype)
-    if split_k == 1:
-        return b.unsqueeze(0)
-    return b.view(n, split_k, k // split_k).transpose(0, 1).contiguous()
-
-
 def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
             *scales: torch.Tensor, k: int | None = None) -> None:
     """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*), its
@@ -331,102 +311,24 @@ def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
            block=block, block_m=min(block_m, 1 << (m - 1).bit_length()))
 
 
-def _part(a: torch.Tensor, w: torch.Tensor, design: str, j: int) -> torch.Tensor:
-    """Slice *j*'s partial, `a[j] @ w[j].T` from a zero accumulator."""
-    out = torch.zeros(a.shape[1], w.shape[1], dtype=torch.float32, device=a.device)
-    _launch(a[j], w[j], out, design)
-    return out
-
-
-def _tree(part: Callable[[int], torch.Tensor], s: int, n: int) -> torch.Tensor:
-    """Partials `[s, s + n)` summed pairwise, the left half the largest power
-    of two below `n`."""
-    if n == 1:
-        return part(s)
-    h = 1 << ((n - 1).bit_length() - 1)
-    return _tree(part, s, h).add_(_tree(part, s + h, n - h))
-
-
 def matmul(
-    a: torch.Tensor, w: torch.Tensor, design: str, combine: Combine = 'linear',
+    a: torch.Tensor, w: torch.Tensor, design: str,
     scales: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> torch.Tensor:
-    """`a @ w.T` by *design*, FP32 `[m, n]`, for `a` holding its activation values
-    and `w` from :func:`prepare` in *design*'s :func:`storage`.
-
-    With `w` in `s > 1` slices, each slice goes through the kernel from a zero
-    accumulator and the FP32 partials are summed left to right (`linear`) or
-    pairwise (`tree`); one slice accumulates `k` in order through the design
-    alone.  With *scales*, `w` is whole (:func:`_scaled`)."""
-    if scales is not None:
-        return _scaled(a, w, design, *scales)
-    s, n, step = w.shape
-    m, k = a.shape
-    k0 = compiled(design)[1]
-    if k != s * step or step % k0:
-        raise ValueError(
-            f"`k` = {k} does not split into {s} slices of a multiple of {design}'s length {k0}")
+    """`a @ w.T` by *design*, FP32 `[m, n]`, for `a` `[m, k]` and `w` `[n, k]`
+    holding its input values in its :func:`storage`.  A block-scaled design
+    takes *scales* `[m, k / g]` and `[n, k / g]`, one per group `g`
+    (:func:`group`) of its instructions in order along `k`, its chain in one
+    kernel (:func:`fused`)."""
+    (m, k), n = a.shape, w.shape[0]
+    k0 = _arg_length(_args(design)[0])
+    if w.shape[1] != k or k % k0:
+        raise ValueError(f"`k` = {k} is not a multiple of {design}'s length {k0}")
     y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
-    parts = a.view(m, s, step).transpose(0, 1).contiguous() if s > 1 else a.unsqueeze(0)
     rows = min(max(1, _ELEMS // n), _ROWS)
     for i in range(0, m, rows):
-        blk, ab = y[i:i + rows], parts[:, i:i + rows]
-        if combine == 'tree' and s > 1:
-            blk.copy_(_tree(partial(_part, ab, w, design), 0, s))
+        if scales is None:
+            _launch(a[i:i + rows], w, y[i:i + rows], design)
         else:
-            _launch(ab[0], w[0], blk, design)
-            for j in range(1, s):
-                blk += _part(ab, w, design, j)
+            _launch(a[i:i + rows], w, y[i:i + rows], design, scales[0][i:i + rows], scales[1], k=k)
     return y
-
-
-def _scaled(a: torch.Tensor, w: torch.Tensor, design: str,
-            xs: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
-    """:func:`matmul` with scales, `w` whole (`[1, n, k]`) and *xs* `[m, s]`,
-    *ys* `[n, s]`, each row's scales in order along `k`.  At most
-    :data:`FUSED_ROWS` rows, one kernel (:func:`fused`); past them a launch per
-    instruction, each onto the last's result, or per `compile_triton.PROMOTE`
-    of `k` from zero, each partial scaled as it is summed, `y + p * (s_x *
-    s_w)` in FP32."""
-    if w.shape[0] != 1:
-        raise ValueError(f'{design} takes a scaled product\'s weights whole, not in slices')
-    (_, n, k), m = w.shape, a.shape[0]
-    chained = block_scaled(design)
-    step = _arg_length(_args(design)[0]) if chained else ct.PROMOTE
-    if a.shape[1] != k or k % step:
-        raise ValueError(f"`k` = {a.shape[1]} is not whole blocks of {step} for {design}")
-    if not chained and xs.shape[1] * step != k:
-        raise ValueError(f'scales per {k // xs.shape[1]} of `k`, where {design} promotes every {step}')
-    y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
-    rows = min(max(1, _ELEMS // n), _ROWS)
-    if m <= FUSED_ROWS.get(design, m):
-        for i in range(0, m, rows):
-            _launch(a[i:i + rows], w[0], y[i:i + rows], design, xs[i:i + rows], ys, k=k)
-        return y
-    s = k // step
-    per = xs.shape[1] // s
-    parts, ws = (t.view(t.shape[0], s, step).transpose(0, 1).contiguous() for t in (a, w[0]))
-    for i in range(0, m, rows):
-        blk, ab, sx = y[i:i + rows], parts[:, i:i + rows], xs[i:i + rows]
-        for j in range(s):
-            if chained:
-                cut = j if per == 1 else slice(j * per, (j + 1) * per)
-                _launch(ab[j], ws[j], blk, design, sx[:, cut].contiguous(), ys[:, cut].contiguous())
-            else:
-                blk += _part(ab, ws, design, j) * (sx[:, j, None] * ys[:, j])
-    return y
-
-
-def linear(
-    x: torch.Tensor, w: torch.Tensor, design: str, *,
-    split_k: int = 1, combine: Combine = 'linear',
-) -> torch.Tensor:
-    """`x @ w.T` by an unscaled *design*, for `x` `[..., k]` and `w` `[n, k]` (as
-    `nn.Linear` stores it): both rounded to its input formats (unscaled, as
-    torch casts), the FP32 result.  *split_k* splits `k` into that many
-    contiguous slices (:func:`matmul`)."""
-    fx, fw = (quant.DTYPES[quant.context(f)] for f in formats(design)[:2])
-    held_x, held_w = storage(design)
-    a = x.reshape(-1, x.shape[-1]).to(fx).to(held_x)
-    y = matmul(a, prepare(w.to(fw), held_w, split_k), design, combine)
-    return y.reshape(*x.shape[:-1], w.shape[0])

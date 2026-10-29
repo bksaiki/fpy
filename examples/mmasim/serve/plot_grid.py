@@ -22,7 +22,13 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import ticker
-from plot_sweep import COLORS, FAMILIES, GRID, INK, MARKERS, MUTED, RESULTS
+
+RESULTS = Path('results')
+COLORS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4')
+MARKERS = ('o', 's', '^', 'D', 'v')
+INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
+FAMILIES = {'fp8-row': 'FP8', 'fp8-row:fnuz': 'FP8', 'bf16': 'BF16', 'mxfp8': 'FP8'}
+"""Each scheme's input format, its panels' title."""
 
 PANELS = (('observed', 'free_kl', 'k0_kl'), ('amplified', 'kl', 'floor_kl'))
 """Each panel: its header, its KL column, and its ±1 ulp column."""

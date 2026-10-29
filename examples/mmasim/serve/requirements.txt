@@ -1,9 +1,7 @@
-# Dependencies for running an LLM through the emitted BF16 kernels, on top of
-# fpy2[triton] (torch and triton) and ../requirements.txt:
+# Dependencies for running an LLM through the emitted kernels, on top of
+# torch and triton:
 #
 #   pip install -r requirements.txt
-transformers>=5        # Qwen3, Qwen3.5
-datasets               # WikiText-2, MATH-500, MT-Bench
-lm-eval[hf]>=0.4       # zero-shot suite
-torchao>=0.18          # quantization recipes and tensor types
-compressed-tensors     # quantized checkpoints (0.19)
+transformers>=5        # Qwen3.5
+datasets               # WikiText-2
+torchao>=0.18          # the quantizers' reference (tests)

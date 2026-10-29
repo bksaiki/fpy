@@ -6,12 +6,9 @@ input; each matmul then runs frozen to it (`swap.Frozen`), so only its
 arithmetic differs.  Per matmul: KL(R1 || run), top-1 disagreement, the
 share of activation elements (and scales) its own run would round
 differently, its seconds and its kernels' compile seconds; `--free`
-matmuls also as deployed.  Workload: WikiText-2 segments, every token
-scored; or MT-Bench (`-w mtbench`), R0's greedy replies teacher-forced
-(cached under `<results>/cache/mtbench`), only reply tokens scored.
+matmuls also as deployed.  Over WikiText-2 segments, every token scored.
 
     python serve/frozen.py --scheme fp8-row
-    python serve/frozen.py --scheme fp8-row -w mtbench
     python serve/frozen.py --scheme fp8-row --matmuls nv.hopper.e4m3.f32 --free nv.hopper.e4m3.f32
 """
 
@@ -19,7 +16,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import torch
 from core import cli, kernels, outputs, scoring, workloads
 
 
@@ -30,35 +26,18 @@ def main(argv: list[str]) -> int:
     cli.add_runs(ap)
     ap.add_argument('--free', nargs='*', default=[], metavar='MATMUL',
                     help='matmuls run as they are, frozen too if in --matmuls (default: none)')
-    ap.add_argument('-w', '--workload', type=workloads.Workload, choices=list(workloads.Workload),
-                    default=workloads.Workload.WIKITEXT,
-                    help='WikiText-2 segments or MT-Bench conversations (default: %(default)s)')
     ap.add_argument('--segments', type=int, default=10,
-                    help='this many segments (conversations) at random, 0 for all '
-                    '(default: %(default)s)')
+                    help='this many WikiText-2 segments at random, 0 for all (default: %(default)s)')
     ap.add_argument('-o', '--out', type=Path, default=None,
                     help='write the results as JSON here, and a table beside it (.csv)')
     args = cli.parse(ap, argv)
 
     runs = cli.runs(ap, args)
-    model, run, about = cli.load(args, designs=[*runs, *args.free])
-    scored = None
-    if args.workload is workloads.Workload.WIKITEXT:
-        segs = workloads.segments(workloads.wikitext_ids(args.model))
-    else:
-        from transformers import AutoTokenizer
+    model, run = cli.load(args, designs=[*runs, *args.free])
+    segs = workloads.segments(workloads.wikitext_ids(args.model))
+    segs = [segs[i] for i in workloads.pick(len(segs), args.segments or None, args.seed)]
 
-        path = cli.cache(args, 'mtbench', f'{args.model.replace("/", "--")}.json')
-        conversations = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(args.model), path)
-        segs = [torch.tensor([c.ids], device='cuda') for c in conversations]
-        # position p predicts token p + 1: scored where that token is the reply's
-        scored = [torch.tensor([r == 'assistant' for r in c.tags['role'][1:]]) for c in conversations]
-    picked = workloads.pick(len(segs), args.segments or None, args.seed)
-    segs = [segs[i] for i in picked]
-    scored = scored and [scored[i] for i in picked]
-
-    got = scoring.frozen(model, run, segs, runs, set(args.free), scored=scored, seed=args.seed,
-                         progress=True)
+    got = scoring.frozen(model, run, segs, runs, set(args.free), seed=args.seed, progress=True)
     rows = []
     frozen_runs, free_runs = got[scoring.Kind.FROZEN], got[scoring.Kind.FREE]
     for mode in dict.fromkeys([*frozen_runs, *free_runs]):
@@ -76,9 +55,7 @@ def main(argv: list[str]) -> int:
         print(f'{r["design"]:24} {held} {free}')
     if args.out:
         outputs.write_json(args.out, {
-            'model': args.model, 'scheme': args.scheme.name, **about,
-            'workload': args.workload, 'segments': len(segs), 'seed': args.seed,
-            'split_k': args.split_k, 'combine': args.combine,
+            'model': args.model, 'scheme': args.scheme.name, 'segments': len(segs), 'seed': args.seed,
             'runs': rows, 'per_segment': {k: {m: vars(d) for m, d in v.items()} for k, v in got.items()},
             'provenance': cli.provenance(args)})
         outputs.write_csv(args.out.with_suffix('.csv'), rows)

@@ -141,10 +141,10 @@ def test_a_remix_agrees_with_the_interpreter(remix: str, tile: tuple[int, int]) 
     assert agree == m * n * trials
 
 
-@pytest.mark.parametrize('remix', ['hopper-separate', 'mx-13'])
+@pytest.mark.parametrize('remix', ['mx-13'])
 def test_a_remix_fuses(remix: str) -> None:
-    """Over a static `k` in one kernel: chained per instruction (scaled) or
-    promoted every 128, as `serve` runs a scaled scheme."""
+    """A block-scaled design over a static `k` in one kernel, chained per
+    instruction, as `serve` runs it."""
     import compile_triton as ct
     from generator import build
 

@@ -6,7 +6,7 @@ a matmul: an `m x k` by `n x k` product, `B` given transposed so that a column
 is a row, with `out[i][j]` one call.  `m = n = 1` is the dot product itself.
 `m`, `n` and `k` are kernel arguments, so one kernel runs at any; `k` is
 compiled in for a design taking scales, which are one per call, and for
-`--fuse`, a design over a longer `k` in one kernel.  Asserts are dropped: a
+`--fuse`, a block-scaled design chained over a longer `k` in one kernel.  Asserts are dropped: a
 kernel cannot raise.
 
     python examples/mmasim/compile_triton.py              # one line per design
@@ -165,44 +165,19 @@ def _chained(design: fp.Function, k0: int, per: int | None) -> fp.Function:
     return chain
 
 
-def _promoted(design: fp.Function, block: int) -> fp.Function:
-    """*design* over `k`, *block* elements at a time from a zero accumulator,
-    each block's partial scaled into the result in FP32, `y + p * (s_x *
-    s_w)`, as block-scaled FP8 promotes it."""
-    @fp.fpy(ctx=fp.REAL)
-    def promoted(A, B, c, xs, ys):
-        y = c
-        for t in range(len(xs)):
-            i = t * block
-            p = design(A[i:i + block], B[i:i + block], 0.0)
-            with fp.FP32:
-                y = y + p * (xs[t] * ys[t])
-        return y
-    return promoted
-
-
-PROMOTE = 128
-"""`k` per FP32 promotion of a design without scales of its own (`fp8-block`'s
-block)."""
-
-
 def fuse(build: Build, k: int) -> tuple[fp.Function, list[Type]]:
-    """One design over a static *k*, and its argument types: a block-scaled
-    one chained per instruction (:func:`_chained`), any other promoted every
-    :data:`PROMOTE` of `k` with FP32 scales (:func:`_promoted`)."""
+    """A block-scaled design chained per instruction over a static *k*
+    (:func:`_chained`), and its argument types."""
     design, (a, b, c, *scales) = build()
     assert isinstance(a, _L) and isinstance(b, _L)
     k0 = _length(a)
-    if scales:
-        if k % k0:
-            raise ValueError(f'k = {k} is not a multiple of the design\'s {k0}')
-        sx = scales[0]
-        per = _length(sx) if isinstance(sx, _L) else None
-        f, s, elt = _chained(design, k0, per), k // k0 * (per or 1), getattr(sx, 'elt', sx)
-    else:
-        if k % PROMOTE or PROMOTE % k0:
-            raise ValueError(f'k = {k} is not a multiple of {PROMOTE}, or {PROMOTE} of {k0}')
-        f, s, elt = _promoted(design, PROMOTE), k // PROMOTE, _R(fp.FP32)
+    if not scales:
+        raise ValueError('only a block-scaled design is fused')
+    if k % k0:
+        raise ValueError(f'k = {k} is not a multiple of the design\'s {k0}')
+    sx = scales[0]
+    per = _length(sx) if isinstance(sx, _L) else None
+    f, s, elt = _chained(design, k0, per), k // k0 * (per or 1), getattr(sx, 'elt', sx)
     return f, [_L(a.elt, k), _L(b.elt, k), c, _L(elt, s), _L(elt, s)]
 
 
@@ -287,8 +262,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-k', type=int, default=None,
                     help="the dot product's length (default: the design's own)")
     ap.add_argument('--fuse', metavar='K', type=int, default=None,
-                    help=f'each design over K in one kernel: a block-scaled one chained per '
-                         f'instruction, any other promoted every {PROMOTE} with FP32 scales')
+                    help='each block-scaled design over K in one kernel, chained per instruction')
     ap.add_argument('-r', '--run', metavar='DRAWS', type=int, default=0,
                     help='launch DRAWS random inputs and compare every output, '
                          'bit for bit, with the interpreter')
@@ -315,6 +289,8 @@ def main(argv: list[str]) -> int:
         ap.error(f'no design matches {args.filter}')
     if args.fuse is not None and args.k is not None:
         ap.error('-k and --fuse K both give the length; pass one')
+    if args.fuse is not None:
+        designs = [(name, build) for name, build in designs if len(build()[1]) == 5]
     if args.run and (why := unavailable()) is not None:
         ap.error(f'--run needs a GPU: {why}')
     if args.out is not None:

@@ -2,13 +2,12 @@
 
 import argparse
 import importlib
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
-SCRIPTS = ['local', 'perplexity', 'zeroshot', 'decode', 'chat']
+SCRIPTS = ['frozen', 'chat', 'sweep']
+LISTING = ['frozen', 'chat']
+"""The scripts taking `cli`'s scheme options."""
 
 
 class _Parsed(Exception):
@@ -39,11 +38,10 @@ def test_every_option_says_what_it_does_and_its_default(
             assert 'default' in action.help, f'{script}: {action.dest} hides its default'
 
 
-@pytest.mark.parametrize('script', SCRIPTS)
+@pytest.mark.parametrize('script', LISTING)
 @pytest.mark.parametrize('flag, shown', [
     (['--help'], 'options:'),
-    (['--list-models'], 'kaitchup/Qwen3-0.6B-NVFP4'),
-    (['--list-schemes'], 'fp8-block:fnuz'),
+    (['--list-schemes'], 'fp8-row:fnuz'),
     (['--scheme', 'nvfp4', '--list-matmuls'], 'nv.blackwell.nvfp4'),
 ])
 def test_help_or_a_list_prints_and_exits(
@@ -53,15 +51,3 @@ def test_help_or_a_list_prints_and_exits(
         importlib.import_module(script).main(flag)
     assert done.value.code == 0
     assert shown in capsys.readouterr().out
-
-
-@pytest.mark.parametrize('script', SCRIPTS)
-def test_a_script_starts_without_the_quantization_libraries(script: str) -> None:
-    """`compressed_tensors` and `torchao` cost seconds at import; a script loads
-    neither until a model does."""
-    serve = Path(__file__).resolve().parents[1]
-    code = (f'import sys; sys.path.insert(0, {str(serve)!r}); import {script}; '
-            "print(*sorted({m.split('.')[0] for m in sys.modules} & {'compressed_tensors', 'torchao'}))")
-    loaded = subprocess.run([sys.executable, '-c', code],
-                            capture_output=True, text=True, check=True).stdout.split()
-    assert loaded == []
