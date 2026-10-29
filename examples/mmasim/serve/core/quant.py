@@ -133,24 +133,15 @@ class Quantized:
         return replace(self, elements=self.elements[rows], scales=_rows(self.scales, rows),
                        tensor=_rows(self.tensor, rows))
 
-    def dequantize(self, rows: slice = slice(None)) -> torch.Tensor:
-        """Its values, of *rows*, in FP64, exactly."""
-        v = self.elements[rows].double()
+    def dequantize(self, rows: slice = slice(None), dtype: torch.dtype = torch.float64) -> torch.Tensor:
+        """Its values, of *rows*, in *dtype*: in FP64 exactly, in FP32 rounded
+        once (every scheme's elements and block scales multiply exactly)."""
+        v = self.elements[rows].to(dtype)
         if self.scales is not None:
             s, (r, k) = self.operand.scaling, v.shape
             i = torch.arange(self.elements.shape[0], device=v.device)[rows] // s.rows
-            v = (v.view(r, -1, s.cols or k) * self.scales[i].double()[..., None]).view(r, k)
-        return v if self.tensor is None else v * _rows(self.tensor, rows).double()
-
-    def values(self) -> torch.Tensor:
-        """Its values in FP32: :meth:`dequantize`'s rounded once, as every
-        scheme's elements and block scales multiply exactly in FP32."""
-        v = self.elements
-        if self.scales is not None:
-            s, (r, k) = self.operand.scaling, v.shape
-            i = torch.arange(r, device=v.device) // s.rows
-            v = (v.view(r, -1, s.cols or k) * self.scales[i][..., None]).view(r, k)
-        return v if self.tensor is None else v * self.tensor
+            v = (v.view(r, -1, s.cols or k) * self.scales[i].to(dtype)[..., None]).view(r, k)
+        return v if self.tensor is None else v * _rows(self.tensor, rows).to(dtype)
 
 
 def _rows(t: torch.Tensor | None, rows: torch.Tensor | slice) -> torch.Tensor | None:

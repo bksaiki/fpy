@@ -16,6 +16,7 @@ template's structure: `user`, `assistant`, `template` (its markers, role
 headers and empty think block), or `text` for WikiText.
 """
 
+import enum
 import json
 import random
 from dataclasses import dataclass
@@ -28,6 +29,13 @@ from . import generate, outputs, swap
 
 CONTEXT = 2048
 """Tokens per WikiText-2 segment (the GPTQ convention)."""
+
+
+class Workload(enum.StrEnum):
+    """A script's token sequences (above)."""
+
+    WIKITEXT = 'wikitext'
+    MTBENCH = 'mtbench'
 
 MAX_NEW = 512
 """Tokens per MT-Bench reply at most."""

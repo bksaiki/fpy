@@ -32,17 +32,20 @@ COLORS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4')
 """The anchors' colours, in order."""
 MARKERS = ('o', 's', '^', 'D', 'v')
 NAMES = {'nv.hopper.e4m3.f32': 'Hopper', 'nv.blackwell.e4m3.f32': 'Blackwell',
-         'nv.hopper.bf16.f32': 'Hopper', 'nv.ampere.bf16.f32': 'Ampere', 'amd.cdna3.bf16': 'CDNA3',
-         'amd.cdna3.fp8': 'CDNA3'}
+         'nv.hopper.bf16.f32': 'Hopper', 'nv.ampere.bf16.f32': 'Ampere', 'amd.cdna3.bf16': 'CDNA3'}
 """The anchors as the legend names them, under their scheme's heading."""
 FAMILIES = {'fp8-row': 'FP8', 'fp8-row:fnuz': 'FP8', 'bf16': 'BF16', 'mxfp8': 'FP8'}
 """Each scheme's legend heading."""
 STYLES = {'fp8-row': '-', 'bf16': ':'}
-"""Each scheme's line style, its anchors' and its floor's: the family a
-second encoding beside each anchor's hue."""
+"""Each scheme's line style, for its anchors and its floor."""
 INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
 
 U = 2.0 ** -24
+
+
+def _log10(v: float) -> float:
+    return math.log10(v) if v > 0 else math.nan
+
 
 METRICS: dict[str, tuple[str, Callable[[float], float]]] = {
     'backward_normwise': ('normwise backward error (log2)', lambda v: v),
@@ -53,12 +56,10 @@ METRICS: dict[str, tuple[str, Callable[[float], float]]] = {
     'ulp': ('ULP bits, mean', lambda v: v),
     'magnitude_bias': ('magnitude bias (u)', lambda v: v / U),
     'bias': ('bias (u)', lambda v: v / U),
-    'flips': ('flipped codes (log10 share)', lambda v: math.log10(v) if v > 0 else math.nan),
-    'kl': ('log10 KL(ref ‖ design)', lambda v: math.log10(v) if v > 0 else math.nan),
-    'disagree': ('top-1 disagreement with R1, frozen (log10 share)',
-                 lambda v: math.log10(v) if v > 0 else math.nan),
-    'rerounded': ('activation elements its own run re-rounds (log10 share)',
-                  lambda v: math.log10(v) if v > 0 else math.nan),
+    'flips': ('flipped codes (log10 share)', _log10),
+    'kl': ('log10 KL(ref ‖ design)', _log10),
+    'disagree': ('top-1 disagreement with R1, frozen (log10 share)', _log10),
+    'rerounded': ('activation elements its own run re-rounds (log10 share)', _log10),
 }
 """Each metric as plotted: its label, and the transform from `local.py`'s
 value."""
@@ -74,8 +75,7 @@ LOG2 = {'L'}
 """Parameters that double: a log2 axis."""
 
 FLOOR_WIDTH = 1
-"""Each scheme's floor (`floor_kl`: R1 an ulp up or down at random, Monte
-Carlo arithmetic's random rounding), a thin grey line in the scheme's style."""
+"""The floor line's width (`floor_kl`, R1 ±1 ulp at random)."""
 
 
 def _value(v: str) -> int | str:
@@ -139,8 +139,6 @@ def panel(ax: plt.Axes, rows: list[dict], param: str, metric: str, anchors: list
 def _floors(rows: list[dict]) -> dict[str, float]:
     """Each scheme's KL floor, where the table has one."""
     return {r['scheme']: float(r['floor_kl']) for r in rows if r.get('floor_kl')}
-
-
 
 
 def figure(rows: list[dict], metric: str, out: Path) -> None:

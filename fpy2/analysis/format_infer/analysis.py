@@ -1203,27 +1203,23 @@ def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
     return int(af.neg_bound), int(af.pos_bound)
 
 
-def _has_finite(fmt: 'FormatBound') -> bool:
-    """Does *fmt* hold any finite value?
-
-    Only an exhaustive set can fail to: every :class:`Format` holds a zero at
-    least.  Unknown reads as ``True``, which claims nothing.
-    """
+def _set_any(fmt: 'FormatBound', pred: Callable[[SetValue], bool]) -> bool:
+    """Does *fmt* (a list's, its elements') hold a value *pred* accepts?
+    Only an exhaustive set can fail to; unknown reads as ``True``, which
+    claims nothing."""
     while isinstance(fmt, ListFormat):
         fmt = fmt.elt
-    if isinstance(fmt, SetFormat):
-        return any(not isinstance(v, Special) for v in fmt.values)
-    return True
+    return not isinstance(fmt, SetFormat) or any(pred(v) for v in fmt.values)
+
+
+def _has_finite(fmt: 'FormatBound') -> bool:
+    """Does *fmt* hold any finite value?"""
+    return _set_any(fmt, lambda v: not isinstance(v, Special))
 
 
 def _has_digits(fmt: 'FormatBound') -> bool:
-    """Does *fmt* hold a finite non-zero value?  As :func:`_has_finite`, only
-    an exhaustive set can fail to."""
-    while isinstance(fmt, ListFormat):
-        fmt = fmt.elt
-    if isinstance(fmt, SetFormat):
-        return any(isinstance(v, Fraction) and v != 0 for v in fmt.values)
-    return True
+    """Does *fmt* hold a finite non-zero value?"""
+    return _set_any(fmt, lambda v: isinstance(v, Fraction) and v != 0)
 
 
 def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:

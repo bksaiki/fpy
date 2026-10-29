@@ -10,12 +10,12 @@ product) and `sweep.provenance.json`.  `--end-to-end` runs `frozen.py`
 instead: each point's distance from the exact run, frozen to it (the
 anchors also free, and R1 an ulp up or down at random as the floor), in
 `sweep-e2e-<model>[-mtbench].csv`; `--free-only` then adds each point's free
-run to that table.  `--grid` runs instead every combination of :data:`GRID`'s
-axes around its anchor, frozen and free, into `sweep-grid-<model>.csv`
-(`plot_grid.py`): the evaluation's design space.  `--manifest` compiles the
-grid and writes `manifest.csv`: a row per design, its parameters, name and
-whether it runs -- compiled, then on a GPU launched once (Triton compiles a
-kernel at its first launch) -- the local error's list.
+run to that table.  `--grid` runs instead, end to end, each of
+:data:`GRID_ANCHORS` over `F`, and with its join swapped, frozen and free, into
+`sweep-grid-<model>[-mtbench].csv` (`plot_grid.py`).  `--manifest` compiles the
+grid, launches each design as it will run (at each of `--model`'s layer
+widths), and writes `manifest.csv`: a row per design, its parameters, name,
+status and compile time.
 
     python serve/sweep.py                          # from examples/mmasim
     python serve/sweep.py --anchors nv.hopper.e4m3.f32 --params F --tokens 512
@@ -25,7 +25,6 @@ kernel at its first launch) -- the local error's list.
 
 import argparse
 import csv
-import itertools
 import math
 import subprocess
 import sys
@@ -39,7 +38,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parent), str(Path(__file__).resolve
 
 import generator
 import torch
-from core import cli, kernels, outputs, quant, swap
+from core import checkpoints, cli, kernels, outputs, quant, swap, workloads
 from generator.catalog import CATALOG
 
 import fpy2 as fp
@@ -139,18 +138,16 @@ def points(anchors: list[str], params: list[str]) -> list[Point]:
     return out
 
 
-GRID = (('nv.hopper.bf16.f32', 'nv.ampere.bf16.f32', 'amd.cdna3.bf16', 'amd.cdna2.bf16',
-         'nv.blackwell.mx.e4m3', 'nv.hopper.e4m3.f32', 'nv.ada.e4m3.f32', 'amd.cdna3.fp8'),
-        (10, 13, 16, 19, 22, 25, 28))
-"""`--grid`'s anchors, each generation's BF16 and FP8 instruction (MMA-Sim's
-Blackwell BF16 is Hopper's, Ada's Ampere's; CDNA2 has no FP8; Blackwell's FP8
-its block-scaled MXFP8, which unscaled is the same instruction), and the `F`
-each is swept over, its own added; a design that does not read `F` (CDNA2's
-tree) is its own alone.  Each anchor also with the other vendor's join:
-structures no hardware (and no MMA-Sim model) has."""
+GRID_ANCHORS = ('nv.hopper.bf16.f32', 'nv.ampere.bf16.f32', 'amd.cdna3.bf16', 'amd.cdna2.bf16',
+                'nv.blackwell.mx.e4m3', 'nv.hopper.e4m3.f32', 'nv.ada.e4m3.f32', 'amd.cdna3.fp8')
+"""`--grid`'s anchors: each generation's BF16 and FP8 instruction (MMA-Sim's
+Blackwell BF16 is Hopper's, Ada's Ampere's; CDNA2 has no FP8); see :func:`grid`."""
 
-SWAPPED_GUARD = 7
-"""A join made separate is CDNA3's: its adder 7 bits wider than the sum."""
+GRID_F = (10, 13, 16, 19, 22, 25, 28)
+"""The `F` each grid anchor is swept over, its own added."""
+
+SWAPPED_GUARD = CATALOG['amd.cdna3.bf16'].F2 - CATALOG['amd.cdna3.bf16'].F
+"""A join made separate is CDNA3's: its adder this many bits wider than the sum."""
 
 
 def _swap_join(d: generator.Design) -> generator.Design:
@@ -162,15 +159,14 @@ def _swap_join(d: generator.Design) -> generator.Design:
 
 
 def grid() -> list[Point]:
-    """Each of :data:`GRID`'s anchors over `F`, and with its join swapped
-    (`join=swapped` in the label); its accumulator its own."""
-    anchors, widths = GRID
+    """Each grid anchor over `F`, and with its join swapped (`join=swapped`
+    in the label); its accumulator its own.  A design that does not read `F`
+    (CDNA2's tree) is its own alone."""
     out = []
-    for a in anchors:
-        rho = CATALOG[a].rho
-        acc = f'rho_bits={rho.nbits - 1 - rho.es} rho_mode={rho.rm.name}'
+    for a in GRID_ANCHORS:
+        acc = ' '.join(f'{q}={PARAMS[q][0](CATALOG[a])}' for q in ('rho_bits', 'rho_mode'))
         for base, tail in ((CATALOG[a], ''), (_swap_join(CATALOG[a]), ' join=swapped')):
-            mine = [base.F] if _UNUSED['F'](base) else sorted({*widths, base.F})
+            mine = [base.F] if _UNUSED['F'](base) else sorted({*GRID_F, base.F})
             out += [Point(a, 'grid', f'F={f} {acc}{tail}', _width(f)(base)) for f in mine]
     return out
 
@@ -183,19 +179,51 @@ def register() -> None:
             kernels.register_design(d)
 
 
-def _launch(designs: list[tuple[str, str]]) -> dict[str, str]:
-    """Each of *designs* (with its scheme) launched once on a small input; the
-    ones that fail, and why."""
-    failed = {}
-    for name, scheme in designs:
+def _launch(pts: list[Point], names: dict[generator.Design, str], model: str,
+            jobs: int) -> dict[str, str]:
+    """Each of *pts*' designs compiled as it will run (under a scaled scheme,
+    fused over each layer's `k`) and launched at each of *model*'s layer
+    widths; the ones that fail, and why.  Stops at an error that leaves the
+    GPU unusable, which every later design would hit."""
+    failed: dict[str, str] = {}
+    for scheme in sorted({SCHEMES[p.anchor] for p in pts}):
         s = quant.scheme(scheme)
-        qx, qw = (quant.quantize(torch.randn(r, 256, device='cuda'), op) for r, op in ((64, s.x), (128, s.w)))
-        try:
-            swap.gemm(name, s, qx, qw, kernels.prepare(qw.elements, kernels.storage(name)[1], 1))
-            torch.cuda.synchronize()
-        except Exception as ex:  # noqa: BLE001 -- a failure is a result
-            failed[name] = f'{type(ex).__name__} at launch: {str(ex).strip().splitlines()[-1][:200]}'
+        net, run, _ = checkpoints.for_scheme(model, s)
+        ks = cli.layer_ks(net, run)
+        del net, run
+        torch.cuda.empty_cache()
+        mine = list(dict.fromkeys(names[p.design] for p in pts if SCHEMES[p.anchor] == scheme))
+        if s.applied in ('k-blocks', 'instruction'):
+            failed |= kernels.compile_designs(mine, jobs, ks)
+        for name in (n for n in mine if n not in failed):
+            for k in ks:
+                qx, qw = (quant.quantize(torch.randn(r, k, device='cuda'), op) for r, op in ((64, s.x), (128, s.w)))
+                try:
+                    swap.gemm(name, s, qx, qw, kernels.prepare(qw.elements, kernels.storage(name)[1], 1))
+                    torch.cuda.synchronize()
+                except Exception as ex:  # noqa: BLE001 -- a failure is a result
+                    failed[name] = f'{type(ex).__name__} at launch, k = {k}: {_last_line(ex)}'
+                    try:
+                        torch.cuda.synchronize()
+                    except RuntimeError as dead:
+                        raise SystemExit(f'{name} left the GPU unusable: {_last_line(dead)}') from ex
+                    break
     return failed
+
+
+def _last_line(ex: BaseException) -> str:
+    """*ex*'s message's last line, cut to 200 characters."""
+    return (str(ex).strip().splitlines() or [''])[-1][:200]
+
+
+def _key(r: dict[str, Any]) -> tuple[str, str, str]:
+    """A table row's point."""
+    return r['anchor'], r['param'], str(r['value'])
+
+
+def _about(d: generator.Design) -> dict[str, Any]:
+    """*d*'s parameters, readably (`generator.about` but its exact form)."""
+    return {k: v for k, v in generator.about(d).items() if k != 'exact'}
 
 
 def main(argv: list[str]) -> int:
@@ -211,15 +239,16 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-j', '--jobs', type=int, default=8,
                     help='processes compiling the designs (default: %(default)s)')
     ap.add_argument('--end-to-end', action='store_true',
-                    help="run frozen.py instead of local.py (see above)")
+                    help='run frozen.py instead of local.py')
     ap.add_argument('--segments', type=int, default=10,
-                    help='with --end-to-end, WikiText-2 segments (default: %(default)s)')
-    ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext',
+                    help='with --end-to-end, segments (conversations) (default: %(default)s)')
+    ap.add_argument('-w', '--workload', type=workloads.Workload, choices=list(workloads.Workload),
+                    default=workloads.Workload.WIKITEXT,
                     help='with --end-to-end, the workload (default: %(default)s)')
     ap.add_argument('--grid', action='store_true',
-                    help="with --end-to-end, :data:`GRID`'s combinations instead, frozen and free")
+                    help="end to end, the grid's points instead, frozen and free")
     ap.add_argument('--manifest', action='store_true',
-                    help="compile the grid and write its manifest, manifest.csv")
+                    help="compile and launch the grid as --model runs it, and write manifest.csv")
     ap.add_argument('--free', action='store_true',
                     help='with --end-to-end, every point free as well as frozen')
     ap.add_argument('--free-only', action='store_true',
@@ -229,18 +258,24 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--list', action='store_true', help='print the points, and stop')
     args = ap.parse_args(argv)
 
-    if args.grid and not args.end_to_end:
-        ap.error('--grid runs end to end')
+    args.end_to_end |= args.grid
+    if args.grid and args.free_only:
+        ap.error('--grid runs its points free already')
     pts = grid() if args.grid or args.manifest else points(args.anchors, args.params)
-    tag = args.model.rsplit('/', 1)[-1] + ('' if args.workload == 'wikitext' else f'-{args.workload}')
+    tag = args.model.rsplit('/', 1)[-1] + ('' if args.workload is workloads.Workload.WIKITEXT
+                                           else f'-{args.workload}')
+    out = args.results / 'sweep'
+    table = out / (f'sweep-grid-{tag}.csv' if args.grid else
+                   f'sweep-e2e-{tag}.csv' if args.end_to_end else 'sweep.csv')
+    if args.free_only and not table.exists():
+        ap.error(f'--free-only adds to {table}, which does not exist')
     kept: list[dict[str, str]] = []
-    if args.grid and (done := args.results / 'sweep' / f'sweep-grid-{tag}.csv').exists():
-        # the grid's table grows: only its points not yet run (a refused one is retried), and
-        # only the grid's rows kept
-        with done.open() as f:
-            kept = list(csv.DictReader(f))
-        kept = [r for r in kept
-                if r['status'] == 'ok' and (r['anchor'], r['value']) in {(p.anchor, p.value) for p in pts}]
+    if args.grid and table.exists():
+        # resume: keep the table's ok rows of the grid's designs; run the rest
+        want = {(p.anchor, p.value): generator.name(p.design) for p in pts}
+        with table.open() as f:
+            kept = [r for r in csv.DictReader(f)
+                    if r['status'] == 'ok' and want.get((r['anchor'], r['value'])) == r['design']]
         pts = [p for p in pts if (p.anchor, p.value) not in {(r['anchor'], r['value']) for r in kept}]
     names = {d: generator.name(d) for d in dict.fromkeys(p.design for p in pts)}
     if args.list:
@@ -252,15 +287,13 @@ def main(argv: list[str]) -> int:
     register()
     kernels.CACHE = cli.cache(args, 'kernels')
     refused = kernels.compile_designs(list(names.values()), args.jobs)
-    out = args.results / 'sweep'
     if args.manifest:
         if torch.cuda.is_available():
-            refused |= _launch([(names[p.design], SCHEMES[p.anchor]) for p in pts if names[p.design] not in refused])
-        about = {p.design: {k: v for k, v in generator.about(p.design).items() if k != 'exact'} for p in pts}
+            refused |= _launch([p for p in pts if names[p.design] not in refused], names, args.model, args.jobs)
         rows = [{'anchor': p.anchor, 'format': SCHEMES[p.anchor], 'design': names[p.design],
                  'status': 'refused' if names[p.design] in refused else 'ok',
                  'reason': refused.get(names[p.design], ''),
-                 'compile_seconds': kernels.compile_seconds(names[p.design]), **about[p.design]} for p in pts]
+                 'compile_seconds': kernels.compile_seconds(names[p.design]), **_about(p.design)} for p in pts]
         outputs.write_csv(out / 'manifest.csv', rows)
         print(f'{len(rows)} designs, {len(rows) - len(refused)} run, {len(refused)} refused: '
               f'{out / "manifest.csv"}')
@@ -294,8 +327,6 @@ def main(argv: list[str]) -> int:
                     metrics[row['design']] = row
     rows = []
     for p in pts:
-        about = generator.about(p.design)
-        about.pop('exact')
         n = names[p.design]
         m = metrics.get(n, {})
         # empty for a scheme with no point run
@@ -303,13 +334,11 @@ def main(argv: list[str]) -> int:
         rows.append({'anchor': p.anchor, 'scheme': SCHEMES[p.anchor], 'param': p.param,
                      'value': p.value, 'is_anchor': p.is_anchor,
                      'status': 'refused' if n in refused else 'ok', 'reason': refused.get(n, ''),
-                     'design': n, **about,
+                     'design': n, **_about(p.design),
                      **({'floor_kl': floor.get('kl', ''), 'k0_kl': floor.get('free_kl', '')}
                         if args.end_to_end else {}),
                      **{k: v for k, v in m.items()
                         if k not in ('model', 'reference', 'design', 'group')}})
-    table = out / (f'sweep-grid-{tag}.csv' if args.grid else
-                   f'sweep-e2e-{tag}.csv' if args.end_to_end else 'sweep.csv')
     if args.end_to_end and not (args.free_only or args.grid) and table.exists() and (
             set(args.anchors) != set(ANCHORS) or set(args.params) != set(PARAMS)):
         # a partial rerun: these anchors' and parameters' rows replace the table's
@@ -318,12 +347,11 @@ def main(argv: list[str]) -> int:
             rows = [r for r in csv.DictReader(f)
                     if r['param'] in PARAMS and (r['anchor'], r['param']) not in ran] + rows
     if args.free_only:
-        # the frozen table's rows for these points, each point's free run added
-        key = lambda r: (r["anchor"], r["param"], str(r["value"]))
-        new = {key(r): r for r in rows}
+        # the frozen table's rows, these points' with their free runs added
+        new = {_key(r): r for r in rows}
         with table.open() as f:
-            rows = [{**r, **{k: v for k, v in new[key(r)].items() if k.startswith('free_') or k == 'k0_kl'}}
-                    for r in csv.DictReader(f) if key(r) in new]
+            rows = [{**r, **{k: v for k, v in new.get(_key(r), {}).items() if k.startswith('free_') or k == 'k0_kl'}}
+                    for r in csv.DictReader(f)]
     outputs.write_csv(table, kept + rows)
     outputs.write_json(table.with_suffix('.provenance.json'), {
         'argv': sys.argv, **outputs.commit(),

@@ -1083,7 +1083,8 @@ the sub-FP32 roundings compiled, and after double rounding).
 - `sweep.py --end-to-end` runs `frozen.py` per scheme over the same points:
   frozen KL vs R1, top-1 disagreement and re-rounded share, the anchors free
   too, R1 rounded toward zero as each scheme's floor (`floor_kl`, a dashed
-  line).  `plot_sweep.py --table` draws it as the local sweep.
+  line; since replaced by `-exact-rand`, R1 an ulp up or down at random).
+  `plot_sweep.py --table` draws it as the local sweep.
 - **Cost:** 7 h (Qwen3-0.6B) and 8.5 h (Qwen3.5), not the 1.5 h 3.5 s a
   pass predicts; not timed by scheme (`bf16` runs `lm_head`, 151k rows,
   frozen; `fp8-row` leaves it to R0).
@@ -1108,14 +1109,18 @@ the sub-FP32 roundings compiled, and after double rounding).
 ##### Phase 7 - The design space
 
 **The design space is the main figure's grid** (decided 2026-10-25): every
-design the evaluation reports, and nothing it does not.  `sweep.GRID`: four
-anchors -- NVIDIA's fused sum, `c` joined inside (Blackwell E4M3, Hopper
-BF16), and AMD's separate join (CDNA3 BF16, CDNA3 E4M3 FNUZ under
-`fp8-row:fnuz`) -- each with `F` 10-28 (its own added: CDNA3's 24; `F2 = F +
-7` with it), `rho_bits` 13, 16, 23 and rounding toward zero or to nearest;
-its other fields as built.  **N = 180** (a test holds it).
-- `sweep.py --manifest` compiles the grid, launches each design once on a
-  GPU (Triton compiles a kernel at its first launch), and writes
+design the evaluation reports, and nothing it does not.  `sweep.grid()`: each
+generation's BF16 and FP8 instruction (Blackwell/Hopper, Ada, CDNA3, CDNA2;
+Blackwell's FP8 is MXFP8; CDNA2 has none), each with `F` 10-28 (its own
+added), and each again with `c` added the other vendor's way (a separate
+join keeps `F2 = F + 7`); the accumulator and the rest as built.  **N =
+113** (a test holds it).
+- Superseded: four anchors (Blackwell E4M3, Hopper BF16, CDNA3 BF16 and
+  E4M3 FNUZ) x `F` x `rho_bits` 13, 16, 23 x toward zero or to nearest, N =
+  180.  The accumulator is fixed by the instruction encoding, not a design
+  choice.
+- `sweep.py --manifest` compiles the grid, launches each design on a GPU as
+  the evaluation will (at each of `--model`'s layer widths), and writes
   `results/sweep/manifest.csv`: a row per design, its parameters, name and
   status -- the local error's list, so the two evaluations cover one set.
 - Superseded: a wider space (2026-10-23, N = 576: two NVIDIA anchors x `F`
@@ -1124,16 +1129,16 @@ its other fields as built.  **N = 180** (a test holds it).
   chain's add (or FMA) rounded to nearest below FP32 ("`Add` rounds to odd,
   which is exact here only where its result is proven inside the format's
   range"), are a compiler gap still open; no grid design reaches it.
-- Launching found two grid designs (BF16, `F` 10, a 13- or 16-bit
-  accumulator to nearest) that compiled but failed in Triton: the emitter
+- Launching found two designs of an earlier grid (BF16, `F` 10, a 13- or
+  16-bit accumulator to nearest) that compiled but failed in Triton: the emitter
   rounded an FP16-held value to the integers with `libdevice.nearbyint`,
   which has no FP16; it now rounds in FP32 (`_integral`; `test_triton.py`'s
   `hopper-bf16-f10-rne13`).
 
 ##### Phase 8 - The grid end to end
 
-**Done** (2026-10-23; Qwen3.5-0.8B, WikiText-2, 10 segments).  `sweep.py
---end-to-end --grid`: `SPACE`'s anchors, `F` 10-25 x `rho_bits` 13, 16, 23
+**Done** (2026-10-23, an earlier grid, superseded by Phase 9; Qwen3.5-0.8B,
+WikiText-2, 10 segments).  `sweep.py --end-to-end --grid`: `SPACE`'s anchors, `F` 10-25 x `rho_bits` 13, 16, 23
 x toward zero or to nearest, 72 designs, frozen and free
 (`sweep-grid-Qwen3.5-0.8B.csv`); `plot_grid.py` draws them 2 x 2, FP8 and
 BF16 by as deployed and held to ref.
@@ -1144,6 +1149,31 @@ BF16 by as deployed and held to ref.
 - **As deployed:** FP8, every design on K₀ (~1e-02).  BF16 has a knee: `F`
   10 and 13 above K₀, and a 13-bit accumulator above it at every `F` (-3.7
   against -4.3, log10); 16 and 23 bits on K₀ from `F` 16.
+
+##### Phase 9 - The final grid end to end
+
+**Done** (2026-10-29; Qwen3.5-0.8B, WikiText-2, 10 segments, seed 0; a
+fresh run, `results/sweep/sweep-grid-Qwen3.5-0.8B.csv`; how to run it:
+`examples/mmasim/serve/README.md`).  Phase 7's 113 designs: 105 measured,
+8 refused (CDNA3 FP8 with `c` added with the products: "`sum` is exact, and
+no storage holds its elements and partial sums").  `plot_grid.py` draws one
+row: per format, observed (free) then amplified (frozen); a line per
+generation, solid with the products, dashed after them; one ±1 ulp floor per
+panel.
+- **The dashed lines are CDNA3's post adder,** which rounds toward -inf:
+  its error is a bias (mean ~85% of its RMS on a random BF16 matmul),
+  amplified 1-1.8 decades worse than with the products at the same narrow
+  `F` (CDNA3 BF16 1.8, Hopper BF16 1.0).  No MMA-Sim instruction has a post
+  adder rounding toward zero, so the grid leaves it out.
+- **Cost:** 12.8 h on a Titan V: 24 min compiling (one at a time, 9-20 s a
+  design, MXFP8 ~75 s with its per-`k` fused kernels), then per run
+  (amplified and observed alike) 1.4-2.1 min for FP8, 2.3-4.4 min for BF16,
+  15 min for CDNA2 with `c` after the products.  Recorded per row
+  (`compile_seconds`, `seconds`, `free_seconds`).  Tiles retuned at the
+  model's layer shapes first (`kernels.tile`: CDNA2's separate joins 6.9x
+  faster a matmul, ~2x end to end); every KL identical to the run before.
+- **Floors** (`-exact-rand`): amplified 1.6e-12 (`bf16`), 7.4e-12 (FP8);
+  observed (K₀) 5.0e-05, 9.4e-03 to 9.9e-03.
 
 ##### After the last phase
 
@@ -1417,8 +1447,9 @@ leaves it out.
   `results/frozen/calib-*`): 2.0 bits of KL a bit of precision (KL ∝ ε²),
   every scheme but `mxfp4` (2.4-3.6: its outputs often have so few bits that
   rounding leaves them exact), until the floor.
-- **The floor is FP32 inference's own rounding**, R1 rounded toward zero (a
-  dashed line).  Freezing fixes the quantizer, not the model's FP32 norms,
+- **The floor is FP32 inference's own rounding**, R1 an ulp up or down at
+  random (`-exact-rand`; earlier R1 rounded toward zero, which the values
+  below measure).  Freezing fixes the quantizer, not the model's FP32 norms,
   attention and softmax: any perturbation re-rounds them, the mechanism of
   K₀ a level down.  ~1e-11 under the FP8 and FP4 schemes (the curve flattens
   from `t` ~15), ~2e-12 under `bf16` (~19).  A design at the floor injects
@@ -1429,8 +1460,8 @@ leaves it out.
   FP32's 23 -- where its local mean ULP error is 12.5 bits.  A chain of FMAs
   and Blackwell's `ftz` sit above their local error too ("How it relates to
   local").
-- **K₀,** the free run's re-rounding (R1 rounded toward zero, free: `fp8-row`
-  1.3e-02, `bf16` 6.7e-05), is reported beside the figure, not on it: above
+- **K₀,** the free run's re-rounding (the floor's run, free: `fp8-row`
+  9.5e-03, `bf16` 5.0e-05 on Qwen3.5-0.8B), is reported beside the figure, not on it: above
   the calibration's top, it would take extrapolating.
 
 **Harness: FP32** (decided 2026-10-21).  FP64 non-matmul operations were
@@ -1465,7 +1496,7 @@ Qwen3-0.6B; end to end as `½ log2 KL`, bits by the ε² law):
 **The figure** (`plot_sweep.py`, `kl.png`): x a design parameter, y log10
 KL(ref ‖ design) on one scale across panels ("ref", R1, for the paper: the
 quantized model, every matmul exact and rounded once to FP32), a line per anchor, each
-scheme's FP32 floor dashed.  "Frozen" and the calibration are the
+scheme's floor a thin grey line in its style.  "Frozen" and the calibration are the
 methods'.
 
 **Cost:** profiled (2026-10-21), the design's emulated GEMM is 83%

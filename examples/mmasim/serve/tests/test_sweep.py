@@ -113,4 +113,4 @@ def test_the_grid_is_113_designs() -> None:
     assert len(swapped) == 60 and all(p.design.join != sweep.CATALOG[p.anchor].join for p in swapped)
     assert all(p.design.F2 - p.design.F == 7 for p in swapped if p.design.join == 'separate')
     assert all(p.design.rho == sweep.CATALOG[p.anchor].rho for p in pts)
-    assert {p.anchor for p in pts if p.is_anchor} == set(sweep.GRID[0])
+    assert {p.anchor for p in pts if p.is_anchor} == set(sweep.GRID_ANCHORS)

@@ -203,7 +203,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, metavar='METRIC',
                     default=list(metrics.METRICS),
                     help=f'metrics to compute, of {", ".join(metrics.METRICS)} (default: all)')
-    ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext',
+    ap.add_argument('-w', '--workload', type=workloads.Workload, choices=list(workloads.Workload),
+                    default=workloads.Workload.WIKITEXT,
                     help='WikiText-2 prose, or MT-Bench conversations (default: %(default)s)')
     ap.add_argument('--tokens', type=int, default=workloads.CONTEXT,
                     help='rows captured: WikiText-2\'s first, or sampled over MT-Bench '
@@ -246,13 +247,13 @@ def main(argv: list[str]) -> int:
         transcripts = args.transcripts or cli.cache(args, 'mtbench', f'{name.replace("/", "--")}.json')
         key = {'model': name, 'scheme': args.scheme.name, 'source': about['source'],
                'workload': args.workload, 'tokens': args.tokens, 'seed': args.seed,
-               'transcripts': str(transcripts) if args.workload == 'mtbench' else None,
+               'transcripts': str(transcripts) if args.workload is workloads.Workload.MTBENCH else None,
                'sources': _SOURCES}
         cached = (args.acts or cli.cache(args, 'acts')) / f'acts-{_digest(key)}.pt'
         if cached.exists():
             acts = Activations(**torch.load(cached, weights_only=True))
         else:
-            if args.workload == 'wikitext':
+            if args.workload is workloads.Workload.WIKITEXT:
                 seqs = workloads.wikitext(name, args.tokens)
             else:
                 from transformers import AutoTokenizer

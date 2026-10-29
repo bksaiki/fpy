@@ -28,6 +28,8 @@ python compile.py            # every design; -v for the failures, -o DIR to emit
 python compile_triton.py -r 64   # as Triton kernels, compared on 64 draws (GPU)
 ```
 
+The end-to-end LLM evaluation is in [`serve/README.md`](serve/README.md).
+
 ## Tests
 
 The directed checks need only `fpy2`, and are what `pytest` runs:

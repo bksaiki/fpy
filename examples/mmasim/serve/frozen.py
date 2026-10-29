@@ -2,16 +2,13 @@
 Each matmul's distance from the scheme's exact run, frozen to it.
 
 Each segment runs the exact run (R1) once, recording every linear layer's
-input; each matmul then runs frozen to it (`swap.Frozen`): its arithmetic's
-error propagates, but no activation rounds differently from R1's, so a
-design's distance is its own and not the scheme's re-drawn quantization.
-Per matmul, KL(R1 || run) and top-1 disagreement over segments, and the
+input; each matmul then runs frozen to it (`swap.Frozen`), so only its
+arithmetic differs.  Per matmul: KL(R1 || run), top-1 disagreement, the
 share of activation elements (and scales) its own run would round
-differently; those in `--free` also as they run; each run's seconds, and
-the seconds its kernels took to compile.  The workload: WikiText-2
-segments as in `perplexity.py`, every token scored; or MT-Bench's
-conversations (`-w mtbench`), R0's greedy replies teacher-forced (cached
-under `<results>/cache/mtbench`), only the replies' tokens scored.
+differently, its seconds and its kernels' compile seconds; `--free`
+matmuls also as deployed.  Workload: WikiText-2 segments, every token
+scored; or MT-Bench (`-w mtbench`), R0's greedy replies teacher-forced
+(cached under `<results>/cache/mtbench`), only reply tokens scored.
 
     python serve/frozen.py --scheme fp8-row
     python serve/frozen.py --scheme fp8-row -w mtbench
@@ -33,7 +30,8 @@ def main(argv: list[str]) -> int:
     cli.add_runs(ap)
     ap.add_argument('--free', nargs='*', default=[], metavar='MATMUL',
                     help='matmuls run as they are, frozen too if in --matmuls (default: none)')
-    ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext',
+    ap.add_argument('-w', '--workload', type=workloads.Workload, choices=list(workloads.Workload),
+                    default=workloads.Workload.WIKITEXT,
                     help='WikiText-2 segments or MT-Bench conversations (default: %(default)s)')
     ap.add_argument('--segments', type=int, default=10,
                     help='this many segments (conversations) at random, 0 for all '
@@ -45,7 +43,7 @@ def main(argv: list[str]) -> int:
     runs = cli.runs(ap, args)
     model, run, about = cli.load(args, designs=[*runs, *args.free])
     scored = None
-    if args.workload == 'wikitext':
+    if args.workload is workloads.Workload.WIKITEXT:
         segs = workloads.segments(workloads.wikitext_ids(args.model))
     else:
         from transformers import AutoTokenizer
@@ -62,10 +60,11 @@ def main(argv: list[str]) -> int:
     got = scoring.frozen(model, run, segs, runs, set(args.free), scored=scored, seed=args.seed,
                          progress=True)
     rows = []
-    for mode in dict.fromkeys([*got['frozen'], *got['free']]):
-        row = {'design': mode, **(got['frozen'][mode].report() if mode in got['frozen'] else {})}
-        if mode in got['free']:
-            row |= {f'free_{k}': v for k, v in got['free'][mode].report().items()}
+    frozen_runs, free_runs = got[scoring.Kind.FROZEN], got[scoring.Kind.FREE]
+    for mode in dict.fromkeys([*frozen_runs, *free_runs]):
+        row = {'design': mode, **(frozen_runs[mode].report() if mode in frozen_runs else {})}
+        if mode in free_runs:
+            row |= {f'free_{k}': v for k, v in free_runs[mode].report().items()}
         if (t := kernels.compile_seconds(mode)) is not None:
             row['compile_seconds'] = t
         rows.append(row)

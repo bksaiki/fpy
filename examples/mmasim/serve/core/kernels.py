@@ -65,8 +65,10 @@ _KERNELS: dict[tuple[str, int | None], KernelSource] = {}
 """Each design compiled so far: over any `k` (`None`), or fused over one."""
 
 _SECONDS: dict[tuple[str, int | None], float] = {}
-"""Each of :data:`_KERNELS`' compile time, where known (a kernel cached
-before its time was kept has none)."""
+"""Each of :data:`_KERNELS`' compile time, where known."""
+
+_LAUNCHED: set[tuple[str, int | None]] = set()
+"""Each of :data:`_KERNELS` launched so far."""
 
 REGISTERED: dict[str, dict[str, Any] | None] = {}
 """Each :func:`register`ed design's description (its parameters), by name."""
@@ -100,9 +102,8 @@ def register(name: str, build: Callable, block: int, block_m: int,
 
 
 def tile(d: generator.Design) -> tuple[int, int]:
-    """*d*'s tile `(block, block_m)`, the fastest of its kind at the model's
-    layer shapes: wider the more often `c` is added (short `L`, `c` after the
-    products), narrower for `L` ≥ 64."""
+    """*d*'s tile `(block, block_m)`, the fastest measured for its sum, join
+    and `L` at the model's layer shapes."""
     if d.sum == 'tree':
         return (128 if d.join == 'separate' else 32), 1
     if d.L >= 64:
@@ -184,21 +185,23 @@ def _kernel(design: str, k: int | None = None) -> KernelSource:
     """*design*'s kernel over any `k` (`None`), or fused over *k*; cached, in
     memory and in :data:`CACHE`."""
     if (design, k) not in _KERNELS and not _load(design, k):
-        start = time.perf_counter()
-        _KERNELS[design, k] = _compile(_BUILDS[design], k)
-        _SECONDS[design, k] = time.perf_counter() - start
+        _KERNELS[design, k], _SECONDS[design, k] = _compile(_BUILDS[design], k)
         _store(design, k)
     return _KERNELS[design, k]
 
 
-def _compile(build: Callable, k: int | None) -> KernelSource:
-    return ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)
+def _compile(build: Callable, k: int | None) -> tuple[KernelSource, float]:
+    """*build*'s kernel over any `k` (`None`), or fused over *k*, and the
+    seconds it took to compile."""
+    start = time.perf_counter()
+    kernel = ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)
+    return kernel, time.perf_counter() - start
 
 
 def compile_seconds(design: str) -> float | None:
-    """The seconds *design*'s kernels compiled in so far took to compile (`None`
-    if any's time is unknown, or none has)."""
-    ks = [key for key in _KERNELS if key[0] == design]
+    """The seconds the kernels *design* has launched took to compile (`None`
+    if any's time is unknown, or none has launched)."""
+    ks = [key for key in _LAUNCHED if key[0] == design]
     if not ks or any(key not in _SECONDS for key in ks):
         return None
     return sum(_SECONDS[key] for key in ks)
@@ -254,10 +257,12 @@ def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int
         _kernel(*t)     # a refused one again, to raise its error
 
 
-def compile_designs(designs: Sequence[str], jobs: int | None = None) -> dict[str, str]:
-    """Compile each of *designs* (its kernel over any `k`) not yet compiled,
-    as :func:`precompile` does; the refused ones' errors, by design."""
-    todo = [(d, None) for d in designs if (d, None) not in _KERNELS and not _load(d, None)]
+def compile_designs(designs: Sequence[str], jobs: int | None = None,
+                    ks: Sequence[int | None] = (None,)) -> dict[str, str]:
+    """Compile each of *designs* not yet compiled, over any `k` (`None`) or
+    fused over each of *ks*, as :func:`precompile` does; the refused ones'
+    errors, by design."""
+    todo = [(d, k) for d in designs for k in ks if (d, k) not in _KERNELS and not _load(d, k)]
     return {d: why for (d, _), why in _compile_all(todo, jobs).items()}
 
 
@@ -286,9 +291,9 @@ def _compile_or_refuse(
     """A design's kernel, from its build, else (in a worker) by its MMA-Sim
     name, and the seconds it took; or `None` and why it was refused."""
     design, k, build = item
-    start = time.perf_counter()
     try:
-        return _compile(build or _BUILDS[design], k), '', time.perf_counter() - start
+        kernel, seconds = _compile(build or _BUILDS[design], k)
+        return kernel, '', seconds
     except Exception as ex:  # noqa: BLE001 -- a refusal is a result
         return None, f'{type(ex).__name__}: {str(ex).splitlines()[0] if str(ex) else ""}', 0.0
 
@@ -315,13 +320,14 @@ def prepare(w: torch.Tensor, dtype: torch.dtype, split_k: int = 1) -> torch.Tens
 
 
 def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
-            *scales: torch.Tensor, kernel: KernelSource | None = None) -> None:
-    """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*), or by
-    its *kernel*, onto *y* `[m, n]`, which is both `C` and the output.
-    `block_m` is capped at the power of two `>= m`."""
+            *scales: torch.Tensor, k: int | None = None) -> None:
+    """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*), its
+    kernel over any `k` or fused over *k*, onto *y* `[m, n]`, which is both
+    `C` and the output.  `block_m` is capped at the power of two `>= m`."""
     block, block_m = TILES[design]
     m = a.shape[0]
-    launch(kernel or compiled(design)[0], [a, b, y, *scales, y],
+    _LAUNCHED.add((design, k))
+    launch(_kernel(design, k), [a, b, y, *scales, y],
            block=block, block_m=min(block_m, 1 << (m - 1).bit_length()))
 
 
@@ -394,9 +400,8 @@ def _scaled(a: torch.Tensor, w: torch.Tensor, design: str,
     y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
     rows = min(max(1, _ELEMS // n), _ROWS)
     if m <= FUSED_ROWS.get(design, m):
-        kernel = fused(design, k)
         for i in range(0, m, rows):
-            _launch(a[i:i + rows], w[0], y[i:i + rows], design, xs[i:i + rows], ys, kernel=kernel)
+            _launch(a[i:i + rows], w[0], y[i:i + rows], design, xs[i:i + rows], ys, k=k)
         return y
     s = k // step
     per = xs.shape[1] // s

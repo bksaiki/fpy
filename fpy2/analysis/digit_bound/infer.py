@@ -1630,7 +1630,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 ift, iff = iff, ift
             self._unify_elements(phi, ift)
             self._unify_elements(phi, iff)
-            self._finite_backward(phi, then_fin | self._implied_by(ift), else_fin | self._implied_by(iff))
+            self._finite_backward(phi, (then_fin | self._implied_by(ift)) & (else_fin | self._implied_by(iff)))
             # An arm with no digits -- no finite non-zero value -- states
             # nothing, so it is dropped rather than joined, as
             # `_visit_return` drops a path returning only infinities.
@@ -1677,12 +1677,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return frozenset()
         return self.store.closed(frozenset(self.store.high(msb)))
 
-    def _finite_backward(self, phi: Definition, ift: frozenset[int], iff: frozenset[int]) -> None:
-        """*phi* is finite only where the arm it took is, so it implies what
-        either arm, finite, would: *ift* and *iff*."""
+    def _finite_backward(self, phi: Definition, implied: frozenset[int]) -> None:
+        """*phi* is finite only where the arm it took is, so it implies
+        *implied*: what both arms, finite, would."""
         msb = self._def(phi).msb if isinstance(self._type_of(phi), RealType) else None
         for h in self.store.high(msb) if msb is not None else ():
-            for lit in ift & iff:
+            for lit in implied:
                 self.store.imply(h, lit)
 
     def _arm_non_finite(self, stmt: If1Stmt | IfStmt, arm: int) -> list[int]:

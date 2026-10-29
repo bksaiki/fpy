@@ -68,7 +68,6 @@ def test_runs_pair_against_r0_and_the_exact_run(model: torch.nn.Module, tokens: 
     assert 0 < r['dnll_se'] < apart and r['kl'] > 0 and 0 <= r['p_holm'] <= 1
 
 
-
 def test_a_frozen_run_is_its_arithmetic_alone(model: torch.nn.Module, tokens: torch.Tensor) -> None:
     """Frozen to the exact run, the exact run is no distance at all and rounds
     nothing differently; R1 rounded toward zero, under an ulp of it, is some
@@ -79,10 +78,10 @@ def test_a_frozen_run_is_its_arithmetic_alone(model: torch.nn.Module, tokens: to
     segs = workloads.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
     rtz, hopper = 'fp8-row-exact-rtz', 'nv.hopper.e4m3.f32'
     got = scoring.frozen(model, run, segs, ['fp8-row-exact', rtz, hopper], free={rtz})
-    exact = got['frozen']['fp8-row-exact'].report()
+    exact = got[scoring.Kind.FROZEN]['fp8-row-exact'].report()
     assert (exact['kl'], exact['disagree'], exact['rerounded']) == (0.0, 0.0, 0.0)
-    assert 0 < got['frozen'][rtz].report()['kl'] < got['frozen'][hopper].report()['kl']
-    assert set(got['free']) == {rtz}
+    assert 0 < got[scoring.Kind.FROZEN][rtz].report()['kl'] < got[scoring.Kind.FROZEN][hopper].report()['kl']
+    assert set(got[scoring.Kind.FREE]) == {rtz}
     assert (run.mode, run.record, run.frozen) == ('fp32', None, None)
     swap.give(run, model, swap.BF16, {})
 
@@ -94,10 +93,10 @@ def test_random_rounding_is_the_seeds_alone(model: torch.nn.Module, tokens: torc
     run = swap.patch(model)
     segs = workloads.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
     rand = 'bf16-exact-rand'
-    a = scoring.frozen(model, run, segs, [rand], seed=3)['frozen'][rand].kl
+    a = scoring.frozen(model, run, segs, [rand], seed=3)[scoring.Kind.FROZEN][rand].kl
     scoring.frozen(model, run, segs, ['bf16-exact-rtz', rand], seed=7)
-    b = scoring.frozen(model, run, segs, [rand], seed=3)['frozen'][rand].kl
-    c = scoring.frozen(model, run, segs, [rand], seed=4)['frozen'][rand].kl
+    b = scoring.frozen(model, run, segs, [rand], seed=3)[scoring.Kind.FROZEN][rand].kl
+    c = scoring.frozen(model, run, segs, [rand], seed=4)[scoring.Kind.FROZEN][rand].kl
     assert a == b != c
 
 

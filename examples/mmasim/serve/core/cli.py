@@ -112,10 +112,14 @@ def load(args: argparse.Namespace, name: str | None = None, designs: Sequence[st
         split_k=args.split_k, combine=args.combine)
     designs = [d for d in designs if d in kernels.TILES]
     if designs and args.scheme.applied in ('k-blocks', 'instruction'):
-        ks = sorted({m.in_features for m in model.modules()
-                     if isinstance(m, torch.nn.Linear) and id(m.weight) not in run.ignore})
-        kernels.precompile(designs, jobs, ks)
+        kernels.precompile(designs, jobs, layer_ks(model, run))
     return model, run, about
+
+
+def layer_ks(model: torch.nn.Module, run: swap.Run) -> list[int]:
+    """The `k` of each linear layer of *model* that *run* computes by a design."""
+    return sorted({m.in_features for m in model.modules()
+                   if isinstance(m, torch.nn.Linear) and id(m.weight) not in run.ignore})
 
 
 def provenance(args: argparse.Namespace) -> dict[str, Any]:

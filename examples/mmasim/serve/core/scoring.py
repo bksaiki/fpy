@@ -7,9 +7,10 @@ run), top-1 agreement and Δp against R0 (llama.cpp's statistics), and per
 sequence the mean NLL, KL and top-1 disagreement against each reference (R0,
 and for a design the scheme's exact run) with its first disagreement.
 :func:`against` pairs them over sequences.  Log-probabilities go through a
-block of positions at a time; a reference's stay on the GPU, block by block.
+block of positions at a time; a reference's are kept in host memory.
 """
 
+import enum
 import itertools
 import math
 import statistics
@@ -213,20 +214,27 @@ class Divergence:
         return out
 
 
+class Kind(enum.StrEnum):
+    """How :func:`frozen` runs a mode: frozen to the exact run, or as it runs."""
+
+    FROZEN = 'frozen'
+    FREE = 'free'
+
+
 def frozen(
     model: torch.nn.Module, run: swap.Run, segs: Iterable[torch.Tensor], modes: Sequence[str],
     free: Collection[str] = (), *, scored: Sequence[torch.Tensor] | None = None, seed: int = 0,
     progress: bool = False,
-) -> dict[str, dict[str, Divergence]]:
+) -> dict[Kind, dict[str, Divergence]]:
     """Each of *modes* against *run*'s scheme's exact run over *segs*,
     frozen to it (`swap.Frozen`), and each of *free* as it runs:
-    `{'frozen': ..., 'free': ...}`, by mode; per segment, over the positions
+    by :class:`Kind`, then mode; per segment, over the positions
     its *scored* marks (each predicting the next token), if given.  Log-probabilities in FP64: in
-    FP32, their rounding alone is a KL near 1e-9, above what a frozen run
-    can be.  A random-sign run's signs are *seed*'s and the segment's
+    FP32, their rounding alone is a KL near 1e-9, above the smallest frozen
+    runs' (~1e-12).  A random-sign run's signs are *seed*'s and the segment's
     (`Run.reseed`), frozen or free alike."""
     exact = f'{run.scheme.name}-exact'
-    out: dict[str, dict[str, Divergence]] = {'frozen': {}, 'free': {}}
+    out: dict[Kind, dict[str, Divergence]] = {Kind.FROZEN: {}, Kind.FREE: {}}
     pinned: list[torch.Tensor] = []
     try:
         for i, seg in enumerate(segs):
@@ -235,19 +243,18 @@ def frozen(
             rec, run.record = run.record, None
             for mode in dict.fromkeys([*modes, *free]):
                 run.mode = mode
-                for kind in [k for k, of in (('frozen', modes), ('free', free)) if mode in of]:
+                for kind in [k for k, of in ((Kind.FROZEN, modes), (Kind.FREE, free)) if mode in of]:
                     start = time.perf_counter()
-                    run.frozen = rec.replay() if kind == 'frozen' else None
+                    run.frozen = rec.replay() if kind is Kind.FROZEN else None
                     run.reseed(seed, i)
                     d = out[kind].setdefault(mode, Divergence())
                     d.add(ref, _log_probs(model, seg, dtype=torch.float64), scored and scored[i])
                     torch.cuda.synchronize()
                     d.seconds += time.perf_counter() - start
-                    if run.frozen is not None:
-                        a, n, b, m = run.frozen.rerounded
-                        d.rerounded.append(float(a) / n)
-                        if m:
-                            d.rescaled.append(float(b) / m)
+                    if (f := run.frozen) is not None:
+                        d.rerounded.append(float(f.rerounded) / f.elements)
+                        if f.scales:
+                            d.rescaled.append(float(f.rescaled) / f.scales)
             del rec
             torch.cuda.empty_cache()
             if progress:

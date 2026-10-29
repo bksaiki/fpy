@@ -95,8 +95,8 @@ def _exact_run(mode: str, scheme: quant.Scheme) -> tuple[Rounding, int] | None:
     return ('nearest', int(t)) if t.isdigit() and int(t) in PRECISIONS else None
 
 
-def exact(qa: quant.Quantized, qw: quant.Quantized, rounding: Rounding = 'nearest',
-          bits: int = 23, signs: torch.Generator | None = None) -> torch.Tensor:
+def exact(qa: quant.Quantized, qw: quant.Quantized, signs: torch.Generator,
+          rounding: Rounding = 'nearest', bits: int = 23) -> torch.Tensor:
     """`qa @ qw.T` in FP64, rounded once to FP32 by *rounding*, at *bits*
     fraction bits (to nearest, below 23); a random sign drawn from *signs*."""
     m, k = qa.elements.shape
@@ -113,19 +113,17 @@ def exact(qa: quant.Quantized, qw: quant.Quantized, rounding: Rounding = 'neares
 
 def _fraction(p: torch.Tensor, bits: int) -> torch.Tensor:
     """FP64 *p* rounded to nearest, ties to even, at *bits* fraction bits;
-    exact in FP32 for *bits* under 23 (but past its subnormals)."""
+    exact in FP32 for *bits* under 23 (in FP32's normal range)."""
     m, e = torch.frexp(p)
     return torch.ldexp(torch.round(m * 2.0 ** (bits + 1)), e - (bits + 1))
 
 
-def _round(p: torch.Tensor, rounding: Rounding, signs: torch.Generator | None = None) -> torch.Tensor:
+def _round(p: torch.Tensor, rounding: Rounding, signs: torch.Generator) -> torch.Tensor:
     """FP64 *p* rounded to FP32 by *rounding*, a random sign from *signs*."""
     f = p.float()
     if rounding == 'toward-zero':
         return torch.where(f.double().abs() > p.abs(), torch.nextafter(f, torch.zeros_like(f)), f)
     if rounding == 'random-sign':
-        if signs is None:
-            raise ValueError('a random-sign rounding needs a generator (`Run.reseed`)')
         up = torch.rand(f.shape, device=f.device, generator=signs) < 0.5
         return torch.nextafter(f, torch.where(up, torch.inf, -torch.inf))
     return f
@@ -186,20 +184,25 @@ class Frozen:
 
     inputs: list[tuple[torch.Tensor, quant.Quantized]] = field(default_factory=list)
     at: int = 0
-    rerounded: list[torch.Tensor | int] = field(default_factory=lambda: [0, 0, 0, 0])
-    """Elements rounded differently, elements, scales changed, scales: the
-    counts on the GPU, read once a pass."""
-    _last: tuple[torch.Tensor, int] | None = field(default=None, repr=False)
+    rerounded: torch.Tensor | int = 0
+    """Elements the replaying run would round differently (on the GPU, read
+    once a pass), of :attr:`elements`."""
+    elements: int = 0
+    rescaled: torch.Tensor | int = 0
+    """Scales it would compute differently, of :attr:`scales`."""
+    scales: int = 0
+    _last: quant.Quantized | None = field(default=None, repr=False)
 
     def add(self, x: torch.Tensor, qa: quant.Quantized) -> None:
-        """Record *x* and its quantized *qa*, once for layers sharing *x*."""
-        if self._last is not None and self._last[0] is x and self._last[1] == x._version:
+        """Record *x* and its quantized *qa*, once for layers sharing *qa*
+        (`Run.quantize` reuses it)."""
+        if qa is self._last:
             self.inputs.append(self.inputs[-1])
             return
         dtype = quant.DTYPES[qa.operand.elements]
         e = qa.elements.to(dtype) if dtype in _FP8 else qa.elements
         self.inputs.append((x.detach().reshape(-1, x.shape[-1]).clone(), replace(qa, elements=e)))
-        self._last = (x, x._version)
+        self._last = qa
 
     def replay(self) -> 'Frozen':
         """These inputs, to replay from the first."""
@@ -214,12 +217,12 @@ class Frozen:
         x, qa = entry
         qa = replace(qa, elements=qa.elements.float())
         if fresh:
-            mine, r = own(), self.rerounded
-            r[0] = r[0] + (mine.elements != qa.elements).sum()
-            r[1] += qa.elements.numel()
+            mine = own()
+            self.rerounded = self.rerounded + (mine.elements != qa.elements).sum()
+            self.elements += qa.elements.numel()
             if qa.scales is not None:
-                r[2] = r[2] + (mine.scales != qa.scales).sum()
-                r[3] += qa.scales.numel()
+                self.rescaled = self.rescaled + (mine.scales != qa.scales).sum()
+                self.scales += qa.scales.numel()
         return x, qa
 
 
@@ -239,7 +242,8 @@ class Run:
     """While set, each layer's input is recorded on it."""
     frozen: Frozen | None = None
     """While set, each layer replays it (:class:`Frozen`)."""
-    signs: torch.Generator | None = field(default=None, compare=False, repr=False)
+    signs: torch.Generator = field(default_factory=lambda: torch.Generator('cuda').manual_seed(0),
+                                   compare=False, repr=False)
     """The random-sign rounding's generator (:meth:`reseed`)."""
     _weights: dict[tuple[int, int, str], tuple[torch.Tensor, quant.Quantized]] = field(
         default_factory=dict, compare=False, repr=False)
@@ -298,7 +302,7 @@ class Run:
         qw = self.weight(w)
         if self.frozen is not None:
             xr, qa = self.frozen.next(lambda: self.quantize(x, w))
-            y = self._matmul(qa, qw, w) + (x.reshape(xr.shape) - xr) @ qw.values().T
+            y = self._matmul(qa, qw, w) + (x.reshape(xr.shape) - xr) @ qw.dequantize(dtype=torch.float32).T
         else:
             qa = self.quantize(x, w)
             if self.record is not None:
@@ -310,15 +314,11 @@ class Run:
         """Draw the random-sign rounding afresh for *sequence* under *seed*:
         a pass over the same sequence draws the same signs, whatever ran
         before it."""
-        if self.signs is None:
-            self.signs = torch.Generator('cuda')
         self.signs.manual_seed(seed * 1_000_003 + sequence)
 
     def _matmul(self, qa: quant.Quantized, qw: quant.Quantized, w: torch.Tensor) -> torch.Tensor:
         if (r := _exact_run(self.mode, self.scheme)) is not None:
-            if self.signs is None:
-                self.reseed(0, 0)
-            return exact(qa, qw, *r, self.signs)
+            return exact(qa, qw, self.signs, *r)
         if self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
             held = kernels.storage(self.mode)[1]
             return gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held), self.combine)

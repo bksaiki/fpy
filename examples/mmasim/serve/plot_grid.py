@@ -1,7 +1,7 @@
 """
 The grid's plots, from `sweep.py --grid`'s table.
 
-KL(ref ‖ design) against `F`, a line per generation (by colour and marker)
+KL(ref ‖ design) against `F` (the paper's `k`), a line per generation (by colour and marker)
 and when `c` is added (solid: with the products, dashed: after them): per
 input format, a panel observed (free, as deployed), then amplified (frozen,
 quantization held to ref); each generation's own design ringed, one that does
@@ -49,16 +49,21 @@ def figure(rows: list[dict], out: Path) -> None:
     fig.get_layout_engine().set(h_pad=0.06)
     for i, (f, sub) in enumerate(zip(families, fig.subfigures(1, len(families)))):
         axes = sub.subplots(1, len(PANELS), squeeze=False)[0]
-        mine = sorted({a for a in family if family[a] == f}, key=lambda a: list(BASES).index(a) if a in BASES else 99)
+        mine = [a for a in BASES if family.get(a) == f]
         for a in mine:
             _lines(axes, [r for r in rows if r['anchor'] == a], a)
-        handles = [plt.Line2D([], [], color=COLORS[g], marker=MARKERS[g], linewidth=2, markeredgecolor='white',
-                              label=BASES.get(a, (a, a))[1])
-                   for a in mine for g in [GENERATIONS.index(BASES[a][0]) if a in BASES else 0]]
+        handles = [plt.Line2D([], [], color=c, marker=m, linewidth=2, markeredgecolor='white', label=BASES[a][1])
+                   for a in mine for c, m in [_look(a)]]
         axes[0].legend(handles=handles, fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False,
                        loc='upper right')
         for ax, (title, _, ref) in zip(axes, PANELS):
             ax.set_title(f'{f} ({title})', loc='left', **LARGE)
+            ax.set_xlabel('k (bits)', **LARGE)
+            ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))
+            ax.tick_params(colors=SMALL['color'], labelsize=SMALL['fontsize'])
+            ax.grid(color=GRID, linewidth=0.8)
+            for side in ('top', 'right'):
+                ax.spines[side].set_visible(False)
             # one ±1 ulp line, the lowest of the bases' (their quantizations differ)
             floor = min(float(r[ref]) for r in rows if family[r['anchor']] == f and r.get(ref))
             ax.axhline(math.log10(floor), color=INK, linestyle=':', linewidth=2, zorder=1)
@@ -81,11 +86,16 @@ def figure(rows: list[dict], out: Path) -> None:
     plt.close(fig)
 
 
+def _look(anchor: str) -> tuple[str, str]:
+    """*anchor*'s colour and marker, its generation's."""
+    g = GENERATIONS.index(BASES[anchor][0])
+    return COLORS[g], MARKERS[g]
+
+
 def _lines(axes: list[plt.Axes], rows: list[dict], anchor: str) -> None:
     """One anchor's lines in its format's panels, observed and amplified:
     a line per join."""
-    g = GENERATIONS.index(BASES[anchor][0]) if anchor in BASES else 0
-    color, marker = COLORS[g], MARKERS[g]
+    color, marker = _look(anchor)
     for ax, (_, col, _) in zip(axes, PANELS):
         for join, (style, _) in JOINS.items():
             pts = sorted((int(r['F']), float(r[col]), float(r.get(f'{col}_se') or 0), r['is_anchor'] == 'True')
@@ -103,12 +113,6 @@ def _lines(axes: list[plt.Axes], rows: list[dict], anchor: str) -> None:
             for x, y, p in zip(xs, ys, pts):
                 if p[3]:
                     ax.scatter(x, y, s=200, facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
-        ax.set_xlabel('k (bits)', **LARGE)
-        ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))
-        ax.tick_params(colors=SMALL['color'], labelsize=SMALL['fontsize'])
-        ax.grid(color=GRID, linewidth=0.8)
-        for side in ('top', 'right'):
-            ax.spines[side].set_visible(False)
 
 
 def main(argv: list[str]) -> int:
