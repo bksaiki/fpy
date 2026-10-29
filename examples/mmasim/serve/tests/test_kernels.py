@@ -140,6 +140,17 @@ def test_a_k_the_design_cannot_take_is_refused() -> None:
         linear(x, w, design)
 
 
+def test_scales_not_one_per_instruction_are_refused() -> None:
+    """A kernel cannot raise, so a scale list too short to cover `k` is the
+    host's to refuse."""
+    design = 'nv.blackwell.mx.e4m3'
+    held, (_, k0) = kernels.storage(design), kernels.compiled(design)
+    x, w = torch.zeros(2, 2 * k0).cuda().to(held[0]), torch.zeros(3, 2 * k0).cuda().to(held[1])
+    with pytest.raises(ValueError, match='takes scales'):
+        kernels.matmul(x, w, design, scales=(torch.ones(2, 1).cuda().to(held[2]),
+                                             torch.ones(3, 1).cuda().to(held[2])))
+
+
 def test_generated_designs_register_and_agree(registry: None) -> None:
     """Registered from the generator, compiled together in worker processes
     (their builds pickle), each runs through its kernel bit for bit (any
@@ -157,7 +168,7 @@ def test_generated_designs_register_and_agree(registry: None) -> None:
     names = [kernels.register_design(d) for d in remixes]
     for d, name in zip(remixes, names):
         assert name == generator.name(d) and kernels.REGISTERED[name] == generator.about(d)
-    kernels.precompile(names, jobs=2)
+    assert kernels.compile_designs(names, jobs=2) == {}
     rng = random.Random(0)
     for d, name in zip(remixes, names):
         f, arg_types = generator.build(d)

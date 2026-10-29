@@ -99,12 +99,10 @@ def register() -> None:
             kernels.register_design(d)
 
 
-def _launch(pts: list[Point], names: dict[generator.Design, str], model: str,
-            jobs: int) -> dict[str, str]:
-    """Each of *pts*' designs compiled as it will run (under a block-scaled
-    scheme, fused over each layer's `k`) and launched at each of *model*'s
-    layer widths; the ones that fail, and why.  Stops at an error that leaves
-    the GPU unusable, which every later design would hit."""
+def _launch(pts: list[Point], names: dict[generator.Design, str], model: str) -> dict[str, str]:
+    """Each of *pts*' designs launched at each of *model*'s layer widths; the
+    ones that fail, and why.  Stops at an error that leaves the GPU unusable,
+    which every later design would hit."""
     failed: dict[str, str] = {}
     for scheme in sorted({SCHEMES[p.anchor] for p in pts}):
         s = quant.scheme(scheme)
@@ -113,9 +111,7 @@ def _launch(pts: list[Point], names: dict[generator.Design, str], model: str,
         del net, run
         torch.cuda.empty_cache()
         mine = list(dict.fromkeys(names[p.design] for p in pts if SCHEMES[p.anchor] == scheme))
-        if s.applied == 'instruction':
-            failed |= kernels.compile_designs(mine, jobs, ks)
-        for name in (n for n in mine if n not in failed):
+        for name in mine:
             for k in ks:
                 qx, qw = (quant.quantize(torch.randn(r, k, device='cuda'), op) for r, op in ((64, s.x), (128, s.w)))
                 try:
@@ -182,7 +178,7 @@ def main(argv: list[str]) -> int:
     refused = kernels.compile_designs(list(names.values()), args.jobs)
     if args.manifest:
         if torch.cuda.is_available():
-            refused |= _launch([p for p in pts if names[p.design] not in refused], names, args.model, args.jobs)
+            refused |= _launch([p for p in pts if names[p.design] not in refused], names, args.model)
         rows = [{'anchor': p.anchor, 'format': SCHEMES[p.anchor], 'design': names[p.design],
                  'status': 'refused' if names[p.design] in refused else 'ok',
                  'reason': refused.get(names[p.design], ''),

@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import runpy
 import sys
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -89,16 +88,9 @@ def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
     return args.runs or list(known)
 
 
-def load(args: argparse.Namespace, designs: Sequence[str] = (),
-         jobs: int | None = None) -> tuple[torch.nn.Module, swap.Run]:
-    """`--model` under *args*' scheme (`swap.load`).  Under a block-scaled
-    scheme, the fused kernels of the *designs* to run compile now, in *jobs*
-    processes, over each `k` of the layers a design computes."""
-    model, run = swap.load(args.model, args.scheme)
-    designs = [d for d in designs if d in kernels.TILES]
-    if designs and args.scheme.applied == 'instruction':
-        kernels.precompile(designs, jobs, layer_ks(model, run))
-    return model, run
+def load(args: argparse.Namespace) -> tuple[torch.nn.Module, swap.Run]:
+    """`--model` under *args*' scheme (`swap.load`)."""
+    return swap.load(args.model, args.scheme)
 
 
 def layer_ks(model: torch.nn.Module, run: swap.Run) -> list[int]:

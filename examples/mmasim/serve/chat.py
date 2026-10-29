@@ -42,7 +42,7 @@ def main(argv: list[str]) -> int:
     # its notes (e.g. a kernel falling back to PyTorch) would land mid-reply
     transformers.logging.set_verbosity_error()
     tok = AutoTokenizer.from_pretrained(args.model)
-    model, run = cli.load(args, designs=[args.run])
+    model, run = cli.load(args)
     run.mode = args.run
     eos = generate.stop_tokens(model, tok)
     messages: list[dict[str, str]] = []

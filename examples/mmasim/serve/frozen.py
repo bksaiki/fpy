@@ -33,7 +33,7 @@ def main(argv: list[str]) -> int:
     args = cli.parse(ap, argv)
 
     runs = cli.runs(ap, args)
-    model, run = cli.load(args, designs=[*runs, *args.free])
+    model, run = cli.load(args)
     segs = workloads.segments(workloads.wikitext_ids(args.model))
     segs = [segs[i] for i in workloads.pick(len(segs), args.segments or None, args.seed)]
 
