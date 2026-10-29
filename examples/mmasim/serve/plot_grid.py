@@ -35,6 +35,8 @@ BASES = {'nv.hopper.bf16.f32': ('Hopper', 'Hopper/Blackwell'), 'nv.ampere.bf16.f
          'nv.blackwell.mx.e4m3': ('Blackwell', 'Blackwell')}
 """Each anchor: its generation, and its legend name (MMA-Sim's Blackwell
 BF16 is Hopper's, Ada's Ampere's)."""
+LARGE, SMALL = {'fontsize': 14, 'color': INK}, {'fontsize': 12, 'color': MUTED}
+"""The two text styles: titles and axis labels; ticks and legends."""
 JOINS = {'inside': ('-', 'with the products'), 'separate': ('--', 'after the products')}
 """Each join: its line style and legend label."""
 
@@ -53,9 +55,10 @@ def figure(rows: list[dict], out: Path) -> None:
         handles = [plt.Line2D([], [], color=COLORS[g], marker=MARKERS[g], linewidth=2, markeredgecolor='white',
                               label=BASES.get(a, (a, a))[1])
                    for a in mine for g in [GENERATIONS.index(BASES[a][0]) if a in BASES else 0]]
-        axes[0].legend(handles=handles, fontsize=12, frameon=False, loc='upper right')
+        axes[0].legend(handles=handles, fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False,
+                       loc='upper right')
         for ax, (title, _, ref) in zip(axes, PANELS):
-            ax.set_title(f'{f} ({title})', fontsize=13, color=INK, loc='left')
+            ax.set_title(f'{f} ({title})', loc='left', **LARGE)
             # one ±1 ulp line, the lowest of the bases' (their quantizations differ)
             floor = min(float(r[ref]) for r in rows if family[r['anchor']] == f and r.get(ref))
             ax.axhline(math.log10(floor), color=INK, linestyle=':', linewidth=2, zorder=1)
@@ -64,14 +67,14 @@ def figure(rows: list[dict], out: Path) -> None:
             ticks = ax.yaxis.get_major_locator().tick_values(lo, hi)
             ax.set_ylim(max(t for t in ticks if t <= lo), min(t for t in ticks if t >= hi))
         if i == 0:
-            axes[0].set_ylabel('log10 KL(ref ‖ design)', fontsize=13, color=INK)
+            axes[0].set_ylabel('log10 KL(ref ‖ design)', **LARGE)
     handles = [plt.Line2D([], [], linestyle='', label='c added')]
     handles += [plt.Line2D([], [], color=MUTED, linestyle=s, linewidth=2, label=lab) for s, lab in JOINS.values()]
     handles += [plt.Line2D([], [], linestyle='', label=' ')]
     handles += [plt.Line2D([], [], color=INK, linestyle=':', linewidth=2, label='±1 ulp')]
-    leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles), fontsize=12,
-                     frameon=False, handlelength=2.4, columnspacing=1.2)
-    leg.get_texts()[0].set_fontweight('bold')
+    leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles), fontsize=SMALL['fontsize'],
+                     labelcolor=SMALL['color'], frameon=False, handlelength=2.4, columnspacing=1.2)
+    leg.get_texts()[0].set(fontweight='bold', **LARGE)
     out.parent.mkdir(parents=True, exist_ok=True)
     for ext in ('.png', '.pdf'):
         fig.savefig(out.with_suffix(ext), dpi=200)
@@ -91,7 +94,7 @@ def _lines(axes: list[plt.Axes], rows: list[dict], anchor: str) -> None:
                 continue
             assert len({p[0] for p in pts}) == len(pts), f'{anchor}: two points at one F'
             xs, ys = [p[0] for p in pts], [math.log10(p[1]) for p in pts]
-            ax.plot(xs, ys, color=color, linestyle=style, linewidth=2, marker=marker, markersize=4,
+            ax.plot(xs, ys, color=color, linestyle=style, linewidth=2, marker=marker, markersize=6,
                     markeredgecolor='white')
             if col == 'free_kl':
                 lo = [y - math.log10(max(p[1] - p[2], p[1] / 10)) for y, p in zip(ys, pts)]
@@ -99,10 +102,10 @@ def _lines(axes: list[plt.Axes], rows: list[dict], anchor: str) -> None:
                 ax.errorbar(xs, ys, yerr=[lo, hi], fmt='none', ecolor=color, elinewidth=1, capsize=2)
             for x, y, p in zip(xs, ys, pts):
                 if p[3]:
-                    ax.scatter(x, y, s=130, facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
-        ax.set_xlabel('k (bits)', fontsize=13, color=INK)
+                    ax.scatter(x, y, s=200, facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
+        ax.set_xlabel('k (bits)', **LARGE)
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))
-        ax.tick_params(colors=MUTED, labelsize=12)
+        ax.tick_params(colors=SMALL['color'], labelsize=SMALL['fontsize'])
         ax.grid(color=GRID, linewidth=0.8)
         for side in ('top', 'right'):
             ax.spines[side].set_visible(False)
