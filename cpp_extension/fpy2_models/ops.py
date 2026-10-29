@@ -113,7 +113,7 @@ def nv_blackwell_mxfp8(
     a, b = _quantize_inputs(a, b, torch.float8_e5m2, torch.float32)
     alpha = _quantize_scalar(alpha, torch.float8_e8m0fnu)
     beta = _quantize_scalar(beta, torch.float8_e8m0fnu)
-    return torch.ops.fpy2_models.nv_blackwell_mxfp8.default(
+    return torch.ops.fpy2_models.nv_blackwell_mx_e5m2.default(
         a, b, _float32(c), alpha, beta
     )
 

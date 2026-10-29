@@ -4,6 +4,8 @@ import pytest
 
 from evaluation.benchmark_mmasim import (
     DEFAULT_MMASIM_ROOT,
+    _instruction,
+    _manifest,
     build_cases,
     prepare_case,
     validate,
@@ -19,15 +21,21 @@ def cases():
 
 
 def test_registry_contains_all_compiled_designs(cases):
-    assert len(cases) == 14
+    # Every model built into fpy2_models has an MMA-Sim reference.
+    assert len(cases) == len(_manifest()["models"]) == 60
     assert len({case.name for case in cases}) == len(cases)
     assert len({case.op_name for case in cases}) == len(cases)
+    # validation.json records each NVIDIA and AMD instruction.
+    assert all(_instruction(case.reference) for case in cases)
 
 
-def test_all_cases_are_bitwise_equivalent(cases):
+@pytest.mark.parametrize("distribution", ["normal", "uniform"])
+def test_all_cases_are_bitwise_equivalent(cases, distribution):
     failures = {}
     for index, case in enumerate(cases):
-        prepared = prepare_case(case, batch=4, seed=1000 + index)
+        prepared = prepare_case(
+            case, batch=4, seed=1000 + index, distribution=distribution
+        )
         result = validate(prepared)
         if not result["valid"]:
             failures[case.name] = result
@@ -53,7 +61,7 @@ def test_native_chain_matches_individual_model_calls(cases):
         # Distinct rows and chunks detect lost carry, incorrect offsets, and
         # accidentally sharing accumulators between independent dot products.
         a = (
-            torch.arange(2 * length, dtype=case.accumulator_dtype).reshape(2, length)
+            torch.arange(2 * length, dtype=case.compute_dtype).reshape(2, length)
             / 128
         )
         b = torch.full_like(a, 0.5)
