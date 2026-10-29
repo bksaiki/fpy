@@ -1141,7 +1141,21 @@ def _clip_to_constant(
     """*out*, the abstract ``lhs op rhs``, with its bounds clipped to the
     interval ``+`` or ``-`` gives where one operand is a set: lifted to a
     format, a constant keeps no least magnitude, so ``x - 13`` would keep
-    ``x``'s upper bound."""
+    ``x``'s upper bound.  Likewise ``*``'s ``-0``: a constant with no zero
+    makes one only from the other operand's zero, ``+0`` times a negative
+    or ``-0`` times a positive, where the format charges any negative."""
+    if op is operator.mul:
+        for s, f, af in ((rhs, lhs, af_a), (lhs, rhs, af_b)):
+            if not isinstance(s, SetFormat) or isinstance(f, SetFormat):
+                continue
+            if any(v is NEG_ZERO or v == 0 for v in s.values):
+                return out
+            fin = [v for v in s.values if isinstance(v, Fraction)]
+            neg_zero = any(v < 0 for v in fin) or (af.has_neg_zero and any(v > 0 for v in fin))
+            return AbstractFormat(out.prec, out.exp, out.pos_bound, neg_bound=out.neg_bound,
+                                  has_pos_inf=out.has_pos_inf, has_neg_inf=out.has_neg_inf,
+                                  has_nan=out.has_nan, has_neg_zero=out.has_neg_zero and neg_zero)
+        return out
     if op not in (operator.add, operator.sub):
         return out
     for s, f, af, first in ((rhs, lhs, af_a, False), (lhs, rhs, af_b, True)):

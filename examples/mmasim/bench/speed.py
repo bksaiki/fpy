@@ -74,8 +74,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-m', type=int, default=1024, help="A's rows (default 1024)")
     ap.add_argument('-n', type=int, default=None, help="B's columns (default m)")
     ap.add_argument('-k', type=int, default=256,
-                    help='the dot product length, rounded down to a multiple of '
-                         "the design's; a design taking scales keeps its own "
+                    help="the dot product length, rounded down to a multiple of the design's "
                          '(default 256)')
     ap.add_argument('--blocks', type=int, nargs='*', default=[16, 32, 64, 128],
                     help='block sizes to time (default 16 32 64 128)')
@@ -102,10 +101,9 @@ def main(argv: list[str]) -> int:
         except Exception as ex:  # noqa: BLE001 -- a refusal is a result
             print(f'{name:22} {type(ex).__name__}')
             continue
-        a, _, _, *scales = arg_types
-        k0 = ct._length(a)
-        k = k0 if scales else max(args.k // k0, 1) * k0
-        tensors = _inputs(arg_types, m, n, k)
+        k0 = ct._length(arg_types[0])
+        k = max(args.k // k0, 1) * k0
+        tensors = _inputs(ct.typed(build, k)[1], m, n, k)
         heights = args.blocks_m if kernel.block_m is not None else [1]
         tiles = [(b, h) for b in args.blocks for h in heights]
         rows = []
