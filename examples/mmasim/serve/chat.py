@@ -2,9 +2,8 @@
 Chat with the model in the terminal, its linear layers through a matmul.
 
 Greedy decoding, thinking off, the conversation re-encoded each turn by the
-model's chat template; the reply streams as it is decoded.  `--model` is a
-master or a quantized checkpoint, run under `--scheme`
-(`checkpoints.for_scheme`).  Commands:
+model's chat template; the reply streams as it is decoded.  `--model` runs
+under `--scheme`, its weights quantized by round-to-nearest.  Commands:
 
     /matmul <name>  switch matmul (fp32, the scheme's exact matmul, or a
                     design); the history stays
@@ -12,9 +11,9 @@ master or a quantized checkpoint, run under `--scheme`
     /quit           leave (or end of input)
 
     python serve/chat.py                               # fp32
-    python serve/chat.py --matmul amd.cdna2.bf16 --model Qwen/Qwen3.5-0.8B
+    python serve/chat.py --matmul amd.cdna2.bf16
     python serve/chat.py --scheme fp8-row --matmul nv.ada.e4m3.f32
-    python serve/chat.py --model kaitchup/Qwen3-0.6B-NVFP4 --scheme nvfp4 --matmul nv.blackwell.nvfp4
+    python serve/chat.py --scheme mxfp8 --matmul nv.blackwell.mx.e4m3
 """
 
 import argparse
@@ -37,14 +36,17 @@ def main(argv: list[str]) -> int:
     if args.run not in modes:
         ap.error(f'{args.scheme.name} has no matmul {args.run} (only {", ".join(modes)})')
 
+    import transformers
     from transformers import AutoTokenizer
 
+    # its notes (e.g. a kernel falling back to PyTorch) would land mid-reply
+    transformers.logging.set_verbosity_error()
     tok = AutoTokenizer.from_pretrained(args.model)
-    model, run, about = cli.load(args, designs=[args.run])
+    model, run = cli.load(args, designs=[args.run])
     run.mode = args.run
     eos = generate.stop_tokens(model, tok)
     messages: list[dict[str, str]] = []
-    print(f'{args.model} under {args.scheme.name} (weights {about["source"]}), '
+    print(f'{args.model} under {args.scheme.name}, '
           f'matmul {run.mode}.  /matmul <name>, /reset, /quit.', file=sys.stderr)
 
     while True:
@@ -65,7 +67,7 @@ def main(argv: list[str]) -> int:
             if arg.strip() in modes:
                 run.mode = arg.strip()
             else:
-                print(f'matmuls: {", ".join(modes)}', file=sys.stderr)
+                print('\n'.join(cli.matmuls(args.scheme)), file=sys.stderr)
             continue
 
         messages.append({'role': 'user', 'content': line})

@@ -8,13 +8,12 @@ skipped without either.
 import pytest
 import torch
 from core import kernels, quant, swap
+from test_kernels import linear
 
 from fpy2.backend.triton import unavailable
 
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
-
-
 
 def _logits(model: torch.nn.Module, tokens: torch.Tensor) -> torch.Tensor:
     with torch.no_grad():
@@ -46,27 +45,24 @@ def test_each_run_computes_as_it_says(
     assert torch.equal(_logits(model, tokens), before)
 
 
-def test_a_design_through_the_run_is_kernels_linear(
+def test_a_design_through_the_run_is_its_kernel_alone(
     model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
     """Weights prepared once and an input rounded once for the layers that
-    share it change nothing: every layer's output, at `split_k` 1 and 4, and
-    after a weight changes in place, is `kernels.linear`'s on the same input,
-    bit for bit."""
+    share it change nothing: every layer's output, and after a weight changes
+    in place, is the kernel's on the same input, bit for bit."""
     run = swap.patch(model)
     pairs = []
 
     def check(layer: torch.nn.Linear, inputs: tuple[torch.Tensor], y: torch.Tensor) -> None:
-        pairs.append((y, kernels.linear(inputs[0], layer.weight, run.mode,
-                                         split_k=run.split_k, combine=run.combine)))
+        pairs.append((y, linear(inputs[0], layer.weight, run.mode)))
 
     handles = [m.register_forward_hook(check) for m in model.modules()
                if isinstance(m, torch.nn.Linear)]
     w = model.lm_head.weight
     try:
-        for split_k, combine in ((1, 'linear'), (4, 'linear'), (4, 'tree')):
-            run.mode, run.split_k, run.combine = 'amd.cdna2.bf16', split_k, combine
-            _logits(model, tokens)
+        run.mode = 'amd.cdna2.bf16'
+        _logits(model, tokens)
         with torch.no_grad():
             w.neg_()
         _logits(model, tokens)
@@ -78,12 +74,8 @@ def test_a_design_through_the_run_is_kernels_linear(
     assert pairs and all(torch.equal(got, want) for got, want in pairs)
 
 
-_E4M3 = ('nv.ada.e4m3.f32', 'nv.hopper.e4m3.f32', 'nv.blackwell.e4m3.f32')
-
-
 @pytest.mark.parametrize('name, designs', [
-    ('fp8-row', _E4M3),
-    ('fp8-block', _E4M3),
+    ('fp8-row', ('nv.ada.e4m3.f32', 'nv.hopper.e4m3.f32', 'nv.blackwell.e4m3.f32')),
     ('mxfp8', ('nv.blackwell.mx.e4m3',)),
     ('mxfp4', ('nv.blackwell.mx.e2m1', 'nv.blackwell.mxfp4')),
     ('nvfp4', ('nv.blackwell.nvfp4',)),
@@ -94,13 +86,12 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
     """A scheme's designs are those taking its elements and scales (the FP8
     schemes' FNUZ variants, CDNA3's); the exact run is, layer by layer, the
     quantized operands' FP64 product rounded once; each design, its scales
-    applied around the kernel, per 128 of `k`, or by its instructions, is
-    nearer the exact run than quantizing moved it from R0."""
+    applied around the kernel or by its instructions, is nearer the exact run
+    than quantizing moved it from R0."""
     scheme = quant.SCHEMES[name]
-    assert swap.modes(scheme) == ('fp32', f'{name}-exact', f'{name}-exact-rtz', f'{name}-exact-rand',
-                                  *designs)
+    assert swap.modes(scheme) == ('fp32', f'{name}-exact', f'{name}-exact-rand', *designs)
     if scheme.applied != 'instruction':
-        assert swap.modes(quant.scheme(f'{name}:fnuz'))[4:] == ('amd.cdna3.fp8',)
+        assert swap.modes(quant.scheme(f'{name}:fnuz'))[3:] == ('amd.cdna3.fp8',)
     run = swap.patch(model)
     r0 = _logits(model, tokens)
     run.scheme, run.mode = scheme, f'{name}-exact'
@@ -125,3 +116,11 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
     for run.mode in swap.modes(scheme)[2:]:
         assert (_logits(model, tokens) - exact).abs().max() < quantizing
     run.mode, run.scheme = 'fp32', swap.BF16
+
+
+def test_an_exact_run_is_known_by_its_suffix() -> None:
+    fp8 = quant.SCHEMES['fp8-row']
+    assert swap._exact_run('fp8-row-exact', fp8) == 'nearest'
+    assert swap._exact_run('fp8-row-exact-rand', fp8) == 'random-sign'
+    for other in ('fp8-row-exact-rtz', 'bf16-exact', 'nv.hopper.e4m3.f32'):
+        assert swap._exact_run(other, fp8) is None

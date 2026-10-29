@@ -84,7 +84,15 @@ quantity here moves enough to be worth correlating further.  Unpark for
 training (where DeepSeek-V3's concern lies), free generation, or a design
 whose error lies far outside these.
 
-The drivers and analysis this record names (`serve/stage2/`: `run.sh`, `after.sh`, `sweep.sh`, `splitk.sh`, `k0.sh`, `sweep.py`, `analyze.py`, `plot.py`) and their results were removed after commit `4809280`, which holds them.  Its changes to `serve/core` stay: the `<scheme>-exact-rtz` and `-exact-rand` runs (`swap.py`), references in host memory (`scoring.py`), and the local metrics (`metrics.py`).
+**Reopened (2026-10-20): frozen runs** (Record, "Frozen runs").  K₀ is
+re-rounding, not arithmetic: frozen to R1 (each layer multiplies R1's
+quantized input, its own offset from it passed through the weight
+unrounded), a design's KL is its arithmetic alone.  R1 rounded toward zero
+falls from K₀ (1.3e-02) to 1.2e-11; Hopper is 8x10^6 Blackwell; the width
+sweep is KL ∝ ε², 2.00 bits of KL a bit of normwise error.  Free runs stay
+the deployment view.
+
+The drivers and analysis this record names (`serve/stage2/`: `run.sh`, `after.sh`, `sweep.sh`, `splitk.sh`, `k0.sh`, `sweep.py`, `analyze.py`, `plot.py`) and their results were never committed (`4809280` does not hold them).  The width sweep's designs are the generator's Hopper E4M3 anchor with `F` stepped and `rho` toward zero at `min(F, 23)` bits: `F` 13 is Hopper's design, `F` 25 measures as Blackwell's.  Its changes to `serve/core` stay: the `<scheme>-exact-rtz` and `-exact-rand` runs (`swap.py`), references in host memory (`scoring.py`), and the local metrics (`metrics.py`).
 
 #### Decisions
 
@@ -586,6 +594,52 @@ local run redone (~15 min).
   `k`, 11.5-12.2 at long.  Attributing the dose to a `k` range needs designs
   that differ in one layer group at a time.
 
+##### Frozen runs (2026-10-20)
+
+`serve/frozen.py` (`scoring.frozen`, `swap.Frozen`): each segment runs R1
+once, recording each linear layer's raw input `x_R1` and quantized input;
+a frozen run's layer computes `matmul(Q(x_R1)) + (x - x_R1) @ W_q.T`.  Its
+arithmetic's error enters every layer and propagates through the rest; no
+activation rounds differently.  Free is the run as `perplexity.py` runs it.
+Log-softmax in FP64: in FP32 its rounding alone is a KL near 1e-9.
+Qwen3-0.6B, `fp8-row`, 10 segments:
+
+| run | KL vs R1, free | KL vs R1, frozen | re-rounded |
+|---|---|---|---|
+| R1 rounded toward zero | 1.288e-02 | 1.21e-11 | 0.006% |
+| R1 an ulp up or down | 1.299e-02 | 1.29e-11 | 0.007% |
+| nv.blackwell.e4m3.f32 | 1.301e-02 | 2.51e-11 | 0.009% |
+| nv.hopper.e4m3.f32 | 1.395e-02 | 1.98e-04 | 16% |
+| nv.ada.e4m3.f32 | 1.413e-02 | 1.98e-04 | 16% |
+
+(re-rounded: the share of activation elements the run's own input would
+quantize differently from R1's.)  The width sweep, frozen:
+
+| `F` | normwise | KL, frozen | re-rounded |
+|---|---|---|---|
+| 13 (Hopper) | -8.80 | 1.98e-04 | 16% |
+| 15 | -10.90 | 9.16e-06 | 4.5% |
+| 17 | -13.27 | 3.21e-07 | 1.2% |
+| 19 | -15.72 | 1.13e-08 | 0.35% |
+| 21 | -18.07 | 5.09e-10 | 0.08% |
+| 23 | -20.82 | 3.94e-11 | 0.02% |
+| 25 (Blackwell) | -21.09 | 2.51e-11 | 0.009% |
+
+- **K₀ is re-rounding.**  Frozen, R1 rounded toward zero is 1.2e-11; free,
+  1.3e-02.  Free, Blackwell cannot be told from R1 an ulp off at random;
+  frozen, it is 2x it, resolved.
+- **Frozen KL ∝ ε²:** 2.00 bits of KL a bit of normwise error over `F`
+  13-21 (R² 0.9996; each step 1.9-2.1), flattening toward the floor past
+  21.  The "not `ε²`" of the dose sweep is the re-rounding's, not the
+  arithmetic's.
+- **Not a bound on the free run.**  A quantizer absorbs most sub-cell
+  offsets and moves a few a whole step; frozen passes every one through.
+  Over where values fall in their cells the two agree on average (a
+  crossing's chance is its offset's share of the cell), so frozen is the
+  design's mean effect, free adds the re-rounding's variance, K₀.
+- **Validity:** re-rounded under 1% from `F` 17 on; Hopper's 16% makes its
+  frozen run the linearized effect of its arithmetic, not its own run.
+
 #### Open items
 
 ##### Is backward error sufficient across mechanisms?
@@ -706,7 +760,7 @@ function and its argument types, as `compile.DESIGNS`' builders do.
 | | `F` | fraction bits kept | 13, 23-25, 35 |
 | | `L` | elements per instruction | 1 (FMA) - 64 |
 | joining `c` | `join` | `inside` (a fused sum's term, a tree's or chain's last add, in an exact sum); `separate`, the sum and `c` rounded down at `F2` and `F` bits and added | inside (NV); separate (CDNA3) |
-| | `F2` | | 31 (CDNA3) |
+| | `F2` | tied to `F`: `F2 = F + guard`, the join's adder `guard` bits wider than the sum (swept as `guard`, 2026-10-23) | 31 (CDNA3: `F` 24, `guard` 7) |
 | output | `rho` | precision, rounding mode: the accumulator format the next instruction's `c` is in | RZ FP32, RZ E8M13 (NV FP8), RNE FP16, RNE FP32 (AMD) |
 | per structure | `e_zero` (`None`: the model's default), special values | as the models derive them | not swept |
 
@@ -1021,6 +1075,106 @@ the sub-FP32 roundings compiled, and after double rounding).
     (-13.1), its pairwise adds keeping 13 bits each where the fused sum
     truncates its terms to 13 bits below the largest.
 
+##### Phase 6 - The sweep end to end
+
+**Done** (2026-10-21; Qwen3-0.6B and Qwen3.5-0.8B, 10 segments,
+`results/sweep/sweep-e2e-<model>.csv`, plots in
+`results/plots/sweep-e2e-<model>/`).
+- `sweep.py --end-to-end` runs `frozen.py` per scheme over the same points:
+  frozen KL vs R1, top-1 disagreement and re-rounded share, the anchors free
+  too, R1 rounded toward zero as each scheme's floor (`floor_kl`, a dashed
+  line; since replaced by `-exact-rand`, R1 an ulp up or down at random).
+  `plot_sweep.py --table` draws it as the local sweep.
+- **Cost:** 7 h (Qwen3-0.6B) and 8.5 h (Qwen3.5), not the 1.5 h 3.5 s a
+  pass predicts; not timed by scheme (`bf16` runs `lm_head`, 151k rows,
+  frozen; `fp8-row` leaves it to R0).
+- **Refused:** the 10 of local's (5 exact sums, 4 NV even-odd groups,
+  CDNA3's chain of FMAs).
+- **Anchors**, frozen KL (Qwen3-0.6B; Qwen3.5): Hopper E4M3 1.98e-04
+  (2.6e-05); Blackwell E4M3 2.5e-11 (1.2e-11); Ampere BF16 1.9e-10
+  (1.1e-10); Hopper BF16 8.6e-11 (6.5e-11); CDNA3 BF16 8.2e-12 (4.6e-12).
+  Floors: `fp8-row` 1.2e-11 (6.9e-12), `bf16` 2.0e-12 (1.0e-12).
+- **What the graphs show** (both models alike, Qwen3.5 lower):
+  - **`F`, `rho_bits`:** 9-12 decades, about two of KL per bit of local
+    error, plateauing where local error does (Hopper's FP8 past `F` 16).
+  - **`L`:** flat for Hopper's FP8; 1-2 decades over 2-64 for the others.
+  - **`ftz`:** 5 decades for Blackwell's FP8 (-10.6 to -5.7, log10).
+  - **`sum`:** a chain of FMAs 1.5-2 decades worse; a tree near the fused
+    sum, but for Hopper's FP8 0.8 decades better.
+  - **`rho_mode`:** down or up about a decade worse than toward zero; to
+    nearest 0.3-1.7 decades better.  Hopper's FP8 the same in every mode.
+  - **Re-rounded:** under 1% but for the Hopper-FP8-like points (11-16%)
+    and the narrowest `F` and `rho_bits`.
+
+##### Phase 7 - The design space
+
+**The design space is the main figure's grid** (decided 2026-10-25): every
+design the evaluation reports, and nothing it does not.  `sweep.grid()`: each
+generation's BF16 and FP8 instruction (Blackwell/Hopper, Ada, CDNA3, CDNA2;
+Blackwell's FP8 is MXFP8; CDNA2 has none), each with `F` 10-28 (its own
+added), and each again with `c` added the other vendor's way (a separate
+join keeps `F2 = F + 7`); the accumulator and the rest as built.  **N =
+113** (a test holds it).
+- Superseded: four anchors (Blackwell E4M3, Hopper BF16, CDNA3 BF16 and
+  E4M3 FNUZ) x `F` x `rho_bits` 13, 16, 23 x toward zero or to nearest, N =
+  180.  The accumulator is fixed by the instruction encoding, not a design
+  choice.
+- `sweep.py --manifest` compiles the grid, launches each design on a GPU as
+  the evaluation will (at each of `--model`'s layer widths), and writes
+  `results/sweep/manifest.csv`: a row per design, its parameters, name and
+  status -- the local error's list, so the two evaluations cover one set.
+- Superseded: a wider space (2026-10-23, N = 576: two NVIDIA anchors x `F`
+  x 6 accumulators x roundings x fused, tree or chain x `L` 8, 16, 32;
+  `results/sweep/space.csv`, 516 run).  Its 60 refusals, all a tree's or
+  chain's add (or FMA) rounded to nearest below FP32 ("`Add` rounds to odd,
+  which is exact here only where its result is proven inside the format's
+  range"), are a compiler gap still open; no grid design reaches it.
+- Launching found two designs of an earlier grid (BF16, `F` 10, a 13- or
+  16-bit accumulator to nearest) that compiled but failed in Triton: the emitter
+  rounded an FP16-held value to the integers with `libdevice.nearbyint`,
+  which has no FP16; it now rounds in FP32 (`_integral`; `test_triton.py`'s
+  `hopper-bf16-f10-rne13`).
+
+##### Phase 8 - The grid end to end
+
+**Done** (2026-10-23, an earlier grid, superseded by Phase 9; Qwen3.5-0.8B,
+WikiText-2, 10 segments).  `sweep.py --end-to-end --grid`: `SPACE`'s anchors, `F` 10-25 x `rho_bits` 13, 16, 23
+x toward zero or to nearest, 72 designs, frozen and free
+(`sweep-grid-Qwen3.5-0.8B.csv`); `plot_grid.py` draws them 2 x 2, FP8 and
+BF16 by as deployed and held to ref.
+- **Held to ref:** every accumulator's line follows one path until `F`
+  reaches its width, then flattens: the narrower width sets the error.  To
+  nearest flattens ~2 decades below toward zero; the FP32 accumulator falls
+  to the ±1 ulp line (BF16 to nearest at `F` 25 on it).
+- **As deployed:** FP8, every design on K₀ (~1e-02).  BF16 has a knee: `F`
+  10 and 13 above K₀, and a 13-bit accumulator above it at every `F` (-3.7
+  against -4.3, log10); 16 and 23 bits on K₀ from `F` 16.
+
+##### Phase 9 - The final grid end to end
+
+**Done** (2026-10-29; Qwen3.5-0.8B, WikiText-2, 10 segments, seed 0; a
+fresh run, `results/sweep/sweep-grid-Qwen3.5-0.8B.csv`; how to run it:
+`examples/mmasim/serve/README.md`).  Phase 7's 113 designs: 105 measured,
+8 refused (CDNA3 FP8 with `c` added with the products: "`sum` is exact, and
+no storage holds its elements and partial sums").  `plot_grid.py` draws one
+row: per format, observed (free) then amplified (frozen); a line per
+generation, solid with the products, dashed after them; one ±1 ulp floor per
+panel.
+- **The dashed lines are CDNA3's post adder,** which rounds toward -inf:
+  its error is a bias (mean ~85% of its RMS on a random BF16 matmul),
+  amplified 1-1.8 decades worse than with the products at the same narrow
+  `F` (CDNA3 BF16 1.8, Hopper BF16 1.0).  No MMA-Sim instruction has a post
+  adder rounding toward zero, so the grid leaves it out.
+- **Cost:** 12.8 h on a Titan V: 24 min compiling (one at a time, 9-20 s a
+  design, MXFP8 ~75 s with its per-`k` fused kernels), then per run
+  (amplified and observed alike) 1.4-2.1 min for FP8, 2.3-4.4 min for BF16,
+  15 min for CDNA2 with `c` after the products.  Recorded per row
+  (`compile_seconds`, `seconds`, `free_seconds`).  Tiles retuned at the
+  model's layer shapes first (`kernels.tile`: CDNA2's separate joins 6.9x
+  faster a matmul, ~2x end to end); every KL identical to the run before.
+- **Floors** (`-exact-rand`): amplified 1.6e-12 (`bf16`), 7.4e-12 (FP8);
+  observed (K₀) 5.0e-05, 9.4e-03 to 9.9e-03.
+
 ##### After the last phase
 
     .venv/bin/python -m pytest -n 8 tests/unit
@@ -1251,6 +1405,117 @@ parentheses):
     including the empty think block); `--by` splits the metrics by either.
 - Calibration data shifts quantization results (Williams & Aletras), hence
   a chat workload next to prose.
+
+### End to end: frozen runs (the second evaluation)
+
+Local metrics are the per-matmul evaluation (built separately).  This one
+asks what local error cannot: how much of a design's error reaches the
+application's output, and whether it matters there.  Decided 2026-10-21
+from the frozen sweep (Stage 3, Phase 6; Record, "Frozen runs").
+
+| | Local | End to end |
+|---|---|---|
+| question | how accurate is each matmul? | how much of that error reaches the model's output, and does it matter there? |
+| metric | per-matmul error against the exact product | frozen KL(R1 \|\| design), in bits |
+| adds | -- | the model's and workload's weighting; error structure local means underweight; where differences stop showing in deployment |
+
+**Method** (`frozen.py`, `scoring.frozen`, `swap.Frozen`):
+- WikiText-2, teacher-forced, 10 random 2048-token segments, paired across
+  designs.
+- Reference R1: the same quantized model, exact matmuls (FP64, rounded once
+  to FP32).
+- Each design is its compiled kernel, *frozen* to R1: a layer multiplies
+  R1's quantized input `Q(x_R1)` by the design's arithmetic, and its own
+  input's offset passes through the weight unrounded, `+ (x - x_R1) W_q`.
+  Its arithmetic's error enters every layer and propagates; no activation
+  rounds differently from R1's.  Without this, any inexact design's
+  re-rounding costs K₀ and hides the arithmetic.
+- KL in FP64 log-softmax (FP32's rounding alone is ~1e-9).
+- Checks: R1 frozen is 0 exactly; KL ∝ ε² (slope 2.00, R² 0.9996, the
+  width sweep), as KL ≈ ½ δᵀFδ predicts.
+- Validity: the share of activation elements the design's own run would
+  round differently (`rerounded`).  Under ~1% the frozen run is the
+  design's; above (Hopper-like FP8 points, 11-16%), its linearized effect.
+
+**Metric: frozen KL(R1 || design),** mean per token, on a log axis, read
+against a calibration: the measured frozen KL of R1 with every matmul output
+rounded to `t` fraction bits, `t` 8-22 (`-exact-p<t>`; Monte Carlo
+arithmetic's virtual precision).  The calibration is the methods' evidence
+and unit (one decade of KL is ~1.7 bits of output precision); the figure
+leaves it out.
+- **The curves** (every scheme, both models, 10 segments, 2026-10-21;
+  `results/frozen/calib-*`): 2.0 bits of KL a bit of precision (KL ∝ ε²),
+  every scheme but `mxfp4` (2.4-3.6: its outputs often have so few bits that
+  rounding leaves them exact), until the floor.
+- **The floor is FP32 inference's own rounding**, R1 an ulp up or down at
+  random (`-exact-rand`; earlier R1 rounded toward zero, which the values
+  below measure).  Freezing fixes the quantizer, not the model's FP32 norms,
+  attention and softmax: any perturbation re-rounds them, the mechanism of
+  K₀ a level down.  ~1e-11 under the FP8 and FP4 schemes (the curve flattens
+  from `t` ~15), ~2e-12 under `bf16` (~19).  A design at the floor injects
+  less error than FP32 inference's own rounding; it is reported so, not
+  ranked.
+- **Biased error compounds.**  Hopper's FP8 (truncation) is farther from R1
+  than R1 rounded to 8 fraction bits everywhere -- over 15 bits lost of
+  FP32's 23 -- where its local mean ULP error is 12.5 bits.  A chain of FMAs
+  and Blackwell's `ftz` sit above their local error too ("How it relates to
+  local").
+- **K₀,** the free run's re-rounding (the floor's run, free: `fp8-row`
+  9.5e-03, `bf16` 5.0e-05 on Qwen3.5-0.8B), is reported beside the figure, not on it: above
+  the calibration's top, it would take extrapolating.
+
+**Harness: FP32** (decided 2026-10-21).  FP64 non-matmul operations were
+tried (Qwen3-0.6B, `F` and `rho_bits`, 10 x 1024 tokens, `results/fp64`):
+identical above the FP32 floor, the floor 40x lower under `fp8-row` (6x
+under `bf16`), resolving Blackwell-class FP8 designs.  Dropped: a second
+counterfactual, for differences below FP32 inference's own rounding, which
+no deployment shows; and 2048 tokens do not fit 12 GB.  Its code is gone.
+(A first reading of bits as `½ log2(KL / floor)` treated the floor as an
+ulp and understated what designs lose by ~4.7 bits; withdrawn with the
+fitted reading that followed it.)
+
+**How it relates to local** (141 sweep points; local from `sweep.csv`,
+Qwen3-0.6B; end to end as `½ log2 KL`, bits by the ε² law):
+
+| model | scheme | R² vs mean ULP error | slope | residual SD |
+|---|---|---|---|---|
+| Qwen3-0.6B | `fp8-row` | 0.96 | 0.86 | 1.1 bits |
+| Qwen3-0.6B | `bf16` | 0.98 | 1.02 | 0.8 bits |
+| Qwen3.5-0.8B | `fp8-row` | 0.99 | 0.89 | 0.5 bits |
+| Qwen3.5-0.8B | `bf16` | 0.99 | 1.04 | 0.6 bits |
+
+- Correlated, as expected: end to end is mostly local error carried
+  through the model.
+- **The residuals are what it adds.**  Blackwell's `ftz` +4.5 bits beyond
+  its local error (Qwen3.5 +2.2); a chain of FMAs +1.7; narrow `rho_bits`
+  -1.5 (the model tolerates it).  The same Hopper FP8 design is ~1.5 bits
+  milder on Qwen3.5.
+- From 10 segments of one workload; a second (`mtbench`) before the
+  residuals carry a claim.
+
+**The figure** (`plot_sweep.py`, `kl.png`): x a design parameter, y log10
+KL(ref ‖ design) on one scale across panels ("ref", R1, for the paper: the
+quantized model, every matmul exact and rounded once to FP32), a line per anchor, each
+scheme's floor a thin grey line in its style.  "Frozen" and the calibration are the
+methods'.
+
+**Cost:** profiled (2026-10-21), the design's emulated GEMM is 83%
+(`fp8-row`) to 91% (`bf16`) of a frozen pass; copies were 4-8%, now
+pinned and asynchronous (11% faster, bit-identical results).  Sweeps are
+bound by the compiled kernels.
+
+**A second workload: `mtbench`** (2026-10-21; Qwen3-0.6B, 10 conversations,
+the `F` and `rho_bits` axes, 77 designs; `sweep-e2e-Qwen3-0.6B-mtbench.csv`,
+plots beside WikiText-2's):
+- **The same measurement up to a constant:** log2 KL on MT-Bench is 1.00x
+  WikiText-2's, 0.7 bits lower under `fp8-row`, 0.4 under `bf16` (chat a
+  little less sensitive); Spearman 0.98 and 0.999; the floors lower alike
+  (7e-12, 1.3e-12).
+- **Its calibration** is the same, 2.0 bits of KL a bit; K₀ 7.7e-03
+  (`fp8-row`), 4.3e-05 (`bf16`).
+- **The residuals over local error recur,** design for design: the BF16
+  designs at `F` 22 +1.8 and +1.9 bits on both, at `rho_bits` 13 -1.4 and
+  -1.5.  Not run here: `ftz` and the chain of FMAs (other axes).
 
 ### Metrics
 
@@ -1773,6 +2038,25 @@ Libraries split `k` (split-K, stream-K), which shortens each chain.
 - **Kernel speed:** the compiler's concern (`backend-triton.md`).
 
 ## Open items
+
+### How does a frozen run relate to the free one?
+
+At stake: whether frozen KL says anything about deployment beyond the
+noise-floor line.  Under the uniform quantization-noise model (Widrow &
+Kollár) a quantizer passes a small offset with gain ~1 on average, so
+frozen and free should agree on a linear metric (Δ NLL) in expectation;
+KL, quadratic, differs by K₀.  FP8's 3 mantissa bits strain the model.
+**Provisional:** the paper claims only what frozen defines (error at the
+output, quantization decisions fixed to R1).  Reopen to test: frozen and
+free Δ NLL on the width sweep, ~50 segments.
+
+### Do the end-to-end residuals hold on another workload?
+
+`ftz` (+4.5 bits), FMA chains (+1.7), narrow `rho_bits` (-1.5) are what
+end to end adds over local.  **Answered in part** (2026-10-21): on the `F`
+and `rho_bits` axes MT-Bench repeats WikiText-2's residuals design for
+design (End to end, "A second workload").  `ftz` and FMA chains, on other
+axes, are WikiText-2's alone; reopen with those axes on `mtbench`.
 
 ### Do forced and free-running divergence agree in rate?
 

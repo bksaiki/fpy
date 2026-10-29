@@ -244,7 +244,7 @@ class DigitBoundStore:
         self._answers.clear()
         self._decisions.clear()
 
-    def _closed(self, assuming: frozenset[int]) -> frozenset[int]:
+    def closed(self, assuming: frozenset[int]) -> frozenset[int]:
         """*assuming* and everything it implies."""
         out, todo = set(assuming), list(assuming)
         while todo:
@@ -297,7 +297,7 @@ class DigitBoundStore:
 
         Memoized: the same term is asked many times over an unchanged store.
         """
-        assuming = self._closed(assuming)
+        assuming = self.closed(assuming)
         key = (term, assuming)
         answer = self._answers.get(key)
         if answer is None:
@@ -321,7 +321,7 @@ class DigitBoundStore:
         """
         if not bounds:
             return False
-        assuming = self._closed(assuming)
+        assuming = self.closed(assuming)
         key = (tuple(bounds), assuming)
         answer = self._decisions.get(key)
         if answer is None:

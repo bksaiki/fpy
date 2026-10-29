@@ -98,6 +98,8 @@ def _remixes() -> 'dict[str, Design]':
         'cdna3-tree': replace(CATALOG['amd.cdna3.bf16'], sum='tree'),
         # an exact round to `rho`, its operand held wider
         'hopper-bf16-f8': replace(CATALOG['nv.hopper.bf16.f32'], F=8),
+        # an FP16-held round to the integers, which libdevice has only for FP32 and FP64
+        'hopper-bf16-f10-rne13': replace(CATALOG['nv.hopper.bf16.f32'], F=10, rho=fp.IEEEContext(8, 22, fp.RM.RNE)),
         'cdna3-fma': replace(CATALOG['amd.cdna3.bf16'], sum='fma'),
     }
 
@@ -139,10 +141,10 @@ def test_a_remix_agrees_with_the_interpreter(remix: str, tile: tuple[int, int]) 
     assert agree == m * n * trials
 
 
-@pytest.mark.parametrize('remix', ['hopper-separate', 'mx-13'])
+@pytest.mark.parametrize('remix', ['mx-13'])
 def test_a_remix_fuses(remix: str) -> None:
-    """Over a static `k` in one kernel: chained per instruction (scaled) or
-    promoted every 128, as `serve` runs a scaled scheme."""
+    """A block-scaled design over a static `k` in one kernel, chained per
+    instruction, as `serve` runs it."""
     import compile_triton as ct
     from generator import build
 

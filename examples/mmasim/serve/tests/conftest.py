@@ -12,10 +12,9 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 
 @pytest.fixture(scope='module')
 def model() -> torch.nn.Module:
-    """Qwen3's shape, small: every `k` a multiple of 128 (`fp8-block`'s
-    blocks) and so of each design's length, `k/v_proj` 64 rows (a ragged
-    128-row block), weights BF16 values held in FP32, as a checkpoint
-    loads."""
+    """Qwen3's shape, small: every `k` a multiple of 128 and so of each
+    design's length, weights BF16 values held in FP32, as `swap.load` loads
+    them."""
     transformers = pytest.importorskip('transformers')
     torch.manual_seed(0)
     cfg = transformers.Qwen3Config(
@@ -34,8 +33,9 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> None:
     """`kernels`' registries as they were, after the test."""
     from core import kernels
 
-    for name in ('TILES', '_BUILDS', 'REGISTERED', '_PICKLED', '_KERNELS'):
+    for name in ('TILES', '_BUILDS', 'REGISTERED', '_PICKLED', '_KERNELS', '_SECONDS'):
         monkeypatch.setattr(kernels, name, dict(getattr(kernels, name)))
+    monkeypatch.setattr(kernels, '_LAUNCHED', set(kernels._LAUNCHED))
 
 
 @pytest.fixture(scope='module')
