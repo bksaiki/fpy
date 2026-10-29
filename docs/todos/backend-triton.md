@@ -85,9 +85,9 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
 
 ## What is left
 
-- **`serve` runs a block-scaled design chained in the kernel** (done,
-  `mmasim-serving.md`, Record): fused at every `m` for MX and `fp8-block`,
-  at most 32 rows for NVFP4 and MXFP4.
+- **`serve` runs a block-scaled design chained in the kernel** (done):
+  fused per layer `k` at every `m`; one kernel at any `k` is
+  `block-scaled-kernels.md`.
 - **A slice along an outer dimension** was offset without its stride on
   `main`, a silent miscompile; fixed on the `mmasim` branch, which also
   compiles a slice of a slice.
