@@ -1,6 +1,7 @@
 # Fixed-length dot-product evaluation
 
-Compare compiled FPy models against the equivalent eager MMA-Sim models by
+Compare compiled FPy models against the equivalent eager and `torch.compile`d
+MMA-Sim models by
 computing complete dot products of lengths **1024, 2048, and 8192**, with batches
 of **1, 16, and 256** independent dot products by default.
 
@@ -9,39 +10,61 @@ existing width (4–64 terms). Start an accumulator at zero, call the unchanged
 DPA model on each chunk with the previous result as its accumulator, and return
 the final result. Each model retains its own arithmetic and rounding semantics.
 Different designs need not produce the same answer; each FPy design must match
-its corresponding MMA-Sim design bit for bit before it is timed.
+its corresponding eager MMA-Sim design bit for bit before it is timed.
 
 FPy runs the chunk loop in native C++, calling the existing generated model.
 MMA-Sim runs its existing eager batched `dpa` sequentially over chunks. A batch
 of 16 means 16 independent length-L dot products with separate accumulators.
 Batch 1 emphasizes latency; larger batches amortize MMA-Sim dispatch overhead.
-The comparison measures compiled FPy versus eager MMA-Sim, not `torch.compile`
-or GPU performance. The native FPy loop is serial; the default is one Torch
-thread. Optional thread counts affect Torch/MMA-Sim rather than parallelizing
-the FPy wrapper.
+The comparison measures CPU performance, not GPU performance. The native FPy
+loop is serial; the default is one Torch thread. Optional thread counts affect
+Torch/MMA-Sim (including Inductor's generated kernels) rather than
+parallelizing the FPy wrapper.
 
-There are two series:
+There are three series:
 
 - `fpy-core`: prepared compute-format inputs passed to the compiled dot wrapper.
 - `mmasim`: equivalent storage-format inputs passed to eager MMA-Sim.
+- `mmasim-compile-naive`: the same inputs, with unmodified MMA-Sim's `dpa`
+  compiled by `torch.compile` with default settings (Inductor CPU, graph breaks
+  allowed) and called in the eager chunk loop. Skip it with `--no-compile`.
+
+Default `torch.compile` can fail to compile a design or compile it incorrectly.
+Each failure is recorded in `validation.json` and excludes only this series
+from timing for that configuration; `metadata.json` counts them.
+
+Compilation happens on the first (validation) call and is excluded from
+timing; recompilation for each length and batch size takes a few seconds.
 
 Input generation, quantization, chunk preparation, compilation, and correctness
-validation are outside timing. Both paths use the same quantized numerical
+validation are outside timing, as is `torch.compile` compilation. Both paths use the same quantized numerical
 operand values, in the physical representations their interfaces require.
 MMA-Sim chunk tensors are made contiguous ahead of timing. Timings include
 execution, dispatch, accumulator initialization, and output allocation. Every
 invocation starts fresh at zero. The former `fpy-quantize` series is removed.
 
-Inputs are sampled from N(0, 0.5²) in FP64 and rounded to each design's input
-format. MXFP8 and NVFP4 operands are block-quantized with TorchAO: one E8M0
-scale per 32 elements (`to_mx`) and one E4M3 scale per 16 elements
+Inputs are sampled in FP64 and rounded to each design's input format. By
+default they come from N(0, 0.5²); `--distribution uniform` samples U[-1, 1)
+instead. `--dot-lengths` sets the vector length. Block-scaled operands are
+quantized with TorchAO: MX designs get one E8M0 scale per 32 elements
+(`to_mx`), MXFP4 one E8M0 scale per 16, and NVFP4 one E4M3 scale per 16
 (single-level `nvfp4_quantize`; the per-tensor scale lies outside the MMA).
 Every chunk receives its own block scales.
 
-Each MMA-Sim model comes from MMA-Sim's instruction simulators (for example
+The benchmark covers every design in `examples/mmasim/compile.py` that the C++
+backend compiles: 60 of 62. The two CDNA1 designs are unsupported, because the
+backend cannot select storage for `e_fdpa_block`. Each MMA-Sim model comes from
+MMA-Sim's instruction simulators (for example
 `nv_ptx.MMA("Volta", "m8n8k4.f32.f16.f16.f32")`), which select the arithmetic
-model and its parameters; `validation.json` records the instruction for each
-design. CDNA1 remains unsupported by the C++ backend.
+model and its parameters; `_references` in `benchmark_mmasim.py` maps each FPy
+design to one, and `validation.json` records the instruction for each design.
+
+MMA-Sim rejects packed E2M1 (FP4) operands everywhere but its group-scaled
+model (NVFP4, MXFP4), which unpacks them to FP16 values. The benchmark passes
+E2M1 operands to every MMA-Sim model as those FP16 values; all 14 designs with
+E2M1 operands match FPy bit for bit. FP16-output designs compute in FP32
+storage in C++; their results must be exact FP16 values, and are compared in
+FP16.
 
 ## Build and run
 
@@ -52,9 +75,12 @@ Build from the repository root:
 ./.venv/bin/python -m pytest evaluation/test_benchmark_mmasim.py cpp_extension/tests -q
 ```
 
-The build command runs `examples/mmasim/compile.py` to generate C++ sources
-under `cpp_extension/build/generated_models/`, then compiles and links those
-sources and the Torch wrappers with `-O3`. Benchmarking and plotting do not
+The build command runs `cpp_extension/generate_models.py`, which compiles every
+supported design in `examples/mmasim/compile.py` to C++ under
+`cpp_extension/build/generated_models/`. It also writes the Torch operators for
+each design (a single DPA `<op>` and a complete dot product `<op>_dot`) and a
+`manifest.json` of the models, which the benchmark reads. The extension then
+compiles and links everything with `-O3`. Benchmarking and plotting do not
 rebuild the FPy models.
 
 The benchmark uses `~/repos/mma-sim` by default; override with
@@ -87,7 +113,8 @@ One timed call computes the entire batch; per-dot metrics divide by batch size.
 No speedup is reported for a configuration that fails validation.
 
 Generate throughput and speedup plots for each length, with one panel per batch
-size:
+size. Plots show FPy, eager MMA-Sim, and default `torch.compile` MMA-Sim;
+speedups use a log scale:
 
 ```sh
 ./.venv/bin/python evaluation/plot_mmasim.py evaluation/results/<run-id>

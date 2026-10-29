@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -8,41 +9,26 @@ from torch.utils.cpp_extension import BuildExtension, CppExtension
 ROOT = Path(__file__).resolve().parent
 CSRC = ROOT / "fpy2_models" / "csrc"
 GENERATED = ROOT / "build" / "generated_models"
-COMPILE_MODELS = ROOT.parent / "examples" / "mmasim" / "compile.py"
-MODELS = (
-    ("nv.volta.f16.f32", "nv.volta.f16.f32.cpp"),
-    ("nv.turing.f16.f32", "nv.turing.f16.f32.cpp"),
-    ("nv.ampere.tf32.f32", "nv.ampere.tf32.f32.cpp"),
-    ("nv.ampere.bf16.f32", "nv.ampere.bf16.f32.cpp"),
-    ("nv.ada.e5m2.f32", "nv.ada.e5m2.f32.cpp"),
-    ("nv.hopper.f16.f32", "nv.hopper.f16.f32.cpp"),
-    ("nv.blackwell.mx.e5m2", "nv.blackwell.mx.e5m2.cpp"),
-    ("nv.blackwell.nvfp4", "nv.blackwell.nvfp4.cpp"),
-    ("amd.cdna2.bf16", "amd.cdna2.bf16.cpp"),
-    ("amd.cdna2.f16", "amd.cdna2.f16.cpp"),
-    ("amd.cdna3.f16", "amd.cdna3.f16.cpp"),
-    ("amd.cdna3.bf16", "amd.cdna3.bf16.cpp"),
-    ("amd.cdna3.bf8", "amd.cdna3.bf8.cpp"),
-    ("fp64 (fma)", "fp64_fma.cpp"),
-)
-SOURCES = [CSRC / "torch_ops.cpp", *(GENERATED / filename for _, filename in MODELS)]
+GENERATOR = ROOT / "generate_models.py"
 
 
 class GeneratedBuildExtension(BuildExtension):
-    """Generate the FPy model translation units only when building the extension."""
+    """Generate the FPy model translation units only when building the extension.
+
+    Every design `generate_models.py` supports is compiled; its manifest lists
+    the translation units, which the extension builds with its operators.
+    """
 
     def run(self):
-        GENERATED.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [
-                sys.executable,
-                str(COMPILE_MODELS),
-                *(name for name, _ in MODELS),
-                "--out",
-                str(GENERATED),
-            ],
-            check=True,
-        )
+        subprocess.run([sys.executable, str(GENERATOR), str(GENERATED)], check=True)
+        manifest = json.loads((GENERATED / "manifest.json").read_text())
+        sources = [
+            CSRC / "torch_ops.cpp",
+            GENERATED / "torch_ops_generated.cpp",
+            *(GENERATED / model["file"] for model in manifest["models"]),
+        ]
+        for extension in self.extensions:
+            extension.sources = [str(path) for path in sources]
         super().run()
 
 
@@ -54,7 +40,8 @@ setup(
     ext_modules=[
         CppExtension(
             "fpy2_models._C",
-            [str(path) for path in SOURCES],
+            [str(CSRC / "torch_ops.cpp")],
+            include_dirs=[str(CSRC)],
             extra_compile_args={
                 "cxx": [
                     "-O3",
