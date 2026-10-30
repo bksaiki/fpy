@@ -1425,6 +1425,21 @@ class TestFormatInfer:
         assert exact_binop(nzero, pos, operator.mul) == nzero
         assert exact_binop(nzero, neg, operator.mul) == zero      # signs agree
 
+    def test_a_constant_with_no_zero_signs_a_zero_product_alone(self):
+        """Times a constant with no zero, a product is ``-0.0`` only from the
+        other operand's zero: ``+0`` times a negative, ``-0`` times a positive.
+        So a count times a stride holds no ``-0``, and stores as an integer."""
+        from fpy2.analysis.format_infer.analysis import _INTEGER_FORMAT, exact_binop
+        import operator
+        stride = SetFormat(frozenset((Fraction(32),)))
+        back = SetFormat(frozenset((Fraction(-32),)))
+        assert not exact_binop(_INTEGER_FORMAT, stride, operator.mul).has_neg_zero
+        assert not exact_binop(stride, _INTEGER_FORMAT, operator.mul).has_neg_zero
+        assert exact_binop(_INTEGER_FORMAT, back, operator.mul).has_neg_zero
+        assert exact_binop(fp.FP32.format(), stride, operator.mul).has_neg_zero
+        with_zero = SetFormat(frozenset((Fraction(0), Fraction(32))))
+        assert exact_binop(_INTEGER_FORMAT, with_zero, operator.mul).has_neg_zero
+
     def test_add_and_sub_to_zero_follow_the_ieee_sign_rule(self):
         """A sum is ``-0.0`` only when both addends are; ``a - b`` is
         ``a + (-b)``, which derives every subtraction case without a special

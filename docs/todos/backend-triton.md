@@ -85,9 +85,15 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
 
 ## What is left
 
-- **`serve` runs a block-scaled design chained in the kernel** (done,
-  `mmasim-serving.md`, Record): fused at every `m` for MX and `fp8-block`,
-  at most 32 rows for NVFP4 and MXFP4.
+- **`serve` runs a block-scaled design chained in the kernel** (done):
+  one kernel at any `k` (`compile_triton._chained`, `A` and `B` `k` long,
+  the scales `s`, both symbolic), as fast as the fused one per `k` it
+  replaced, every grid result bit for bit.  Nothing relates `s` to `k`, so
+  the scale reads are not proven in bounds; `kernels.matmul` checks the
+  scales' shape on the host.
+- **A loop-carried integer counter widens its loop's other phis**: a chain
+  stepping `i` over `len(A)` with `t = t + 1` left its accumulator `REAL`
+  (no storage), so `_chained` steps over the scales instead.
 - **A slice along an outer dimension** was offset without its stride on
   `main`, a silent miscompile; fixed on the `mmasim` branch, which also
   compiles a slice of a slice.

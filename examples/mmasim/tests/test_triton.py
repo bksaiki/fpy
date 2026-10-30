@@ -141,11 +141,18 @@ def test_a_remix_agrees_with_the_interpreter(remix: str, tile: tuple[int, int]) 
     assert agree == m * n * trials
 
 
-@pytest.mark.parametrize('remix', ['mx-13'])
-def test_a_remix_fuses(remix: str) -> None:
-    """A block-scaled design over a static `k` in one kernel, chained per
-    instruction, as `serve` runs it."""
+@pytest.mark.parametrize('name', ['nv.blackwell.mx.e4m3', 'nv.blackwell.mx.e2m1', 'nv.blackwell.mxfp4',
+                                  'nv.blackwell.nvfp4', 'mx-13'])
+def test_a_block_scaled_design_is_one_kernel_at_any_k(name: str) -> None:
+    """Compiled once, its chain of instructions agrees with the
+    interpreter's bit for bit at one, two and three instructions."""
     import compile_triton as ct
-    from generator import build
+    from compile import DESIGNS
+    from generator import build as generate
 
-    ct.compile_fused(lambda: build(_remixes()[remix]), 256)
+    build = dict(DESIGNS).get(name) or (lambda: generate(_remixes()[name]))
+    kernel, _, arg_types = ct.compile_matmul(build, None)
+    m, n, trials = 3, 2, 4
+    for s in (1, 2, 3):
+        design, at_k = ct.typed(build, s * ct._length(arg_types[0]))
+        assert ct.run_matmul(kernel, design, at_k, m, n, trials, seed=s, hard_every=2) == m * n * trials

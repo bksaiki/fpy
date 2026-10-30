@@ -51,7 +51,8 @@ class Divergence:
         kl = differ = n = 0
         for r, q in zip(ref, lps, strict=True):
             r = r.to(q.device, non_blocking=True)
-            kl = kl + (r.exp() * (r - q)).sum()
+            # summed per position first: another order moves the last bits
+            kl = kl + (r.exp() * (r - q)).sum(-1).sum()
             differ = differ + (r.argmax(-1) != q.argmax(-1)).sum()
             n += q.shape[0]
         self.kl.append(float(kl) / n)

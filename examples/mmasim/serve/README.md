@@ -17,7 +17,9 @@ uv pip install torch triton -r examples/mmasim/serve/requirements.txt
 ```
 
 (`uv sync` removes packages installed by hand; rerun the second line after
-it.) A CUDA GPU is required. Everything below runs from `examples/mmasim` and
+it.) A CUDA GPU is required. Do not install `causal-conv1d` or
+`flash-linear-attention`: `transformers` would then run Qwen3.5's linear
+attention through their kernels, and every result would move. Everything below runs from `examples/mmasim` and
 writes under `results/` (`--results` to change it). The model and WikiText-2
 download from Hugging Face on first use.
 
@@ -26,28 +28,29 @@ download from Hugging Face on first use.
 ```sh
 cd examples/mmasim
 python serve/sweep.py --manifest --model Qwen/Qwen3.5-0.8B -j 1
-python serve/sweep.py --grid --model Qwen/Qwen3.5-0.8B --segments 10 --seed 0
+python serve/sweep.py --model Qwen/Qwen3.5-0.8B --segments 10 --seed 0
 python serve/plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
 ```
 
 1. **`--manifest`** compiles every grid design and launches it as the
-   evaluation will (at each of the model's layer widths), writing `results/sweep/manifest.csv`: a row per design with its
-   parameters, name, status (`ok` or `refused`, with the reason) and
+   evaluation will (at each of the model's layer widths), writing
+   `results/sweep/manifest.csv`: a row per design with its parameters, name,
+   status (`ok` or `refused`, with the reason) and
    `compile_seconds`. `-j 1` compiles one design at a time, so each compile
    time is its own; `-j 8` is faster. Expect 8 refusals: CDNA3 FP8 with `c`
    added with the products.
-2. **`--grid`** runs `frozen.py` once per quantization scheme
+2. **`sweep.py`** runs `frozen.py` once per quantization scheme
    (`bf16`, `fp8-row`, `fp8-row:fnuz`, `mxfp8`) over 10 random 2048-token
    WikiText-2 segments. Each design runs twice: *amplified* (frozen: each
    layer gets the reference's quantized input, plus its own input's
    difference times the weights) and *observed* (free: as deployed). Each
    scheme also runs its reference with ±1 ulp of random error, the plots'
-   floor. Pass `--model` to both: the default is Qwen3-0.6B.
+   floor. `--model` is Qwen3.5-0.8B by default, or Qwen3-0.6B.
 3. **`plot_grid.py`** draws `results/plots/sweep-grid-Qwen3.5-0.8B.{png,pdf}`
    from the table alone.
 
-The full grid (105 designs) takes about 13 h on a Titan V: ~25 min to
-compile, then 2-8 min per design, ~30 min for each CDNA2 design with `c`
+The full grid (105 designs) takes about 13 h on a TITAN V: ~25 min to
+compile, then 3-9 min per design, ~30 min for each CDNA2 design with `c`
 added after the products. Run it detached, e.g. with the three commands
 above in `run.sh`:
 
