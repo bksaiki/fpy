@@ -1142,8 +1142,9 @@ def _clip_to_constant(
     interval ``+`` or ``-`` gives where one operand is a set: lifted to a
     format, a constant keeps no least magnitude, so ``x - 13`` would keep
     ``x``'s upper bound.  Likewise ``*``'s ``-0``: a constant with no zero
-    makes one only from the other operand's zero, ``+0`` times a negative
-    or ``-0`` times a positive, where the format charges any negative."""
+    gives one only from the other operand's zero (``+0`` times a negative,
+    ``-0`` times a positive), where the abstract product charges one to any
+    negative operand."""
     if op is operator.mul:
         for s, f, af in ((rhs, lhs, af_a), (lhs, rhs, af_b)):
             if not isinstance(s, SetFormat) or isinstance(f, SetFormat):

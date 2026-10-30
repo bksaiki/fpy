@@ -70,7 +70,7 @@ does (bit for bit, `test_quant.py`).
 
 **Kernels** (`core/kernels.py`): each design compiles once with `m`, `n` and
 `k` symbolic, a block-scaled one as a chain of its instructions
-(`block-scaled-kernels.md`); compiled kernels and their compile times are
+(`backend-triton.md`); compiled kernels and their compile times are
 cached in `results/cache/kernels`.  Tiles are the fastest measured per kind
 of design at the model's layer shapes (`kernels.tile`); a tile changes no
 result.

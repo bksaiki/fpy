@@ -91,10 +91,9 @@ def _matmul(design: fp.Function, arity: int) -> fp.Function:
 
 def typed(build: Build, k: int | None) -> tuple[fp.Function, list[Type]]:
     """The function :func:`compile_matmul` compiles for *build*, and its
-    argument types with the dot product *k* long (`None`: the design's own,
-    a multiple of it otherwise): the design, or a block-scaled one's chain
-    of instructions (:func:`_chained`), its scales one per instruction (or
-    group) along `k`."""
+    argument types at *k* (`None`: the design's own): a block-scaled design's
+    chain of instructions (:func:`_chained`), its scales one per instruction
+    or group."""
     design, (a, b, c, *scales) = build()
     assert isinstance(a, _L) and isinstance(b, _L)
     k0 = _length(a)
