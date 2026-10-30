@@ -1,6 +1,6 @@
 """Plot data stays independent of model imports and benchmark execution."""
 
-from evaluation.plot_mmasim import plot_points
+from evaluation.performance.plot_mmasim import plot_points
 
 
 def test_plot_points_sort_batches_and_only_compare_matching_measurements():
@@ -22,9 +22,9 @@ def test_plot_points_compare_fpy_with_each_mmasim_baseline():
     rows = [
         {"implementation": "fpy-core", "batch_size": 1, "dots_per_second": 10.0},
         {"implementation": "mmasim", "batch_size": 1, "dots_per_second": 2.0},
-        {"implementation": "mmasim-compile-naive", "batch_size": 1, "dots_per_second": 4.0},
+        {"implementation": "mmasim-compiled", "batch_size": 1, "dots_per_second": 4.0},
     ]
     assert plot_points(rows, "speedup") == {
         "mmasim": [(1, 5.0)],
-        "mmasim-compile-naive": [(1, 2.5)],
+        "mmasim-compiled": [(1, 2.5)],
     }
