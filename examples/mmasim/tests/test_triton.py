@@ -156,13 +156,3 @@ def test_a_block_scaled_design_is_one_kernel_at_any_k(name: str) -> None:
     for s in (1, 2, 3):
         design, at_k = ct.typed(build, s * ct._length(arg_types[0]))
         assert ct.run_matmul(kernel, design, at_k, m, n, trials, seed=s, hard_every=2) == m * n * trials
-
-
-@pytest.mark.parametrize('remix', ['mx-13'])
-def test_a_remix_fuses(remix: str) -> None:
-    """A block-scaled design over a static `k` in one kernel, chained per
-    instruction, as `serve` runs it."""
-    import compile_triton as ct
-    from generator import build
-
-    ct.compile_fused(lambda: build(_remixes()[remix]), 256)

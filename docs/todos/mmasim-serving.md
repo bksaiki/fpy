@@ -69,7 +69,7 @@ does (bit for bit, `test_quant.py`).
   Keep them out of this environment.
 
 **Kernels** (`core/kernels.py`): each design compiles once with `m`, `n` and
-`k` symbolic, a block-scaled one once per layer `k`
+`k` symbolic, a block-scaled one as a chain of its instructions
 (`block-scaled-kernels.md`); compiled kernels and their compile times are
 cached in `results/cache/kernels`.  Tiles are the fastest measured per kind
 of design at the model's layer shapes (`kernels.tile`); a tile changes no
@@ -118,7 +118,8 @@ no storage holds its elements and partial sums").
 - **Accumulator width caps `F`:** Hopper's and Ada's FP8 flatten past `F` 13
   at their E8M13 accumulators; the FP32 ones fall to the floor.
 - **Cost:** 12.8 h on a TITAN V: 24 min compiling (one at a time, 9-20 s a
-  design, MXFP8 ~75 s with its per-`k` kernels), then per run 1.4-2.1 min for
+  design, MXFP8 ~75 s with its per-`k` kernels, 11-14 s as one kernel
+  since), then per run 1.4-2.1 min for
   FP8, 2.3-4.4 min for BF16, 15 min for CDNA2 with `c` after the products.
   Recorded per row (`compile_seconds`, `seconds`, `free_seconds`).
 - **Floors:** amplified 1.6e-12 (`bf16`), 7.4e-12 (FP8); observed (K₀)

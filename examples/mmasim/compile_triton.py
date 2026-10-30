@@ -6,8 +6,7 @@ a matmul: an `m x k` by `n x k` product, `B` given transposed so that a column
 is a row, with `out[i][j]` one call.  `m = n = 1` is the dot product itself.
 `m`, `n` and `k` are kernel arguments, so one kernel runs at any; a
 block-scaled design runs as a chain of its instructions, each taking its
-scales (`--fuse`: over a static `k`).  Asserts are dropped: a kernel cannot
-raise.
+scales.  Asserts are dropped: a kernel cannot raise.
 
     python examples/mmasim/compile_triton.py              # one line per design
     python examples/mmasim/compile_triton.py -v           # full error text
@@ -19,8 +18,8 @@ raise.
     python examples/mmasim/compile_triton.py -r 8 --autotune  # the launch picks
                                                           # its block and warps
     python examples/mmasim/compile_triton.py -j 8         # compile in 8 processes
-    python examples/mmasim/compile_triton.py --fuse 512 -r 8   # each over k = 512,
-                                                          # in one kernel
+    python examples/mmasim/compile_triton.py blackwell -r 8 -k 192   # three or six
+                                                          # instructions a call
 """
 
 import argparse
@@ -164,26 +163,11 @@ def _chained(design: fp.Function, k0: int, per: int | None) -> fp.Function:
     return chain
 
 
-def fuse(build: Build, k: int) -> tuple[fp.Function, list[Type]]:
-    """A block-scaled design chained per instruction over a static *k*
-    (:func:`_chained`), and its argument types."""
-    if len(build()[1]) != 5:
-        raise ValueError('only a block-scaled design is fused')
-    return typed(build, k)
-
-
-def compile_fused(build: Build, k: int) -> KernelSource:
-    """:func:`fuse`'s function as a matmul kernel."""
-    return _compile(*fuse(build, k))
-
-
-def _kernel_named(name: str, k: int | None, fuse_k: int | None,
-                  ) -> tuple[KernelSource | None, str, str]:
-    """The kernel for design *name* (fused over *fuse_k*, if given), or `None`
-    and the refusal's type and text."""
+def _kernel_named(name: str, k: int | None) -> tuple[KernelSource | None, str, str]:
+    """The kernel for design *name*, `k` checked against it, or `None` and the
+    refusal's type and text."""
     try:
-        build = dict(DESIGNS)[name]
-        return (compile_matmul(build, k)[0] if fuse_k is None else compile_fused(build, fuse_k)), '', ''
+        return compile_matmul(dict(DESIGNS)[name], k)[0], '', ''
     except Exception as ex:  # noqa: BLE001 -- any refusal is a result
         return None, type(ex).__name__, str(ex)
 
@@ -251,9 +235,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-m', type=int, default=1, help="A's rows (default 1)")
     ap.add_argument('-n', type=int, default=1, help="B's columns (default 1)")
     ap.add_argument('-k', type=int, default=None,
-                    help="the dot product's length (default: the design's own)")
-    ap.add_argument('--fuse', metavar='K', type=int, default=None,
-                    help='each block-scaled design over K in one kernel, chained per instruction')
+                    help="the dot product's length --run draws (default: the design's own)")
     ap.add_argument('-r', '--run', metavar='DRAWS', type=int, default=0,
                     help='launch DRAWS random inputs and compare every output, '
                          'bit for bit, with the interpreter')
@@ -278,10 +260,6 @@ def main(argv: list[str]) -> int:
     ]
     if not designs:
         ap.error(f'no design matches {args.filter}')
-    if args.fuse is not None and args.k is not None:
-        ap.error('-k and --fuse K both give the length; pass one')
-    if args.fuse is not None:
-        designs = [(name, build) for name, build in designs if len(build()[1]) == 5]
     if args.run and (why := unavailable()) is not None:
         ap.error(f'--run needs a GPU: {why}')
     if args.out is not None:
@@ -290,12 +268,12 @@ def main(argv: list[str]) -> int:
     total = args.run * args.m * args.n
     width = max(len(name) for name, _ in designs)
     ok = agree = 0
-    kernels = in_processes(partial(_kernel_named, k=args.k, fuse_k=args.fuse),
+    kernels = in_processes(partial(_kernel_named, k=args.k),
                            [name for name, _ in designs], args.jobs)
     for (name, build), (kernel, kind, why) in zip(designs, kernels):
         ran = None
         if kernel is not None and args.run:
-            design, arg_types = typed(build, args.k if args.fuse is None else args.fuse)
+            design, arg_types = typed(build, args.k)
             try:
                 ran = run_matmul(kernel, design, arg_types,
                                  args.m, args.n, args.run, args.seed,
