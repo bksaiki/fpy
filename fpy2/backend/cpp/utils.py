@@ -1,9 +1,8 @@
 """
 cpp backend: utilities — headers and preamble.
 
-By default, the compiler's :meth:`CppCompiler.compile` returns just a function
-definition (so single-function tests can use exact-string equality).  With its
-``namespace`` option, that definition is enclosed in the requested namespace.
+The compiler's :meth:`CppCompiler.compile` returns just a function
+definition (so single-function tests can use exact-string equality).
 Callers that want a complete translation unit pull
 :meth:`CppCompiler.headers` and :meth:`CppCompiler.helpers`
 explicitly and concatenate them — same shape as the legacy
