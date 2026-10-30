@@ -54,6 +54,11 @@ dev = [
   "sphinx-rtd-theme",
   "sphinx-pyproject"
 ]
+eval = [
+    "matplotlib>=3.11.2",
+    "torch>=2.14.0",
+    "torchao>=0.18,<0.19",
+]
 
 [project.urls]
 Homepage = "https://github.com/bksaiki/fpy"
