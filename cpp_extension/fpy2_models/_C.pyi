@@ -1,1 +1,0 @@
-"""Native registration module for fpy2_models."""

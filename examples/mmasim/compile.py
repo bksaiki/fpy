@@ -15,6 +15,7 @@ against the interpreter.
 """
 
 import argparse
+import json
 import math
 import random
 import shutil
@@ -35,6 +36,7 @@ from models.utils import make_fma_dpa
 
 import fpy2 as fp
 import fpy2.strategies as st
+from fpy2.backend.cpp.types import CppList
 from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 from fpy2.number.context import SizedFormat
 from fpy2.strategies import TransformDeclined
@@ -218,18 +220,34 @@ def _prepare(_module, func):
     return func
 
 
-def compile_design(build: Build) -> str:
-    """The C++ for one design; raises whatever refused it.
+def compile_design(build: Build) -> tuple[str, dict]:
+    """The C++ for one design, and its entry's signature; raises whatever
+    refused it.
 
     Every function is prepared, not just the entry: a model's rounding at a
     run-time position usually sits in a helper, and a transform applied to
     the caller alone never reaches it.
+
+    The signature gives the entry's name, and the C++ element type of each
+    parameter and the result, with a `size` for a fixed-size array.
     """
     func, arg_types = build()
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
     mod = mod.map(_prepare)
-    return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS).compile_module(mod)
+    compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS)
+    src = compiler.compile_module(mod)
+    params, result = compiler.signature(mod.public()[0], module=mod)
+    sig = {'entry': func.name, 'params': [_cpp_type(p) for p in params],
+           'result': _cpp_type(result)}
+    return src, sig
+
+
+def _cpp_type(t) -> dict:
+    """*t* as `{type}` for a scalar, or `{type, size}` for a list of them."""
+    if isinstance(t, CppList):
+        return {'type': t.elt.format(), 'size': t.size}
+    return {'type': t.format()}
 
 def _namespace(name: str) -> str:
     """Return a unique C++ namespace for a design name."""
@@ -351,15 +369,15 @@ def run_design(name: str, src: str, build: Build, draws: int, seed: int) -> int:
 
 def _compile_named(
     name: str, draws: int = 0, seed: int = 0,
-) -> tuple[str | None, str, str, int | None]:
-    """The C++ for design *name* and how many of *draws* it agrees on, or
-    `None` and the refusal's type and text."""
+) -> tuple[str | None, dict | None, str, str, int | None]:
+    """The C++ for design *name*, its signature, and how many of *draws* it
+    agrees on, or `None`s and the refusal's type and text."""
     build = dict(DESIGNS)[name]
     try:
-        src = compile_design(build)
-        return src, '', '', run_design(name, src, build, draws, seed) if draws else None
+        src, sig = compile_design(build)
+        return src, sig, '', '', run_design(name, src, build, draws, seed) if draws else None
     except Exception as ex:  # noqa: BLE001 -- any refusal is a result
-        return None, type(ex).__name__, str(ex), None
+        return None, None, type(ex).__name__, str(ex), None
 
 
 def _translation_unit(name: str, src: str) -> str:
@@ -397,7 +415,8 @@ def main(argv: list[str]) -> int:
     dest.add_argument('-e', '--emit', action='store_true',
                       help='print the C++ of each design that compiles')
     dest.add_argument('-o', '--out', metavar='DIR', type=Path,
-                      help='write each compiled design to DIR/<name>.cpp')
+                      help='write each compiled design to DIR/<name>.cpp, and '
+                           'their signatures to DIR/manifest.json')
     args = ap.parse_args(argv)
 
     names = [
@@ -413,13 +432,17 @@ def main(argv: list[str]) -> int:
 
     width = max(len(name) for name in names)
     ok = agree = 0
+    manifest: dict[str, Any] = {'models': [], 'refused': {}}
     results = in_processes(partial(_compile_named, draws=args.run, seed=args.seed),
                            names, args.jobs)
-    for name, (src, kind, why, ran) in zip(names, results):
+    for name, (src, sig, kind, why, ran) in zip(names, results):
         if src is None:
             detail = why if args.verbose else why.split('\n')[0][:110]
             print(f'{name:{width}}  {kind}: {detail}')
+            manifest['refused'][name] = f'{kind}: {why.splitlines()[0] if why else ""}'
             continue
+        manifest['models'].append({'name': name, 'file': _filename(name),
+                                   'namespace': f'fpy_models::{_namespace(name)}', **sig})
         ok += 1
         note = ''
         if ran is not None:
@@ -432,6 +455,8 @@ def main(argv: list[str]) -> int:
         print(f'{name:{width}}  OK{note}')
         if args.emit:
             print(f'\n// ==== {name} ====\n{_translation_unit(name, src)}\n')
+    if args.out is not None:
+        (args.out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'\n{ok}/{len(names)} compile')
     if args.run:
         print(f'{agree}/{len(names)} agree on every draw')

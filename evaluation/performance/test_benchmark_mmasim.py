@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.benchmark_mmasim import (
+from evaluation.performance.benchmark_mmasim import (
     DEFAULT_MMASIM_ROOT,
-    _instruction,
-    _manifest,
     build_cases,
+    instruction,
+    manifest,
     prepare_case,
     validate,
 )
@@ -22,11 +22,11 @@ def cases():
 
 def test_registry_contains_all_compiled_designs(cases):
     # Every model built into fpy2_models has an MMA-Sim reference.
-    assert len(cases) == len(_manifest()["models"]) == 60
+    assert len(cases) == len(manifest()["models"]) == 60
     assert len({case.name for case in cases}) == len(cases)
     assert len({case.op_name for case in cases}) == len(cases)
     # validation.json records each NVIDIA and AMD instruction.
-    assert all(_instruction(case.reference) for case in cases)
+    assert all(instruction(case.reference) for case in cases)
 
 
 @pytest.mark.parametrize("distribution", ["normal", "uniform"])
@@ -53,60 +53,39 @@ def test_lengths_and_repeat_calls(cases, length):
         assert torch.equal(prepared.mmasim(), prepared.mmasim()), case.name
 
 
-def test_native_chain_matches_individual_model_calls(cases):
+def test_batched_calls_match_one_row_at_a_time(cases):
     import torch
 
     for case in cases:
-        length = 3 * case.k
-        # Distinct rows and chunks detect lost carry, incorrect offsets, and
-        # accidentally sharing accumulators between independent dot products.
-        a = (
-            torch.arange(2 * length, dtype=case.compute_dtype).reshape(2, length)
-            / 128
-        )
+        # Distinct rows, accumulators and scales detect row offset errors and
+        # rows accidentally sharing an accumulator or scale.
+        a = torch.arange(3 * case.k, dtype=case.compute_dtype).reshape(3, case.k) / 128
         b = torch.full_like(a, 0.5)
+        c = torch.tensor([0.0, 1.0, -2.0], dtype=case.compute_dtype)
         scales = ()
-        per_chunk = 0
         if case.scale_block:
-            # Distinct power-of-two scales per row and block detect scale
-            # offset errors as well as operand offset errors.
-            per_chunk = case.k // case.scale_block
-            count = length // case.scale_block
-            exponents = torch.arange(2 * count).reshape(2, count) % 5 - 2
+            per_row = case.k // case.scale_block
+            exponents = torch.arange(3 * per_row).reshape(3, per_row) % 5 - 2
             scales = (2.0**exponents, 2.0 ** exponents.flip(-1))
-        native = getattr(torch.ops.fpy2_models, case.op_name + "_dot")
-        single = getattr(torch.ops.fpy2_models, case.op_name)
-        actual = native(a, b, *scales)
-        for row in range(2):
-            acc = 0.0
-            for chunk, offset in enumerate(range(0, length, case.k)):
-                chunk_scales = tuple(
-                    s[row : row + 1, chunk * per_chunk : (chunk + 1) * per_chunk]
-                    for s in scales
-                )
-                if case.kind == "scaled":
-                    chunk_scales = tuple(s.item() for s in chunk_scales)
-                acc = single(
-                    a[row : row + 1, offset : offset + case.k],
-                    b[row : row + 1, offset : offset + case.k],
-                    acc,
-                    *chunk_scales,
-                ).item()
-            assert actual[row].item() == acc, case.name
-        assert torch.equal(
-            native(torch.zeros_like(a), b, *scales), torch.zeros(2, dtype=a.dtype)
-        )
+            scales = tuple(s.to(case.compute_dtype) for s in scales)
+        dpa = getattr(torch.ops.fpy2_models, case.op_name)
+        batched = dpa(a, b, c, *scales)
+        for row in range(3):
+            single = dpa(a[row], b[row], c[row], *(s[row] for s in scales))
+            assert batched[row].item() == single.item(), case.name
         with pytest.raises(RuntimeError):
-            native(a[:, :-1], b[:, :-1], *scales)
+            dpa(a[:, :-1], b[:, :-1], c, *scales)
+        with pytest.raises(RuntimeError):
+            dpa(a, b, c[:-1], *scales)
         if scales:
             with pytest.raises(RuntimeError):
-                native(a, b, *(s[:, :-1] for s in scales))
+                dpa(a, b, c, *(s[:, :-1] for s in scales))
         with pytest.raises(ValueError):
             prepare_case(case, 1, 1, length=case.k + 1)
 
 
 def test_summary_separates_lengths():
-    from evaluation.benchmark_mmasim import enrich_measurements, parse_args, summarize
+    from evaluation.performance.benchmark_mmasim import parse_args, summarize
 
     rows = [
         {
@@ -114,7 +93,6 @@ def test_summary_separates_lengths():
             "implementation": "fpy-core",
             "batch_size": 2,
             "dot_length": length,
-            "model_width": 8,
             "threads": 1,
             "seconds_per_call": 0.5,
         }
@@ -122,19 +100,19 @@ def test_summary_separates_lengths():
     ]
     summaries = summarize(rows)
     assert len(summaries) == 2
-    assert [row["terms_per_second"] for row in summaries] == [4096, 8192]
-    enrich_measurements(rows, summaries)
-    assert all(row["dots_per_second"] == 4 for row in rows)
+    assert [row["dot_length"] for row in summaries] == [1024, 2048]
+    assert all(row["dots_per_second"] == 4 for row in summaries)
     args = parse_args([])
-    assert args.dot_lengths == [1024, 2048, 8192]
-    assert args.batch_sizes == [1, 16, 256]
+    assert args.dot_lengths == [256, 1024, 4096]
+    assert args.batch_sizes == [1024, 4096, 16384]
+    assert not args.compile
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_validation_preserves_signed_zero_and_reports_first_mismatch(dtype):
     import torch
 
-    from evaluation.benchmark_mmasim import Prepared
+    from evaluation.performance.benchmark_mmasim import Prepared
 
     actual = torch.tensor([1.0, 0.0], dtype=getattr(torch, dtype))
     expected = torch.tensor([1.0, -0.0], dtype=getattr(torch, dtype))
