@@ -1,21 +1,9 @@
 """Benchmark FPy's compiled MMA models against MMA-Sim.
 
-For every design, dot length and batch size, the benchmark:
+Run from the repository root, building the models first:
 
-1. samples random inputs and rounds them to the design's formats;
-2. checks that FPy's output matches MMA-Sim's bit for bit;
-3. times both with PyTorch's `blocked_autorange`, in several replicates.
-
-FPy's models and MMA-Sim's both model one K-wide instruction for a batch of
-rows, with the same interface: `dpa(a, b, c)` with operands of shape (batch, K)
-and accumulators of shape (batch,). Both compute dot products of any length the
-same way: a Python loop calls `dpa` once per K-wide chunk, passing the
-accumulators from chunk to chunk. With --compile, MMA-Sim's model is also
-validated and timed under default `torch.compile`.
-
-Each run writes a new results directory containing metadata.json,
-validation.json, measurements.csv (one row per timed block) and summary.csv
-(one row per design, implementation, length and batch size).
+    (cd evaluation/common/fpy2_models && ../../../.venv/bin/python setup.py build_ext --inplace)
+    python3 evaluation/performance/benchmark_mmasim.py 
 """
 
 from __future__ import annotations
@@ -576,7 +564,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="design-name substring; repeat to select several designs",
     )
     parser.add_argument("--batch-sizes", type=int_list, default=[1024, 4096, 16384])
-    parser.add_argument("--dot-lengths", type=int_list, default=[256, 1024, 4096])
+    parser.add_argument("--dot-lengths", type=int_list, default=[1024, 4096, 16384])
     parser.add_argument(
         "--distribution",
         choices=list(DISTRIBUTIONS),
@@ -585,7 +573,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         + ", ".join(f"{name} = {text}" for name, text in DISTRIBUTIONS.items()),
     )
     parser.add_argument("--seed", type=int, default=20260928)
-    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument(
+        "--threads", type=int, help="thread count; defaults to PyTorch's default"
+    )
     parser.add_argument("--replicates", type=int, default=3)
     parser.add_argument("--min-run-time", type=float, default=0.25)
     parser.add_argument("--validate-only", action="store_true", help="skip timing")
@@ -596,16 +586,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, help="results directory to create")
     args = parser.parse_args(argv)
-    if args.threads <= 0 or args.replicates <= 0 or args.min_run_time <= 0:
+    if (args.threads is not None and args.threads <= 0) or args.replicates <= 0 or args.min_run_time <= 0:
         parser.error("threads, replicates and min-run-time must be positive")
     return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    # Limit PyTorch and MMA-Sim's OpenMP helper to the requested threads.
-    os.environ["OMP_NUM_THREADS"] = str(args.threads)
-    torch.set_num_threads(args.threads)
+    if args.threads is not None:
+        # Limit PyTorch and MMA-Sim's OpenMP helper to the requested threads.
+        os.environ["OMP_NUM_THREADS"] = str(args.threads)
+        torch.set_num_threads(args.threads)
+    threads = torch.get_num_threads()
 
     mmasim_root = args.mmasim_root.expanduser().resolve()
     cases = select_cases(build_cases(mmasim_root), args.design)
@@ -667,14 +659,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         for replicate in range(args.replicates):
             rng.shuffle(order)
             for implementation, fn in order:
-                for seconds in time_blocks(fn, args.threads, args.min_run_time):
+                for seconds in time_blocks(fn, threads, args.min_run_time):
                     rows.append(
                         {
                             "design": case.name,
                             "implementation": implementation,
                             "batch_size": batch,
                             "dot_length": length,
-                            "threads": args.threads,
+                            "threads": threads,
                             "replicate": replicate,
                             "seconds_per_call": seconds,
                         }
