@@ -43,39 +43,41 @@ def _loc(loc: Location | None) -> str | None:
     return f'{Path(loc.source).name}:{loc.start_line}:{loc.start_column}'
 
 
-def _results(name: str, n: int, seed: int, source: str) -> dict[Analysis, dict[Key, SiteResult]]:
+def _results(
+    name: str, n: int, seed: int, source: str, anf: bool,
+) -> dict[Analysis, dict[Key, SiteResult]]:
     """Each analysis's result at each site of design *name*."""
     func, arg_types = dict(DESIGNS)[name]()
     inputs = list(SOURCES[source].inputs(arg_types, n, seed))
     out = {}
     for a in Analysis:
-        entry, analyses = compiler_view(func, arg_types, a is Analysis.DIGIT_BOUND)
+        entry, analyses = compiler_view(func, arg_types, a is Analysis.DIGIT_BOUND, anf)
         sites = statics(entry, analyses)
         obs = observe(entry, inputs, sites)
         out[a] = {key(s): compare(b, obs[s]) for s, b in sites.items()}
     return out
 
 
-def measure(name: str, n: int, seed: int, source: str) -> dict[str, Any]:
+def measure(name: str, n: int, seed: int, source: str, anf: bool = False) -> dict[str, Any]:
     """Design *name*'s record: one entry per site, with each analysis's result,
     or the error that stopped it."""
     start = time.perf_counter()
     try:
-        results = _results(name, n, seed, source)
+        results = _results(name, n, seed, source, anf)
     except Exception:  # noqa: BLE001 -- one design's failure is reported, not fatal
         return {'design': name, 'error': traceback.format_exc()}
     keys = sorted({k for r in results.values() for k in r}, key=repr)
     return {
-        'design': name, 'inputs': source, 'n': n, 'seed': seed,
+        'design': name, 'inputs': source, 'n': n, 'seed': seed, 'anf': anf,
         'seconds': time.perf_counter() - start,
         'sites': [_site(k, results) for k in keys],
     }
 
 
 def _site(k: Key, results: dict[Analysis, dict[Key, SiteResult]]) -> dict[str, Any]:
-    calls, loc, name = k
+    calls, loc, rhs, name = k
     return {
-        'calls': [_loc(c) for c in calls], 'loc': _loc(loc), 'name': name,
+        'calls': [_loc(c) for c in calls], 'loc': _loc(loc), 'rhs': _loc(rhs), 'name': name,
         **{a.value: dataclasses.asdict(r[k]) if k in r else None for a, r in results.items()},
     }
 
@@ -99,6 +101,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-s', '--seed', type=int, default=0, help='seed (default 0)')
     ap.add_argument('--inputs', choices=sorted(SOURCES), default='random',
                     help='input source (default random)')
+    ap.add_argument('--anf', action='store_true',
+                    help='name every scalar subexpression first, so each is a site')
     ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='measure in this many processes (default 1)')
     args = ap.parse_args(argv)
@@ -111,7 +115,8 @@ def main(argv: list[str]) -> int:
 
     width = max(map(len, names))
     unsound = failed = 0
-    run = partial(measure, n=args.inputs_per_design, seed=args.seed, source=args.inputs)
+    run = partial(measure, n=args.inputs_per_design, seed=args.seed, source=args.inputs,
+                  anf=args.anf)
     for name, record in zip(names, in_processes(run, names, args.jobs), strict=True):
         path = args.out / (_filename(name).removesuffix('.cpp') + '.json')
         path.write_text(json.dumps(record, indent=1))

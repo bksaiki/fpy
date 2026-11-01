@@ -48,9 +48,9 @@ def _pair(x, y):
     return p + q
 
 
-def _results(fn, arg_types, inputs, digit_bounds):
+def _results(fn, arg_types, inputs, digit_bounds, anf=False):
     """Each site's result, by source key."""
-    entry, analyses = compiler_view(fn, arg_types, digit_bounds)
+    entry, analyses = compiler_view(fn, arg_types, digit_bounds, anf)
     st = statics(entry, analyses)
     obs = observe(entry, inputs, st)
     return {key(s): compare(b, obs[s]) for s, b in st.items()}
@@ -58,7 +58,7 @@ def _results(fn, arg_types, inputs, digit_bounds):
 
 def _by_name(results):
     """Each site's result by name and call depth."""
-    return {(name, len(calls)): r for (calls, _, name), r in results.items()}
+    return {(name, len(calls)): r for (calls, _, _, name), r in results.items()}
 
 
 def test_exact_product_is_tight():
@@ -111,7 +111,24 @@ def _guarded(p):
 
 
 def test_a_branch_a_parameter_rules_out_has_no_sites():
-    names = {name for _, _, name in _results(_guarded(2), [F16, F16], [(1.0, 2.0)], False)}
+    names = {name for *_, name in _results(_guarded(2), [F16, F16], [(1.0, 2.0)], False)}
     assert names == {'z'}
-    names = {name for _, _, name in _results(_guarded(4), [F16, F16], [(1.0, 2.0)], False)}
+    names = {name for *_, name in _results(_guarded(4), [F16, F16], [(1.0, 2.0)], False)}
     assert names == {'z', 't'}
+
+
+@fp.fpy(ctx=fp.REAL)
+def _select(x, y):
+    z = x * y if x > 0 else x + y
+    return z
+
+
+def test_anf_names_subexpressions_and_keeps_branches_apart():
+    xs = [(1.0, 2.0), (-1.0, 2.0)]
+    plain = _results(_select, [F16, F16], xs, True)
+    anf = _results(_select, [F16, F16], xs, True, anf=True)
+    assert len(plain) == 1
+    # the split ternary's two assignments of `z`: one statement, two keys
+    zs = [k for k in anf if k[-1] == 'z']
+    assert len(zs) == 2 and zs[0][1] == zs[1][1] and zs[0][2] != zs[1][2]
+    assert all(r.executed and r.sound for r in anf.values())

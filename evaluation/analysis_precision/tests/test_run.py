@@ -20,3 +20,12 @@ def test_one_design(tmp_path):
     # the truncated terms and their sum: top only without digit bounds
     tops = {a: {s['name'] for s in sites if s[a.value]['top']} for a in Analysis}
     assert tops == {Analysis.FORMAT: {'ts', 's'}, Analysis.DIGIT_BOUND: set()}
+
+
+def test_one_design_in_anf(tmp_path):
+    assert main(['-o', str(tmp_path / 'plain'), '-n', '8', 'nv.volta.f16.f32']) == 0
+    assert main(['-o', str(tmp_path / 'anf'), '-n', '8', '--anf', 'nv.volta.f16.f32']) == 0
+    plain, anf = (json.loads((tmp_path / d / 'nv.volta.f16.f32.json').read_text())['sites']
+                  for d in ('plain', 'anf'))
+    assert len(anf) > len(plain)
+    assert all(s[a.value]['sound'] for s in anf for a in Analysis)

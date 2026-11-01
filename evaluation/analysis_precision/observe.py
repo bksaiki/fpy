@@ -37,7 +37,7 @@ from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import Float, RealFloat
 from fpy2.number.format import REAL_FORMAT, Format
 from fpy2.strategies import monomorphize
-from fpy2.transform import ConstFold, DeadCodeEliminate
+from fpy2.transform import ANF, ConstFold, DeadCodeEliminate, Hoistable
 from fpy2.transform.specialize import Specialize
 from fpy2.types import Type
 from fpy2.utils import Location, NamedId
@@ -45,8 +45,11 @@ from fpy2.utils import Location, NamedId
 Site = tuple[tuple[Call, ...], Assign, NamedId]
 """A name an assignment binds, and the calls the assignment is reached through."""
 
-Key = tuple[tuple[Location | None, ...], Location | None, str]
-"""A site by source location, the same in every specialization of a program."""
+Key = tuple[tuple[Location | None, ...], Location | None, Location | None, str]
+"""A site by source location -- its calls', its statement's and its right-hand
+side's -- and name: the same in every specialization of a program.  Splitting
+a ternary into branches (`Hoistable`) keeps the statement's location, so the
+right-hand side's tells the branches apart."""
 
 Static = Format | SetFormat
 """A site's static bound on each of its numbers: `REAL_FORMAT` is top."""
@@ -170,15 +173,16 @@ def _bind(target: Any, b: FormatBound, v: Any = None) -> Iterator[tuple[NamedId,
 
 def key(site: Site) -> Key:
     calls, stmt, name = site
-    return tuple(c.loc for c in calls), stmt.loc, str(name)
+    return tuple(c.loc for c in calls), stmt.loc, stmt.expr.loc, str(name)
 
 
 def compiler_view(
-    fn: fp.Function, arg_types: list[Type], digit_bounds: bool,
+    fn: fp.Function, arg_types: list[Type], digit_bounds: bool, anf: bool = False,
 ) -> tuple[fp.Function, dict[FuncDef, FormatAnalysis]]:
     """*fn* specialized per call site as the compiler does (`Specialize`),
     with branches it cannot take removed, and each spec's analysis, with its
-    caller's digit bounds where *digit_bounds*."""
+    caller's digit bounds where *digit_bounds*.  With *anf*, every scalar
+    subexpression is first named (`ANF`), so each is a site."""
     mod = fp.Module()
     mod.add(monomorphize(fn, args=arg_types))
     params: dict = {}
@@ -187,6 +191,8 @@ def compiler_view(
         mod, size_key=True, bound_params=params, use_digit_bounds=digit_bounds)
     # a design parameter can make a branch dead, e.g. `if P == 4` at P = 2
     out = out.map(lambda _m, fd: DeadCodeEliminate.apply(ConstFold.apply(fd)))
+    if anf:
+        out = out.map(lambda _m, fd: ANF.apply(Hoistable.apply(fd)))
     analyses = {
         f.ast: FormatInfer.analyze(
             f.ast, use_digit_bounds=digit_bounds, digit_bound_params=params.get(f.name),
