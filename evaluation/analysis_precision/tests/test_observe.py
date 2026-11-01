@@ -4,18 +4,12 @@ Observed values against static bounds, on programs whose answers are known.
     pytest -n 8 evaluation/analysis_precision/tests/test_observe.py
 """
 
-import os
-import sys
-
-import fpy2 as fp
-from fpy2.analysis import FormatInfer
-from fpy2.analysis.format_infer import SetFormat
-from fpy2.strategies import monomorphize
-from fpy2.types import ListType, RealType
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from observe import Observed, compare, compiler_view, key, observe, statics
+
+import fpy2 as fp
+from fpy2.analysis.format_infer import SetFormat
+from fpy2.types import ListType, RealType
 
 F16 = RealType(fp.FP16)
 

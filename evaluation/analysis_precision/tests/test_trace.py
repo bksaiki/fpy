@@ -4,15 +4,11 @@ The tracer sees every value at every site, keyed per call path.
     pytest -n 8 evaluation/analysis_precision/tests/test_trace.py
 """
 
-import os
-import sys
+
+from tracing import trace
 
 import fpy2 as fp
 from fpy2.ast.fpyast import Add, Call, ListComp, Mul
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from tracing import trace
 
 
 @fp.fpy(ctx=fp.REAL)
