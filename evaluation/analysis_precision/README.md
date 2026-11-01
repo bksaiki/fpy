@@ -22,9 +22,13 @@ lies outside its static bound.  `report.py` writes:
 
 - `precision-tops.tex`: sites bounded only by ℝ* per architecture, without
   and with digit bounds;
+- `precision-coverage.tex`: per architecture, how much of each bound was
+  observed (precision p′/p, digit span, magnitude max|v|/b);
 - `precision-slack.{pdf,png}`: each bounded site's slack with digit bounds.
 
-It also prints summary numbers.  Options: `run.py -h`, `report.py -h`.
+It also prints summary numbers.  Given several result directories (other
+seeds, `--inputs adversarial`), it combines their observations per site.
+Options: `run.py -h`, `report.py -h`.
 
 ## Tests
 

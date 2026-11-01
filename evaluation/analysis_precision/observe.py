@@ -128,17 +128,41 @@ class Observed:
 
 
 @dataclass(frozen=True)
+class Params:
+    """The finite nonzero values of a set, by their most significant digits,
+    lowest and highest digit positions, and log2 of their largest magnitude."""
+
+    digits: int | float
+    lsb: int | float
+    msb: int | float
+    mag: float
+
+
+SLACK = {
+    'digits': lambda static, seen: static - seen,
+    'lsb': lambda static, seen: seen - static,
+    'msb': lambda static, seen: static - seen,
+}
+"""Each `Params` field's slack in bits, from the static and observed values: 0
+is tight."""
+
+
+@dataclass(frozen=True)
 class SiteResult:
-    """A site's static bound against its observed values.  Slacks are in
-    bits, `None` where no finite nonzero value was observed or the bound has
-    no abstract format; 0 is tight."""
+    """A site's static bound against its observed values.  `static` is `None`
+    where the bound is top or has no abstract format, `observed` where no
+    finite nonzero value was seen."""
 
     top: bool
     executed: bool
     sound: bool
-    digits: int | float | None
-    lsb: int | float | None
-    msb: int | float | None
+    static: Params | None
+    observed: Params | None
+
+    def slack(self) -> dict[str, int | float] | None:
+        if self.static is None or self.observed is None:
+            return None
+        return {d: f(getattr(self.static, d), getattr(self.observed, d)) for d, f in SLACK.items()}
 
 
 class _Assigns(DefaultVisitor):
@@ -270,17 +294,21 @@ def _holds(static: Static, o: Observed) -> bool:
     return a is not None and _within(a, o)
 
 
+def _log2(x: RealFloat | Fraction | float) -> float:
+    return math.inf if x == math.inf else -math.inf if x == 0 else math.log2(float(x))
+
+
 def compare(static: Static, o: Observed) -> SiteResult:
     """*static* against what *o* observed."""
     top = static == REAL_FORMAT
     sound = top or _holds(static, o)
     a = None if top else to_abstract(static)
-    if a is None or o.lsb is None or o.msb is None:
-        return SiteResult(top, o.runs > 0, sound, None, None, None)
-    hi = a.bound
-    return SiteResult(
-        top, o.runs > 0, sound,
-        digits=a.effective_prec() - o.prec,
-        lsb=o.lsb - a.exp,
-        msb=(math.inf if isinstance(hi, float) else hi.e) - o.msb,
-    )
+    bounded = None
+    if a is not None:
+        hi = a.bound
+        msb = math.inf if isinstance(hi, float) else -math.inf if hi == 0 else hi.e
+        bounded = Params(a.effective_prec(), a.exp, msb, _log2(hi))
+    seen = None
+    if o.lsb is not None and o.msb is not None:
+        seen = Params(o.prec, o.lsb, o.msb, _log2(max(o.pos or 0, -(o.neg or 0))))
+    return SiteResult(top, o.runs > 0, sound, bounded, seen)

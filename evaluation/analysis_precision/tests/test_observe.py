@@ -66,7 +66,7 @@ def test_exact_product_is_tight():
     mx, tiny = 65504.0, 2.0 ** -24
     for db in (False, True):
         r = _by_name(_results(_prod, [F16, F16], [(mx, mx), (tiny, tiny), (-mx, mx)], db))[('z', 0)]
-        assert (r.top, r.sound, r.digits, r.lsb, r.msb) == (False, True, 0, 0, 0)
+        assert (r.top, r.sound, r.slack()) == (False, True, {'digits': 0, 'lsb': 0, 'msb': 0})
 
 
 def test_digit_bounds_bound_a_data_dependent_truncation():
@@ -76,7 +76,7 @@ def test_digit_bounds_bound_a_data_dependent_truncation():
     assert without.keys() == with_db.keys()
     without, with_db = _by_name(without)[('ts', 1)], _by_name(with_db)[('ts', 1)]
     assert without.top and not with_db.top
-    assert with_db.sound and with_db.digits is not None
+    assert with_db.sound and with_db.slack() is not None
 
 
 def test_every_iteration_is_observed():
