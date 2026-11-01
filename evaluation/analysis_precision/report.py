@@ -48,7 +48,6 @@ class Row:
     sites: int = 0
     top_format: int = 0
     top_digit_bound: int = 0
-    unexecuted: int = 0
 
 
 def arch(design: str) -> str:
@@ -78,21 +77,20 @@ def table(records: Iterable[dict[str, Any]]) -> list[Row]:
                 row.sites += 1
                 row.top_format += bool(f and f['top'])
                 row.top_digit_bound += bool(d and d['top'])
-                row.unexecuted += not (d or f)['executed']
     return [r for r in rows.values() if r.designs] + [total]
 
 
 def latex(rows: list[Row]) -> str:
     lines = [
-        r'\begin{tabular}{lrrrrr}', r'\toprule',
-        r'Architecture & Designs & Sites & $\mathbb{R}^*$ (FI) & $\mathbb{R}^*$ (FI+DB) & Not run \\',
+        r'\begin{tabular}{lrrrr}', r'\toprule',
+        r'Architecture & Designs & Sites & $\mathbb{R}^*$ (FI) & $\mathbb{R}^*$ (FI+DB) \\',
         r'\midrule',
     ]
     for r in rows:
         if r.label == 'Total':
             lines.append(r'\midrule')
         lines.append(f'{r.label} & {r.designs} & {r.sites} & {r.top_format} & '
-                     f'{r.top_digit_bound} & {r.unexecuted} \\\\')
+                     f'{r.top_digit_bound} \\\\')
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 

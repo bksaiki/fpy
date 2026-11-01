@@ -37,6 +37,7 @@ from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import Float, RealFloat
 from fpy2.number.format import REAL_FORMAT, Format
 from fpy2.strategies import monomorphize
+from fpy2.transform import ConstFold, DeadCodeEliminate
 from fpy2.transform.specialize import Specialize
 from fpy2.types import Type
 from fpy2.utils import Location, NamedId
@@ -176,14 +177,16 @@ def compiler_view(
     fn: fp.Function, arg_types: list[Type], digit_bounds: bool,
 ) -> tuple[fp.Function, dict[FuncDef, FormatAnalysis]]:
     """*fn* specialized per call site as the compiler does (`Specialize`),
-    and each spec's analysis, with its caller's digit bounds where
-    *digit_bounds*."""
+    with branches it cannot take removed, and each spec's analysis, with its
+    caller's digit bounds where *digit_bounds*."""
     mod = fp.Module()
     mod.add(monomorphize(fn, args=arg_types))
     params: dict = {}
     # `size_key`: as the compiler does, so a callee knows its lists' lengths
     out = Specialize.apply(
         mod, size_key=True, bound_params=params, use_digit_bounds=digit_bounds)
+    # a design parameter can make a branch dead, e.g. `if P == 4` at P = 2
+    out = out.map(lambda _m, fd: DeadCodeEliminate.apply(ConstFold.apply(fd)))
     analyses = {
         f.ast: FormatInfer.analyze(
             f.ast, use_digit_bounds=digit_bounds, digit_bound_params=params.get(f.name),

@@ -32,7 +32,7 @@ _FMA = {'design': 'fp32 (fma)', 'sites': [
 
 def test_rows_by_architecture():
     assert table([_FMA, _VOLTA]) == [
-        Row('Volta', 1, 3, 2, 1, 0), Row('FMA chain', 1, 1, 0, 0, 1), Row('Total', 2, 4, 2, 1, 1),
+        Row('Volta', 1, 3, 2, 1), Row('FMA chain', 1, 1, 0, 0), Row('Total', 2, 4, 2, 1),
     ]
 
 
@@ -45,5 +45,5 @@ def test_writes_table_and_figure(tmp_path):
         (tmp_path / f'{i}.json').write_text(json.dumps(rec))
     assert main([str(tmp_path)]) == 0
     tex = (tmp_path / 'precision-tops.tex').read_text()
-    assert 'Volta & 1 & 3 & 2 & 1 & 0' in tex and 'Total & 2 & 4 & 2 & 1 & 1' in tex
+    assert 'Volta & 1 & 3 & 2 & 1 \\\\' in tex and 'Total & 2 & 4 & 2 & 1 \\\\' in tex
     assert (tmp_path / 'precision-slack.pdf').stat().st_size > 0

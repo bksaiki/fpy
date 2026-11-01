@@ -97,3 +97,21 @@ def test_a_wrong_bound_is_unsound():
     assert not compare(fp.BF16.format(), o).sound
     assert compare(fp.FP16.format(), o).sound
     assert not compare(SetFormat.from_value(1), o).sound
+
+
+def _guarded(p):
+    @fp.fpy(ctx=fp.REAL)
+    def f(x, y):
+        z = x * y
+        if p == 4:
+            t = z * z
+            z = t
+        return z
+    return f
+
+
+def test_a_branch_a_parameter_rules_out_has_no_sites():
+    names = {name for _, _, name in _results(_guarded(2), [F16, F16], [(1.0, 2.0)], False)}
+    assert names == {'z'}
+    names = {name for _, _, name in _results(_guarded(4), [F16, F16], [(1.0, 2.0)], False)}
+    assert names == {'z', 't'}
