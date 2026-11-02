@@ -44,6 +44,14 @@ from observe import (
 RESULTS = Path(__file__).resolve().parent / 'results'
 
 
+def _foreign(out: Path) -> list[str]:
+    """What in *out* a run did not write, and so must not be deleted."""
+    if not out.exists():
+        return []
+    return sorted(p.name for p in out.iterdir()
+                  if not (p.suffix == '.json' or p.name == 'anf' or p.name.startswith('precision-')))
+
+
 def _loc(loc: Location | None) -> str | None:
     if loc is None:
         return None
@@ -138,6 +146,8 @@ def main(argv: list[str]) -> int:
              if not args.filter or any(f in name for f in args.filter)]
     if not names:
         ap.error(f'no design matches {args.filter}')
+    if foreign := _foreign(args.out):
+        ap.error(f'{args.out} holds files a run did not write: {", ".join(foreign)}')
     shutil.rmtree(args.out, ignore_errors=True)
 
     failed, unsound = _measure_all(

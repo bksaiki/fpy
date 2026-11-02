@@ -6,6 +6,7 @@ The driver on one design: a record per site, both analyses, nothing unsound.
 
 import json
 
+import pytest
 from run import Analysis, main
 
 
@@ -41,3 +42,10 @@ def test_one_design_pushes_through_to_the_report(tmp_path):
                             'random_inputs_per_design': 8, 'unsound': 0}
     assert [r['label'] for r in paper['tops']['by_vendor']] == ['NVIDIA', 'Total']
     assert {'precision', 'min_quantum', 'bound'} <= paper['tightness']['random_inputs_alone'].keys()
+
+
+def test_a_directory_with_other_files_is_not_cleared(tmp_path):
+    (tmp_path / 'notes.txt').write_text('keep')
+    with pytest.raises(SystemExit):
+        main(['-o', str(tmp_path), '-n', '1', '-j', '1', 'nv.volta.f16.f32'])
+    assert (tmp_path / 'notes.txt').read_text() == 'keep'

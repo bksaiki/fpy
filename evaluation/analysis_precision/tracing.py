@@ -7,7 +7,6 @@ matches format inference's one analysis per call site (`by_call`).
 """
 
 import ast as pyast
-from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
@@ -64,19 +63,3 @@ def tracer(fn: fp.Function, record: Record) -> Callable[..., Any]:
     ctx = get_default_interpreter()._func_ctx(fn.ast, fp.REAL)
     return lambda *args: from_value(run(*map(to_value, args), __ctx__=ctx))
 
-
-def _snapshot(v: Any) -> Any:
-    """*v*, with its lists copied: a later write through a shared list would
-    otherwise change what was recorded."""
-    if isinstance(v, list):
-        return [_snapshot(x) for x in v]
-    if isinstance(v, tuple):
-        return tuple(_snapshot(x) for x in v)
-    return v
-
-
-def trace(fn: fp.Function, *args: Any) -> tuple[Any, dict[Site, list[Any]]]:
-    """*fn*'s result on *args*, and each value each site took, in order."""
-    seen: dict[Site, list[Any]] = defaultdict(list)
-    result = tracer(fn, lambda s, v: seen[s].append(_snapshot(v)))(*args)
-    return result, dict(seen)

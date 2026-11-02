@@ -5,10 +5,30 @@ The tracer sees every value at every site, keyed per call path.
 """
 
 
-from tracing import trace
+from collections import defaultdict
+from typing import Any
+
+from tracing import Site, tracer
 
 import fpy2 as fp
 from fpy2.ast.fpyast import Add, Call, ListComp, Mul
+
+
+def _snapshot(v: Any) -> Any:
+    """*v*, with its lists copied: a later write through a shared list would
+    otherwise change what was recorded."""
+    if isinstance(v, list):
+        return [_snapshot(x) for x in v]
+    if isinstance(v, tuple):
+        return tuple(_snapshot(x) for x in v)
+    return v
+
+
+def trace(fn: fp.Function, *args: Any) -> tuple[Any, dict[Site, list[Any]]]:
+    """*fn*'s result on *args*, and each value each site took, in order."""
+    seen: dict[Site, list[Any]] = defaultdict(list)
+    result = tracer(fn, lambda s, v: seen[s].append(_snapshot(v)))(*args)
+    return result, dict(seen)
 
 
 @fp.fpy(ctx=fp.REAL)

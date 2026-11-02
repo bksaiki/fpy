@@ -49,8 +49,6 @@ DIMENSIONS = {'digits': 'Significant digits', 'lsb': 'Lowest digit', 'mag': 'Mag
 left out for the magnitude: `log2 b - log2 max|v|`, which sees a bound `b`
 that is not a power of two."""
 
-_SLACK = {**SLACK, 'mag': lambda static, seen: static - seen}
-
 BINS = 8
 """Slacks of this many bits or more share the last bin."""
 
@@ -131,7 +129,7 @@ def slacks(records: Iterable[dict[str, Any]], observed: str = 'observed') -> dic
     for rec in records:
         for st, seen in _measured(rec, observed):
             for d in DIMENSIONS:
-                out[d].append(_SLACK[d](st[d], seen[d]))
+                out[d].append(SLACK[d](st[d], seen[d]))
     return out
 
 
@@ -201,7 +199,7 @@ def figure(data: dict[str, list[int | float]], out: Path) -> None:
 
 def _excluded(records: list[dict[str, Any]]) -> dict[str, int]:
     """Why each site digit bounds do not measure is left out."""
-    out = {'top': 0, 'not_run': 0, 'list_allocation': 0, 'zero_or_special_only': 0}
+    out = {'top': 0, 'not_run': 0, 'unsound': 0, 'list_allocation': 0, 'zero_or_special_only': 0}
     for rec in records:
         for site in rec['sites']:
             r = _result(site, Analysis.DIGIT_BOUND)
@@ -209,6 +207,8 @@ def _excluded(records: list[dict[str, Any]]) -> dict[str, int]:
                 out['top'] += 1
             elif not r['executed']:
                 out['not_run'] += 1
+            elif not r['sound']:
+                out['unsound'] += 1
             elif r['static'] is None:
                 out['list_allocation'] += 1
             elif r['observed'] is None:

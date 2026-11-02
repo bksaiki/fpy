@@ -22,6 +22,7 @@ from tracing import tracer
 
 import fpy2 as fp
 from fpy2.analysis import FormatInfer
+from fpy2.analysis.digit_bound import DigitBoundParams
 from fpy2.analysis.format_infer import (
     AbstractFormat,
     FormatAnalysis,
@@ -151,6 +152,7 @@ SLACK = {
     'digits': lambda static, seen: static - seen,
     'lsb': lambda static, seen: seen - static,
     'msb': lambda static, seen: static - seen,
+    'mag': lambda static, seen: static - seen,
 }
 """Each `Params` field's slack in bits, from the static and observed values: 0
 is tight."""
@@ -179,8 +181,10 @@ class SiteResult:
 class _Assigns(DefaultVisitor):
     """The assignments in one function's body, not its callees'."""
 
+    out: list[Assign]
+
     def __init__(self) -> None:
-        self.out: list[Assign] = []
+        self.out = []
 
     def _visit_assign(self, stmt: Assign, ctx: Any) -> None:
         self.out.append(stmt)
@@ -220,7 +224,7 @@ def compiler_view(
     subexpression is first named (`ANF`), so each is a site."""
     mod = fp.Module()
     mod.add(monomorphize(fn, args=arg_types))
-    params: dict = {}
+    params: dict[str, DigitBoundParams] = {}
     # `size_key`: as the compiler does, so a callee knows its lists' lengths
     out = Specialize.apply(
         mod, size_key=True, bound_params=params, use_digit_bounds=digit_bounds)

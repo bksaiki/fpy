@@ -1,8 +1,5 @@
 """
-Input sources: where a design's arguments come from.
-
-A source is chosen by name (`SOURCES`), so a workload -- operands taken from a
-real GEMM -- is one more class here, not a change to the driver.
+Input sources: where a design's arguments come from, chosen by name (`SOURCES`).
 """
 
 import enum
@@ -35,7 +32,7 @@ class RandomSource:
     every `_HARD_EVERY`-th draw heavy in hard cases (zeros, extremes,
     subnormals, specials).  The same seed gives `compile.py -r`'s inputs."""
 
-    name = 'random'
+    name: str = 'random'
 
     def is_random(self, i: int, n: int) -> bool:
         return True
@@ -71,8 +68,8 @@ class AdversarialSource:
     needs every product tiny.  Draws cycle through `Extreme`; tiny and huge
     are the `1 / WINDOW` of a format's positive values nearest each end."""
 
-    name = 'adversarial'
-    WINDOW = 16
+    name: str = 'adversarial'
+    WINDOW: int = 16
 
     def is_random(self, i: int, n: int) -> bool:
         return False
@@ -139,8 +136,8 @@ class MixedSource:
     """`RandomSource`'s draws with every `EVERY`-th one `AdversarialSource`'s
     instead: one input set holding both."""
 
-    name = 'mixed'
-    EVERY = 5
+    name: str = 'mixed'
+    EVERY: int = 5
 
     def inputs(self, arg_types: list[Type], n: int, seed: int) -> Iterator[list[Any]]:
         adversarial = AdversarialSource().inputs(arg_types, n // self.EVERY, seed)
