@@ -11,8 +11,9 @@ Static bounds come from the compiler's view (`compiler_view`): the program
 specialized per call site, each spec analyzed with its caller's digit bounds.
 """
 
+import enum
 import math
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any
@@ -41,6 +42,14 @@ from fpy2.transform import ANF, ConstFold, DeadCodeEliminate, Hoistable
 from fpy2.transform.specialize import Specialize
 from fpy2.types import Type
 from fpy2.utils import Location, NamedId
+
+
+class Analysis(enum.Enum):
+    """The analyses compared: format inference alone, and with digit bounds."""
+
+    FORMAT = 'format'
+    DIGIT_BOUND = 'digit_bound'
+
 
 Site = tuple[tuple[Call, ...], Assign, NamedId]
 """A name an assignment binds, and the calls the assignment is reached through."""
@@ -158,6 +167,8 @@ class SiteResult:
     sound: bool
     static: Params | None
     observed: Params | None
+    observed_random: Params | None = None
+    """What the random inputs alone observed, where a run marks them."""
 
     def slack(self) -> dict[str, int | float] | None:
         if self.static is None or self.observed is None:
@@ -247,22 +258,36 @@ def statics(
 
 def observe(fn: fp.Function, inputs: Iterable[Sequence[Any]], sites: Iterable[Site]) -> dict[Site, Observed]:
     """The join of each site's values over a run of *fn* on each input."""
-    obs = {s: Observed() for s in sites}
-    by_rhs: dict[tuple[tuple[Call, ...], Any], Assign] = {(c, a.expr): a for c, a, _ in obs}
+    return observe_split(fn, inputs, sites, lambda _: False)[0]
+
+
+def observe_split(
+    fn: fp.Function, inputs: Iterable[Sequence[Any]], sites: Iterable[Site],
+    marked: Callable[[int], bool],
+) -> tuple[dict[Site, Observed], dict[Site, Observed]]:
+    """`observe`'s join over every input, and over the inputs whose index is
+    *marked* alone, from one run."""
+    every = {s: Observed() for s in sites}
+    some = {s: Observed() for s in every}
+    by_rhs: dict[tuple[tuple[Call, ...], Any], Assign] = {(c, a.expr): a for c, a, _ in every}
+    now = False
 
     def record(site: tuple[tuple[Call, ...], Any], v: Any) -> None:
         stmt = by_rhs.get(site)
         if stmt is None:
             return
         for name, _, vi in _bind(stmt.target, None, v):
-            if (o := obs.get((site[0], stmt, name))) is not None:
-                o.runs += 1
-                o.add(vi)
+            k = (site[0], stmt, name)
+            for obs in (every, some) if now else (every,):
+                if (o := obs.get(k)) is not None:
+                    o.runs += 1
+                    o.add(vi)
 
     run = tracer(fn, record)
-    for args in inputs:
+    for i, args in enumerate(inputs):
+        now = marked(i)
         run(*args)
-    return obs
+    return every, some
 
 
 def _rat(b: RealFloat | float) -> Fraction | float:
@@ -298,8 +323,14 @@ def _log2(x: RealFloat | Fraction | float) -> float:
     return math.inf if x == math.inf else -math.inf if x == 0 else math.log2(float(x))
 
 
-def compare(static: Static, o: Observed) -> SiteResult:
-    """*static* against what *o* observed."""
+def _seen(o: Observed) -> Params | None:
+    if o.lsb is None or o.msb is None:
+        return None
+    return Params(o.prec, o.lsb, o.msb, _log2(max(o.pos or 0, -(o.neg or 0))))
+
+
+def compare(static: Static, o: Observed, random: Observed | None = None) -> SiteResult:
+    """*static* against what *o* observed, and *random*, its random inputs."""
     top = static == REAL_FORMAT
     sound = top or _holds(static, o)
     a = None if top else to_abstract(static)
@@ -308,7 +339,5 @@ def compare(static: Static, o: Observed) -> SiteResult:
         hi = a.bound
         msb = math.inf if isinstance(hi, float) else -math.inf if hi == 0 else hi.e
         bounded = Params(a.effective_prec(), a.exp, msb, _log2(hi))
-    seen = None
-    if o.lsb is not None and o.msb is not None:
-        seen = Params(o.prec, o.lsb, o.msb, _log2(max(o.pos or 0, -(o.neg or 0))))
-    return SiteResult(top, o.runs > 0, sound, bounded, seen)
+    return SiteResult(top, o.runs > 0, sound, bounded, _seen(o),
+                      None if random is None else _seen(random))

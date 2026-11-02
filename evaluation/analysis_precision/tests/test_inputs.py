@@ -80,3 +80,11 @@ def test_subnormal_and_minval_draws_put_every_operand_there():
             limit = float(top(fmt))
             assert all(0 < abs(x) < limit or abs(x) == float(fmt.from_ordinal(1)) for x in xs)
     assert all(abs(x) == 2.0 ** -24 for x in mini[0] + mini[1])
+
+
+def test_mixed_is_one_in_five_adversarial():
+    _, ts = dict(DESIGNS)['nv.volta.f16.f32']()
+    mixed = [repr(a) for a in SOURCES['mixed'].inputs(ts, 10, seed=0)]
+    adversarial = [repr(a) for a in SOURCES['adversarial'].inputs(ts, 2, seed=0)]
+    random_ = [repr(a) for a in SOURCES['random'].inputs(ts, 8, seed=0)]
+    assert mixed == random_[:4] + adversarial[:1] + random_[4:8] + adversarial[1:]

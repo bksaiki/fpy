@@ -2,18 +2,20 @@
 Measures format inference's precision, with and without digit bounds, on the
 MMA-Sim designs: each site's static bound against every value it takes.
 
-    python evaluation/analysis_precision/run.py -o results/         # every design
-    python evaluation/analysis_precision/run.py -o results/ volta   # matching designs
-    python evaluation/analysis_precision/run.py -o results/ -j 8 -n 1000
+    python evaluation/analysis_precision/run.py           # everything, about 7 min
+    python evaluation/analysis_precision/run.py volta     # matching designs only
 
-Writes `<out>/<design>.json` per design; exits 1 if any observed value lies
-outside its static bound.
+Replaces the results directory (`results/` beside this file, or `-o DIR`)
+with `<design>.json` per design, an `anf/` pass (sites counted with every
+scalar subexpression named; analysis only), and `report.py`'s tables, figure
+and `precision-summary.txt`.  Exits 1 if any observed value lies outside its
+static bound or any design fails.
 """
 
 import argparse
 import dataclasses
-import enum
 import json
+import shutil
 import sys
 import time
 import traceback
@@ -25,16 +27,21 @@ from fpy2.utils import Location
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'examples' / 'mmasim'))
 
+import report
 from compile import DESIGNS, _filename, in_processes
 from inputs import SOURCES
-from observe import Key, SiteResult, compare, compiler_view, key, observe, statics
+from observe import (
+    Analysis,
+    Key,
+    SiteResult,
+    compare,
+    compiler_view,
+    key,
+    observe_split,
+    statics,
+)
 
-
-class Analysis(enum.Enum):
-    """The analyses compared: format inference alone, and with digit bounds."""
-
-    FORMAT = 'format'
-    DIGIT_BOUND = 'digit_bound'
+RESULTS = Path(__file__).resolve().parent / 'results'
 
 
 def _loc(loc: Location | None) -> str | None:
@@ -48,13 +55,14 @@ def _results(
 ) -> dict[Analysis, dict[Key, SiteResult]]:
     """Each analysis's result at each site of design *name*."""
     func, arg_types = dict(DESIGNS)[name]()
-    inputs = list(SOURCES[source].inputs(arg_types, n, seed))
+    src = SOURCES[source]
+    inputs = list(src.inputs(arg_types, n, seed))
     out = {}
     for a in Analysis:
         entry, analyses = compiler_view(func, arg_types, a is Analysis.DIGIT_BOUND, anf)
         sites = statics(entry, analyses)
-        obs = observe(entry, inputs, sites)
-        out[a] = {key(s): compare(b, obs[s]) for s, b in sites.items()}
+        every, random = observe_split(entry, inputs, sites, lambda i: src.is_random(i, n))
+        out[a] = {key(s): compare(b, every[s], random[s]) for s, b in sites.items()}
     return out
 
 
@@ -69,6 +77,7 @@ def measure(name: str, n: int, seed: int, source: str, anf: bool = False) -> dic
     keys = sorted({k for r in results.values() for k in r}, key=repr)
     return {
         'design': name, 'inputs': source, 'n': n, 'seed': seed, 'anf': anf,
+        'random': sum(SOURCES[source].is_random(i, n) for i in range(n)),
         'seconds': time.perf_counter() - start,
         'sites': [_site(k, results) for k in keys],
     }
@@ -90,36 +99,16 @@ def _summary(record: dict[str, Any]) -> str:
             f'unsound {unsound}  {record["seconds"]:.1f}s')
 
 
-def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('filter', nargs='*', metavar='SUBSTRING',
-                    help='only designs whose name contains one of these')
-    ap.add_argument('-o', '--out', metavar='DIR', type=Path, required=True,
-                    help='write each design to DIR/<design>.json')
-    ap.add_argument('-n', '--inputs-per-design', type=int, default=1000,
-                    help='inputs per design (default 1000)')
-    ap.add_argument('-s', '--seed', type=int, default=0, help='seed (default 0)')
-    ap.add_argument('--inputs', choices=sorted(SOURCES), default='random',
-                    help='input source (default random)')
-    ap.add_argument('--anf', action='store_true',
-                    help='name every scalar subexpression first, so each is a site')
-    ap.add_argument('-j', '--jobs', type=int, default=1,
-                    help='measure in this many processes (default 1)')
-    args = ap.parse_args(argv)
-
-    names = [name for name, _ in DESIGNS
-             if not args.filter or any(f in name for f in args.filter)]
-    if not names:
-        ap.error(f'no design matches {args.filter}')
-    args.out.mkdir(parents=True, exist_ok=True)
-
+def _measure_all(
+    names: list[str], out: Path, jobs: int, **kw: Any,
+) -> tuple[int, int]:
+    """Measure *names* into *out*, one line each; how many failed, and how
+    many have an unsound site."""
+    out.mkdir(parents=True)
     width = max(map(len, names))
     unsound = failed = 0
-    run = partial(measure, n=args.inputs_per_design, seed=args.seed, source=args.inputs,
-                  anf=args.anf)
-    for name, record in zip(names, in_processes(run, names, args.jobs), strict=True):
-        path = args.out / (_filename(name).removesuffix('.cpp') + '.json')
-        path.write_text(json.dumps(record, indent=1))
+    for name, record in zip(names, in_processes(partial(measure, **kw), names, jobs), strict=True):
+        (out / (_filename(name).removesuffix('.cpp') + '.json')).write_text(json.dumps(record, indent=1))
         if 'error' in record:
             failed += 1
             print(f'{name:{width}}  error: {record["error"].strip().splitlines()[-1]}')
@@ -127,8 +116,40 @@ def main(argv: list[str]) -> int:
         unsound += any(not s[a.value]['sound'] for s in record['sites'] for a in Analysis
                        if s[a.value])
         print(f'{name:{width}}  {_summary(record)}')
+    return failed, unsound
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument('filter', nargs='*', metavar='SUBSTRING',
+                    help='only designs whose name contains one of these')
+    ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
+                    help='the results directory, replaced (default results/ here)')
+    ap.add_argument('-n', '--inputs-per-design', type=int, default=5000,
+                    help='inputs per design (default 5000)')
+    ap.add_argument('-s', '--seed', type=int, default=0, help='seed (default 0)')
+    ap.add_argument('--inputs', choices=sorted(SOURCES), default='mixed',
+                    help='input source (default mixed: random, every fifth adversarial)')
+    ap.add_argument('-j', '--jobs', type=int, default=8,
+                    help='measure in this many processes (default 8)')
+    args = ap.parse_args(argv)
+
+    names = [name for name, _ in DESIGNS
+             if not args.filter or any(f in name for f in args.filter)]
+    if not names:
+        ap.error(f'no design matches {args.filter}')
+    shutil.rmtree(args.out, ignore_errors=True)
+
+    failed, unsound = _measure_all(
+        names, args.out, args.jobs,
+        n=args.inputs_per_design, seed=args.seed, source=args.inputs)
     print(f'{len(names) - failed}/{len(names)} measured, {unsound} with an unsound site')
-    return 1 if unsound or failed else 0
+    print('-- anf (analysis only)')
+    anf_failed, _ = _measure_all(names, args.out / 'anf', args.jobs,
+                                 n=0, seed=args.seed, source=args.inputs, anf=True)
+    print('-- report')
+    report.main([str(args.out)])
+    return 1 if unsound or failed or anf_failed else 0
 
 
 if __name__ == '__main__':

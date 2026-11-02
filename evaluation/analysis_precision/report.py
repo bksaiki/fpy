@@ -1,16 +1,20 @@
 """
-The precision evaluation's table and figure, from `run.py`'s results.
+The precision evaluation's tables, figure and summary, from `run.py`'s results;
+`run.py` calls it last.
 
-    python evaluation/analysis_precision/report.py results/
-    python evaluation/analysis_precision/report.py results/ results/adversarial/ -o combined/
+    python evaluation/analysis_precision/report.py evaluation/analysis_precision/results
 
-Writes `precision-tops.tex` (top sites per architecture, without and with digit
-bounds), `precision-coverage.tex` (how much of each bound digit bounds leave was
-observed, per architecture) and `precision-slack.{pdf,png}` (each bounded site's
-slack with digit bounds, per dimension) to the first results directory, or `-o
-DIR`, and prints summary numbers.  Several directories -- other seeds or input sources -- are
-combined: a site's observations are their union, so its slack in each
-dimension is the least any run saw.
+Writes into the results directory:
+
+- `precision-tops.tex`: sites bounded only by R*, per architecture, without
+  and with digit bounds;
+- `precision-tightness.tex`: the fraction of each inferred format's
+  parameters observed values reach, per architecture;
+- both again grouped by vendor (`-vendor`);
+- `precision-slack.{pdf,png}`: each bounded site's slack with digit bounds;
+- `precision-paper.json`: every table and number the evaluation cites,
+  including the random inputs alone and the `anf/` site counts;
+- `precision-summary.txt`: the same, as text.
 """
 
 import argparse
@@ -26,15 +30,19 @@ import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from observe import SLACK
-from run import Analysis
+from observe import SLACK, Analysis
 
 ARCHS = {
     'volta': 'Volta', 'turing': 'Turing', 'ampere': 'Ampere', 'ada': 'Ada',
-    'hopper': 'Hopper', 'blackwell': 'Blackwell', 'rtx_blackwell': 'RTX Blackwell',
+    'hopper': 'Hopper', 'blackwell': 'Blackwell', 'rtx_blackwell': 'Blackwell',
     'cdna1': 'CDNA1', 'cdna2': 'CDNA2', 'cdna3': 'CDNA3', 'fma': 'FMA chain',
 }
-"""Each architecture's tag in a design's name, and its row label, in row order."""
+"""Each architecture's tag in a design's name, and its row label, in row order;
+RTX Blackwell shares Blackwell's row."""
+
+VENDORS = {tag: 'AMD' if tag.startswith('cdna') else 'FMA chain' if tag == 'fma' else 'NVIDIA'
+           for tag in ARCHS}
+"""Each architecture's tag, and its vendor's row label."""
 
 DIMENSIONS = {'digits': 'Significant digits', 'lsb': 'Lowest digit', 'mag': 'Magnitude'}
 """Each slack reported, and its panel title.  The highest digit, `msb`, is
@@ -68,61 +76,20 @@ def _result(site: dict[str, Any], a: Analysis) -> dict[str, Any] | None:
     return site.get(a.value)
 
 
-def load(results: list[Path]) -> tuple[list[dict[str, Any]], list[str]]:
-    """The records in *results*, each design's combined across directories,
-    and the designs that failed in any."""
-    by_design: dict[str, list[dict[str, Any]]] = {}
-    for d in results:
-        for p in sorted(d.glob('*.json')):
-            rec = json.loads(p.read_text())
-            by_design.setdefault(rec['design'], []).append(rec)
-    failed = [n for n, rs in by_design.items() if any('error' in r for r in rs)]
-    return [combine(rs) for n, rs in by_design.items() if n not in failed], failed
+def load(results: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """The records in *results*, and the designs that failed."""
+    records = [r for p in sorted(results.glob('*.json'))
+               if 'design' in (r := json.loads(p.read_text()))]   # not this report's own JSON
+    return [r for r in records if 'error' not in r], [r['design'] for r in records if 'error' in r]
 
 
-def _site_key(site: dict[str, Any]) -> tuple:
-    return tuple(site['calls']), site['loc'], site.get('rhs'), site['name']
-
-
-_JOIN = {'digits': max, 'lsb': min, 'msb': max, 'mag': max}
-"""How each observed parameter combines over runs."""
-
-
-def _union(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any] | None:
-    """One analysis's result at a site over two runs' observations."""
-    if a is None or b is None:
-        return a or b
-    if a['static'] != b['static']:
-        raise ValueError('runs disagree on a static bound')
-    seen = a['observed'] or b['observed']
-    if a['observed'] and b['observed']:
-        seen = {k: f(a['observed'][k], b['observed'][k]) for k, f in _JOIN.items()}
-    return {**a, 'executed': a['executed'] or b['executed'],
-            'sound': a['sound'] and b['sound'], 'observed': seen}
-
-
-def combine(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """One design's runs as one record over all their observations."""
-    if len({r.get('anf', False) for r in records}) > 1:
-        raise ValueError(f'{records[0]["design"]}: runs with and without --anf')
-    sites: dict[tuple, dict[str, Any]] = {}
-    for rec in records:
-        for site in rec['sites']:
-            k = _site_key(site)
-            if k not in sites:
-                sites[k] = site
-                continue
-            sites[k] = {**site, **{a.value: _union(sites[k].get(a.value), site.get(a.value))
-                                   for a in Analysis}}
-    return {**records[0], 'sites': list(sites.values()), 'n': sum(r['n'] for r in records)}
-
-
-def table(records: Iterable[dict[str, Any]]) -> list[Row]:
-    """One row per architecture present, in `ARCHS` order, then the total."""
-    rows = {tag: Row(label) for tag, label in ARCHS.items()}
+def table(records: Iterable[dict[str, Any]], groups: dict[str, str] = ARCHS) -> list[Row]:
+    """One row per group of architectures present (*groups* maps each
+    architecture's tag to its row label), in order, then the total."""
+    rows = {label: Row(label) for label in dict.fromkeys(groups.values())}
     total = Row('Total')
     for rec in records:
-        for row in (rows[arch(rec['design'])], total):
+        for row in (rows[groups[arch(rec['design'])]], total):
             row.designs += 1
             for site in rec['sites']:
                 f, d = _result(site, Analysis.FORMAT), _result(site, Analysis.DIGIT_BOUND)
@@ -146,57 +113,61 @@ def latex(rows: list[Row]) -> str:
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 
-def _measured(rec: dict[str, Any]) -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
+def _measured(
+    rec: dict[str, Any], observed: str = 'observed',
+) -> Iterable[tuple[dict[str, Any], dict[str, Any]]]:
     """The static and observed parameters of each of *rec*'s sites that digit
-    bounds leave bounded and that ran soundly with a finite nonzero value."""
+    bounds leave bounded and that ran soundly with a finite nonzero value;
+    *observed* is `observed_random` for the random inputs alone."""
     for site in rec['sites']:
         r = _result(site, Analysis.DIGIT_BOUND)
-        if r and not r['top'] and r['sound'] and r['static'] and r['observed']:
-            yield r['static'], r['observed']
+        if r and not r['top'] and r['sound'] and r['static'] and r.get(observed):
+            yield r['static'], r[observed]
 
 
-def slacks(records: Iterable[dict[str, Any]]) -> dict[str, list[int | float]]:
+def slacks(records: Iterable[dict[str, Any]], observed: str = 'observed') -> dict[str, list[int | float]]:
     """Each dimension's slack at every measured site."""
     out: dict[str, list[int | float]] = {d: [] for d in DIMENSIONS}
     for rec in records:
-        for st, seen in _measured(rec):
+        for st, seen in _measured(rec, observed):
             for d in DIMENSIONS:
                 out[d].append(_SLACK[d](st[d], seen[d]))
     return out
 
 
-COVERAGE = {
+TIGHTNESS = {
     'digits': ('Precision', lambda st, seen: seen['digits'] / st['digits']),
-    'lsb': ('Quantum', lambda st, seen: 2.0 ** (st['lsb'] - seen['lsb'])),
-    'mag': ('Magnitude', lambda st, seen: 2.0 ** (seen['mag'] - st['mag'])),
+    'lsb': ('Min.\\ quantum', lambda st, seen: 2.0 ** (st['lsb'] - seen['lsb'])),
+    'mag': ('Bound', lambda st, seen: 2.0 ** (seen['mag'] - st['mag'])),
 }
-"""Each coverage -- how much of what the static bound allows was observed, in
-(0, 1], or 0 where the bound is unbounded -- by its column title, one per
-parameter of a format A(p, exp, b): significant digits p' / p, smallest
-quantum 2^exp / 2^lsb', and largest magnitude max|v| / b."""
+"""Each parameter's tightness -- the fraction of an inferred format A(p, exp, b)
+that observed values reach, in (0, 1], or 0 where it is unbounded -- by its
+column title: p' / p, 2^exp / 2^exp', and b' / b."""
 
 
-def coverage(records: Iterable[dict[str, Any]]) -> list[tuple[str, int, dict[str, float]]]:
-    """Each architecture's mean coverages over its measured sites, in `ARCHS`
-    order, then the total: `(label, sites, {coverage: mean})`."""
-    seen: dict[str, list[dict[str, float]]] = {tag: [] for tag in ARCHS}
+def tightness(
+    records: Iterable[dict[str, Any]], groups: dict[str, str] = ARCHS, observed: str = 'observed',
+) -> list[tuple[str, int, dict[str, float]]]:
+    """Each group's mean tightness over its measured sites, grouped as in
+    `table`, then the total: `(label, sites, {parameter: mean})`."""
+    seen: dict[str, list[dict[str, float]]] = {label: [] for label in dict.fromkeys(groups.values())}
     for rec in records:
-        seen[arch(rec['design'])] += [{c: f(st, ob) for c, (_, f) in COVERAGE.items()}
-                                     for st, ob in _measured(rec)]
-    rows = [(ARCHS[tag], cs) for tag, cs in seen.items() if cs]
+        seen[groups[arch(rec['design'])]] += [{c: f(st, ob) for c, (_, f) in TIGHTNESS.items()}
+                                             for st, ob in _measured(rec, observed)]
+    rows = [(label, cs) for label, cs in seen.items() if cs]
     rows.append(('Total', [c for cs in seen.values() for c in cs]))
-    return [(label, len(cs), {c: sum(x[c] for x in cs) / len(cs) for c in COVERAGE})
+    return [(label, len(cs), {c: sum(x[c] for x in cs) / max(len(cs), 1) for c in TIGHTNESS})
             for label, cs in rows]
 
 
-def coverage_latex(rows: list[tuple[str, int, dict[str, float]]]) -> str:
-    titles = ' & '.join(title for title, _ in COVERAGE.values())
-    lines = [r'\begin{tabular}{lr' + 'r' * len(COVERAGE) + '}', r'\toprule',
+def tightness_latex(rows: list[tuple[str, int, dict[str, float]]]) -> str:
+    titles = ' & '.join(title for title, _ in TIGHTNESS.values())
+    lines = [r'\begin{tabular}{lr' + 'r' * len(TIGHTNESS) + '}', r'\toprule',
              f'Architecture & Sites & {titles} \\\\', r'\midrule']
     for label, n, means in rows:
         if label == 'Total':
             lines.append(r'\midrule')
-        cells = ' & '.join(f'{100 * means[c]:.0f}\\%' for c in COVERAGE)
+        cells = ' & '.join(f'{100 * means[c]:.0f}\\%' for c in TIGHTNESS)
         lines.append(f'{label} & {n} & {cells} \\\\')
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
@@ -228,39 +199,124 @@ def figure(data: dict[str, list[int | float]], out: Path) -> None:
     plt.close(fig)
 
 
-def summary(records: list[dict[str, Any]], data: dict[str, list[int | float]]) -> str:
-    unsound = sum(not r['sound'] for rec in records for site in rec['sites']
-                  for a in Analysis if (r := _result(site, a)))
+def _excluded(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Why each site digit bounds do not measure is left out."""
+    out = {'top': 0, 'not_run': 0, 'list_allocation': 0, 'zero_or_special_only': 0}
+    for rec in records:
+        for site in rec['sites']:
+            r = _result(site, Analysis.DIGIT_BOUND)
+            if r['top']:
+                out['top'] += 1
+            elif not r['executed']:
+                out['not_run'] += 1
+            elif r['static'] is None:
+                out['list_allocation'] += 1
+            elif r['observed'] is None:
+                out['zero_or_special_only'] += 1
+    return out
+
+
+_NAMES = {'digits': 'precision', 'lsb': 'min_quantum', 'mag': 'bound'}
+"""Each tightness parameter's name in `numbers`."""
+
+
+def _tops(rows: list[Row]) -> list[dict[str, Any]]:
+    return [{'label': r.label, 'designs': r.designs, 'sites': r.sites,
+             'top_format': r.top_format, 'top_digit_bound': r.top_digit_bound} for r in rows]
+
+
+def _tightness(rows: list[tuple[str, int, dict[str, float]]]) -> list[dict[str, Any]]:
+    return [{'label': label, 'sites': n, **{_NAMES[c]: means[c] for c in TIGHTNESS}}
+            for label, n, means in rows]
+
+
+def numbers(records: list[dict[str, Any]], anf: list[dict[str, Any]], failed: list[str]) -> dict[str, Any]:
+    """Every table and number the evaluation cites.  Tightness is a fraction
+    in [0, 1]; the tables print it as a rounded percentage."""
+    data = slacks(records)
     n = len(data['digits'])
-    tight = sum(all(data[d][i] == 0 for d in DIMENSIONS) for i in range(n))
-    inputs = sum(r['n'] for r in records)
-    lines = [f'{len(records)} designs, {inputs} inputs, {unsound} unsound results',
-             f'{n} bounded sites (digit bounds); tight in all dimensions: {tight} ({tight / max(n, 1):.0%})']
-    for d, title in DIMENSIONS.items():
-        zero = sum(v == 0 for v in data[d])
-        one = sum(v <= 1 for v in data[d])
-        lines.append(f'  {title}: slack 0 at {zero / max(n, 1):.0%}, ≤1 at {one / max(n, 1):.0%}')
+    first = records[0]
+    out: dict[str, Any] = {
+        'run': {
+            'designs': len(records), 'failed': failed,
+            'inputs_per_design': first['n'], 'random_inputs_per_design': first.get('random'),
+            'input_source': first['inputs'], 'seed': first.get('seed'),
+            'executions': sum(r['n'] for r in records),
+            'unsound': sum(not r['sound'] for rec in records for site in rec['sites']
+                           for a in Analysis if (r := _result(site, a))),
+        },
+        'sites': {'total': table(records)[-1].sites, 'measured': n, 'excluded': _excluded(records)},
+        'tops': {'by_architecture': _tops(table(records)),
+                 'by_vendor': _tops(table(records, VENDORS))},
+        'tightness': {'by_architecture': _tightness(tightness(records)),
+                      'by_vendor': _tightness(tightness(records, VENDORS)),
+                      'random_inputs_alone': _tightness(tightness(records, observed='observed_random'))[-1]},
+        'exactly_attained': {
+            **{_NAMES[d]: sum(v == 0 for v in data[d]) / n for d in DIMENSIONS},
+            'all_three': sum(all(data[d][i] == 0 for d in DIMENSIONS) for i in range(n)) / n,
+        },
+        'lowest_digit_slack_at_least': {
+            'bits': BINS,
+            'all_inputs': sum(v >= BINS for v in data['lsb']),
+            'random_inputs_alone': sum(v >= BINS for v in slacks(records, 'observed_random')['lsb']),
+        },
+    }
+    if anf:
+        out['anf'] = _tops(table(anf))[-1]
+    return out
+
+
+def summary(nums: dict[str, Any]) -> str:
+    """*nums* as text."""
+    run, sites = nums['run'], nums['sites']
+    total, alone = nums['tops']['by_architecture'][-1], nums['tightness']['random_inputs_alone']
+
+    def tight(row: dict[str, Any]) -> str:
+        return ', '.join(f'{k} {100 * row[k]:.0f}%' for k in _NAMES.values())
+
+    deep = nums['lowest_digit_slack_at_least']
+    lines = [
+        (f'{run["designs"]} designs, {run["inputs_per_design"]} inputs each ({run["input_source"]}, '
+         f'{run["random_inputs_per_design"]} random), {run["executions"]} executions, '
+         f'{run["unsound"]} unsound results'),
+        f'sites: {sites["total"]}; R* without digit bounds {total["top_format"]}, with {total["top_digit_bound"]}',
+        f'measured: {sites["measured"]}; left out: {sites["excluded"]}',
+        f'tightness, all inputs: {tight(nums["tightness"]["by_architecture"][-1])}',
+        f'tightness, random inputs alone: {tight(alone)}',
+        (f'exactly attained: {tight(nums["exactly_attained"])}, all three '
+         f'{100 * nums["exactly_attained"]["all_three"]:.0f}%'),
+        (f'sites with >= {deep["bits"]} bits of lowest-digit slack: {deep["all_inputs"]} '
+         f'(random inputs alone {deep["random_inputs_alone"]})'),
+    ]
+    if 'anf' in nums:
+        a = nums['anf']
+        lines.append(f'anf: {a["sites"]} sites; R* without digit bounds {a["top_format"]}, '
+                     f'with {a["top_digit_bound"]}')
+    if run['failed']:
+        lines.append(f'failed, left out: {", ".join(run["failed"])}')
     return '\n'.join(lines)
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('results', type=Path, nargs='+', help="run.py's output directories")
-    ap.add_argument('-o', '--out', type=Path, help='where to write (default the first RESULTS)')
+    ap.add_argument('results', type=Path, help="run.py's output directory")
     args = ap.parse_args(argv)
-    out = args.out or args.results[0]
-    out.mkdir(parents=True, exist_ok=True)
+    out = args.results
 
-    records, failed = load(args.results)
+    records, failed = load(out)
     if not records:
-        ap.error(f'no results in {args.results}')
-    (out / 'precision-tops.tex').write_text(latex(table(records)))
-    (out / 'precision-coverage.tex').write_text(coverage_latex(coverage(records)))
-    data = slacks(records)
-    figure(data, out / 'precision-slack')
-    print(summary(records, data))
-    if failed:
-        print(f'failed, left out: {", ".join(failed)}')
+        ap.error(f'no results in {out}')
+    anf, _ = load(out / 'anf')
+    for suffix, groups in (('', ARCHS), ('-vendor', VENDORS)):
+        (out / f'precision-tops{suffix}.tex').write_text(latex(table(records, groups)))
+        (out / f'precision-tightness{suffix}.tex').write_text(
+            tightness_latex(tightness(records, groups)))
+    figure(slacks(records), out / 'precision-slack')
+    nums = numbers(records, anf, failed)
+    (out / 'precision-paper.json').write_text(json.dumps(nums, indent=1) + '\n')
+    text = summary(nums)
+    (out / 'precision-summary.txt').write_text(text + '\n')
+    print(text)
     return 0
 
 

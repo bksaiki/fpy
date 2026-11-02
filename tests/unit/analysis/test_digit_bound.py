@@ -395,6 +395,28 @@ class TestAZeroArmStatesNoMagnitude:
         assert b.store.prec(total.msb, total.lsb) == 13
 
 
+class TestARoundingKeepsItsOperandsGrid:
+    """Rounding at a quantum adds no digit below its operand's own lowest
+    one: a value already on the grid rounds to itself.  So a truncation whose
+    position can fall far below its operand still bottoms out there --
+    ``max(l, τ)``, not ``τ`` alone."""
+
+    def test_a_deep_truncation_stays_on_the_operands_grid(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, y):
+            with fp.MPFixedContext(fp.logb(y) - 40, fp.RM.RTZ):
+                r = fp.round(x)
+            return r
+
+        _, b = _analyze(f, [RealType(fp.FP16), RealType(fp.FP32)])
+        _, x = _term(b, 'x')
+        _, r = _term(b, 'fp.round(x)')
+        # FP16's lowest digit is -24; the position alone reaches -149 - 40
+        assert -b.store.maximum(-x.lsb) == -24
+        assert -b.store.maximum(-r.lsb) == -24
+
+
 class TestAFlushToZeroKeepsItsOperand:
     """`t = z * 0` where `abs(z) < tiny`, else `z`: the zero arm is zero or
     NaN, so has no digits, and `t` is finite only where `z` is -- the arm
@@ -609,8 +631,9 @@ class TestAPartOfAListKeepsItsPairing:
                 ts = [fp.round(xs[i]) for i in range(1, n, 2)]
             return sum(ts)
 
-        # `ev` bounds no odd element, so the round spans fp32's whole reach
-        assert self._precs(f) == [288, 288, 288]
+        # `ev` bounds no odd element, so the round spans fp32's whole reach:
+        # digits -149 (its operand's floor) to 127
+        assert self._precs(f) == [277, 277, 277]
 
     def test_but_not_across_nested_counts(self):
         """`1 + 2 * k1` and `1 + 2 * k2` are one index set, but not one index:

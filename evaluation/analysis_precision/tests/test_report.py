@@ -7,7 +7,7 @@ The report from hand-written results.
 import json
 import math
 
-from report import Row, coverage, load, main, slacks, table
+from report import VENDORS, Row, main, slacks, table, tightness
 
 
 def _p(digits, lsb, msb, mag):
@@ -25,12 +25,12 @@ def _site(name, fmt, db):
 
 _FP32 = _p(24, -149, 127, 128.0)
 _TS = _p(24, -math.inf, 9, 10.0)
-_VOLTA = {'design': 'nv.volta.f16.f32', 'n': 1, 'sites': [
+_VOLTA = {'design': 'nv.volta.f16.f32', 'n': 1, 'inputs': 'mixed', 'sites': [
     _site('a', _result(False, _FP32, _FP32), _result(False, _FP32, _FP32)),
     _site('ts', _result(True), _result(False, _TS, _p(23, 0, 0, 0.0))),
     _site('s', _result(True), _result(True)),
 ]}
-_FMA = {'design': 'fp32 (fma)', 'n': 1, 'sites': [
+_FMA = {'design': 'fp32 (fma)', 'n': 1, 'inputs': 'mixed', 'sites': [
     _site('p', _result(False, _FP32, executed=False), _result(False, _FP32, executed=False)),
 ]}
 
@@ -45,37 +45,30 @@ def test_slacks_skip_top_and_unrun_sites():
     assert slacks([_VOLTA, _FMA]) == {'digits': [0, 1], 'lsb': [0, math.inf], 'mag': [0.0, 10.0]}
 
 
-def test_coverage_is_observed_over_allowed():
+def test_tightness_is_observed_over_allowed():
     # an unbounded quantum covers none of it
     volta = (2, {'digits': (1 + 23 / 24) / 2, 'lsb': 0.5, 'mag': (1 + 2 ** -10) / 2})
-    assert coverage([_VOLTA, _FMA]) == [('Volta', *volta), ('Total', *volta)]
+    assert tightness([_VOLTA, _FMA]) == [('Volta', *volta), ('Total', *volta)]
 
 
 def test_writes_tables_and_figure(tmp_path):
     for i, rec in enumerate([_VOLTA, _FMA, {'design': 'amd.cdna1.f16', 'error': 'boom'}]):
         (tmp_path / f'{i}.json').write_text(json.dumps(rec))
     assert main([str(tmp_path)]) == 0
+    assert main([str(tmp_path)]) == 0   # again, over its own outputs
     tex = (tmp_path / 'precision-tops.tex').read_text()
     assert 'Volta & 1 & 3 & 2 & 1 \\\\' in tex and 'Total & 2 & 4 & 2 & 1 \\\\' in tex
-    assert 'Volta & 2 & 98\\% & 50\\% & 50\\%' in (tmp_path / 'precision-coverage.tex').read_text()
+    assert 'Volta & 2 & 98\\% & 50\\% & 50\\%' in (tmp_path / 'precision-tightness.tex').read_text()
     assert (tmp_path / 'precision-slack.pdf').stat().st_size > 0
+    text = (tmp_path / 'precision-summary.txt').read_text()
+    assert 'R* without digit bounds 2, with 1' in text and 'failed, left out: amd.cdna1.f16' in text
 
 
-def test_runs_combine_their_observations(tmp_path):
-    static = _p(24, -20, 9, 10.0)
-    a = {'design': 'nv.volta.f16.f32', 'n': 2, 'sites': [
-        _site('t', _result(False, static, _p(23, -5, 3, 3.5)), _result(False, static, _p(23, -5, 3, 3.5))),
-        _site('u', _result(False, static, executed=False), _result(False, static, executed=False)),
+def test_vendor_rows_pool_their_architectures():
+    amd = {'design': 'amd.cdna2.f16', 'n': 1, 'sites': [
+        _site('z', _result(False, _FP32, _FP32), _result(False, _FP32, _p(12, -149, 127, 128.0))),
     ]}
-    b = {'design': 'nv.volta.f16.f32', 'n': 3, 'sites': [
-        _site('t', _result(False, static, _p(22, -9, 4, 3.9)), _result(False, static, _p(22, -9, 4, 3.9))),
-        _site('u', _result(False, static, _p(1, 0, 0, 0.0)), _result(False, static, _p(1, 0, 0, 0.0))),
-    ]}
-    for d, rec in (('a', a), ('b', b)):
-        (tmp_path / d).mkdir()
-        (tmp_path / d / 'volta.json').write_text(json.dumps(rec))
-    (rec,), failed = load([tmp_path / 'a', tmp_path / 'b'])
-    assert not failed and rec['n'] == 5
-    t, u = sorted(rec['sites'], key=lambda s: s['name'])
-    assert t['digit_bound']['observed'] == _p(23, -9, 4, 3.9)
-    assert u['digit_bound']['executed'] and u['digit_bound']['observed'] == _p(1, 0, 0, 0.0)
+    assert [r.label for r in table([_VOLTA, _FMA, amd], VENDORS)] == ['NVIDIA', 'AMD', 'FMA chain', 'Total']
+    rows = {label: (n, means) for label, n, means in tightness([_VOLTA, amd], VENDORS)}
+    assert rows['NVIDIA'] == tightness([_VOLTA])[0][1:]
+    assert rows['Total'][0] == 3 and rows['AMD'][1]['digits'] == 0.5

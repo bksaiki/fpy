@@ -25,6 +25,10 @@ class InputSource(Protocol):
         """*n* argument lists for a design taking *arg_types*."""
         ...
 
+    def is_random(self, i: int, n: int) -> bool:
+        """Whether the *i*-th of *n* inputs is a random draw."""
+        ...
+
 
 class RandomSource:
     """`compile.py`'s draws: over each format's whole range or near one, and
@@ -32,6 +36,9 @@ class RandomSource:
     subnormals, specials).  The same seed gives `compile.py -r`'s inputs."""
 
     name = 'random'
+
+    def is_random(self, i: int, n: int) -> bool:
+        return True
 
     def inputs(self, arg_types: list[Type], n: int, seed: int) -> Iterator[list[Any]]:
         rng = random.Random(seed)
@@ -66,6 +73,9 @@ class AdversarialSource:
 
     name = 'adversarial'
     WINDOW = 16
+
+    def is_random(self, i: int, n: int) -> bool:
+        return False
 
     def inputs(self, arg_types: list[Type], n: int, seed: int) -> Iterator[list[Any]]:
         rng = random.Random(seed)
@@ -125,4 +135,23 @@ def _signed(fmt: SizedFormat) -> bool:
     return True
 
 
-SOURCES: dict[str, InputSource] = {s.name: s for s in [RandomSource(), AdversarialSource()]}
+class MixedSource:
+    """`RandomSource`'s draws with every `EVERY`-th one `AdversarialSource`'s
+    instead: one input set holding both."""
+
+    name = 'mixed'
+    EVERY = 5
+
+    def inputs(self, arg_types: list[Type], n: int, seed: int) -> Iterator[list[Any]]:
+        adversarial = AdversarialSource().inputs(arg_types, n // self.EVERY, seed)
+        rest = RandomSource().inputs(arg_types, n - n // self.EVERY, seed)
+        for i in range(n):
+            yield next(rest if self.is_random(i, n) else adversarial)
+
+    def is_random(self, i: int, n: int) -> bool:
+        return (i + 1) % self.EVERY != 0 or i // self.EVERY >= n // self.EVERY
+
+
+SOURCES: dict[str, InputSource] = {
+    s.name: s for s in [RandomSource(), AdversarialSource(), MixedSource()]
+}

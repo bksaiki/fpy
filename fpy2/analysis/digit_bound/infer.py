@@ -1269,10 +1269,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if lhs is not None and rhs is not None:
                     self._grid_ge(g, lhs + rhs)
             case Round() | Cast():
-                # the result is a multiple of the quantum it rounded at
+                # a multiple of the quantum it rounded at, and of its operand's:
+                # a value already on the grid rounds to itself.  The operand's
+                # format floor, not its term, which can vary with a list index
                 found = self._rounding(e)
                 if found is not None:
                     self._grid_ge(g, found[0] + 1)
+                    self._seed(g, e.arg, self.view.logb_range(e.arg)[0], None)
             case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
                 self._grid_ge(g, k)   # one digit, at position `k`
             case _:
