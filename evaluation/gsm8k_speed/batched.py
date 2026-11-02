@@ -27,6 +27,14 @@ class Generated:
     """Seconds to each prompt's first token."""
     decode: float
     """Seconds for the rest."""
+    prefix: float
+    """Of :attr:`prefill`, seconds for the shared prefix."""
+    questions: list[float]
+    """Of :attr:`prefill`, seconds for each prompt's rest, its cache copy included."""
+    steps: list[float]
+    """Seconds for each decode step."""
+    running: list[int]
+    """Prompts still generating at each decode step."""
 
 
 def _clock() -> float:
@@ -79,12 +87,15 @@ def generate(model: torch.nn.Module, prompts: list[list[int]], max_new: int,
     if n > 0:
         _forward(model, torch.tensor([prompts[0][:n]], device=dev), prefix,
                  torch.arange(n, device=dev)[None])
-    caches, first = [], []
+    prefixed = _clock()
+    caches, first, questions = [], [], []
     for p in prompts:
+        t = _clock()
         cache = copy.deepcopy(prefix)
         first.append(_forward(model, torch.tensor([p[n:]], device=dev), cache,
                               torch.arange(n, len(p), device=dev)[None]))
         caches.append(cache)
+        questions.append(_clock() - t)
     lengths = [len(p) for p in prompts]
     cache = _merge(caches, lengths)
     mask = torch.tensor([[0] * (max(lengths) - k) + [1] * k for k in lengths], device=dev)
@@ -94,6 +105,8 @@ def generate(model: torch.nn.Module, prompts: list[list[int]], max_new: int,
 
     tokens: list[list[int]] = [[] for _ in prompts]
     live = set(range(len(prompts)))
+    steps: list[float] = []
+    running: list[int] = []
     for step in range(max_new):
         for i, t in enumerate(x.tolist()):
             if i in live:
@@ -102,7 +115,11 @@ def generate(model: torch.nn.Module, prompts: list[list[int]], max_new: int,
                     live.discard(i)
         if not live or step == max_new - 1:
             break
+        t = _clock()
         mask = F.pad(mask, (0, 1), value=1)
         x = _forward(model, x[:, None], cache, positions, mask)
         positions = positions + 1
-    return Generated(tokens, prefilled - start, _clock() - prefilled)
+        steps.append(_clock() - t)
+        running.append(len(live))
+    return Generated(tokens, prefilled - start, _clock() - prefilled, prefixed - start,
+                     questions, steps, running)

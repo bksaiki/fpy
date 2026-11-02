@@ -46,6 +46,12 @@ def test_smoke(tiny: Path, tmp_path: Path):
     for r in records.values():
         assert r['problems'] == 2 and len(r['tokens']) == 2 and r['decode'] > 0
         assert all(1 <= len(t) <= 8 for t in r['tokens'])
+        (b,) = r['batches']
+        assert len(b['questions']) == 2 and len(b['steps']) == len(b['running'])
+        assert max(map(len, r['tokens'])) == len(b['steps']) + 1
+        assert b['prefix'] + sum(b['questions']) <= b['prefill']
+        assert sum(b['steps']) <= b['decode']
+        assert r['commit'] and r['versions']['mmasim']
     assert records[f'{design}-fpy']['tokens'] == records[f'{design}-mmasim']['tokens']
 
 

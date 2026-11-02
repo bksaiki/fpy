@@ -12,10 +12,14 @@ Exits 1 if `fpy` and `mmasim` emit different tokens.
 """
 
 import argparse
+import dataclasses
 import json
+import platform
 import shutil
+import subprocess
 import sys
 import time
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +31,7 @@ import gsm8k
 import mmasim_matmul
 import report
 import torch
-from core import generate, swap
+from core import generate, kernels, swap
 
 RESULTS = Path(__file__).resolve().parent / 'results'
 BACKENDS = ('torch', 'fpy', 'mmasim')
@@ -45,25 +49,49 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     run.mode = mode(backend, design)
     eos = generate.stop_tokens(model, tok)
     prompts = [generate.encode(tok, gsm8k.messages(p.question))[0].tolist() for p in problems]
+    warmup = time.perf_counter()
     if backend != 'mmasim':   # compiles and loads kernels outside the timing
         batched.generate(model, prompts[:batch], 2, eos)
+    warmup = time.perf_counter() - warmup
     tokens: list[list[int]] = []
-    prefill = decode = 0.0
+    batches = []
     for i in range(0, len(prompts), batch):
         g = batched.generate(model, prompts[i:i + batch], max_new, eos)
         tokens += g.tokens
-        prefill, decode = prefill + g.prefill, decode + g.decode
-        print(f'  {backend}: {len(tokens)}/{len(prompts)}  prefill {prefill:.1f}s  '
-              f'decode {decode:.1f}s', flush=True)
+        batches.append({'first': i, 'shared': batched.shared(prompts[i:i + batch]),
+                        **{k: v for k, v in dataclasses.asdict(g).items() if k != 'tokens'}})
+        print(f'  {backend}: {len(tokens)}/{len(prompts)}  '
+              f'prefill {sum(b["prefill"] for b in batches):.1f}s  '
+              f'decode {sum(b["decode"] for b in batches):.1f}s', flush=True)
     replies = [tok.decode(t, skip_special_tokens=True) for t in tokens]
     return {
         'backend': backend, 'design': design, 'model': model.config.name_or_path,
-        'gpu': torch.cuda.get_device_name(), 'problems': len(problems), 'max_new': max_new,
-        'batch': batch, 'prefill': prefill, 'decode': decode,
-        'prompt_tokens': [len(p) for p in prompts], 'shared': batched.shared(prompts),
-        'tokens': tokens, 'replies': replies, 'answers': [gsm8k.answer(r) for r in replies],
-        'targets': [p.target for p in problems],
+        'problems': len(problems), 'max_new': max_new, 'batch': batch,
+        'prefill': sum(b['prefill'] for b in batches), 'decode': sum(b['decode'] for b in batches),
+        'warmup': warmup,
+        'compile': kernels.compile_seconds(design) if backend == 'fpy' else None,
+        'batches': batches, 'questions': [p.question for p in problems],
+        'prompt_tokens': [len(p) for p in prompts], 'tokens': tokens, 'replies': replies,
+        'answers': [gsm8k.answer(r) for r in replies], 'targets': [p.target for p in problems],
     }
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(['git', *args], capture_output=True, text=True, check=False,
+                          cwd=Path(__file__).parent).stdout.strip()
+
+
+def environment() -> dict[str, Any]:
+    """The GPU, package versions, commit and command line."""
+    versions = {}
+    for d in ('torch', 'triton', 'transformers', 'datasets', 'mmasim'):
+        try:
+            versions[d] = metadata.version(d)
+        except metadata.PackageNotFoundError:
+            versions[d] = None
+    return {'gpu': torch.cuda.get_device_name(), 'python': platform.python_version(),
+            'versions': versions, 'commit': _git('rev-parse', 'HEAD'),
+            'dirty': bool(_git('status', '--porcelain')), 'argv': sys.argv}
 
 
 def _foreign(out: Path) -> list[str]:
@@ -103,6 +131,7 @@ def main(argv: list[str]) -> int:
     problems = gsm8k.problems(args.problems)
     runs = [('torch', None)] if 'torch' in args.backends else []
     runs += [(b, d) for d in args.designs for b in ('fpy', 'mmasim') if b in args.backends]
+    env = environment()
     records = {}
     for backend, design in runs:
         name = backend if design is None else f'{design}-{backend}'
@@ -110,7 +139,7 @@ def main(argv: list[str]) -> int:
         start = time.perf_counter()
         records[backend, design] = r = measure(model, run, tok, problems, backend, design,
                                                args.max_new, args.batch)
-        r['seconds'] = time.perf_counter() - start
+        r |= {'seconds': time.perf_counter() - start, **env}
         (args.out / f'{name}.json').write_text(json.dumps(r, indent=1))
 
     print('-- report')
