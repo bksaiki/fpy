@@ -74,10 +74,22 @@ def _result(site: dict[str, Any], a: Analysis) -> dict[str, Any] | None:
     return site.get(a.value)
 
 
+def _allocation(site: dict[str, Any]) -> bool:
+    """Whether *site* allocates a list (`zs = empty(n)`): bounded, by the empty
+    set, so with no abstract format, under both analyses.  The formalism has
+    no allocations, so these are not sites."""
+    return all(r is not None and not r['top'] and r['static'] is None
+               for r in (_result(site, a) for a in Analysis))
+
+
 def load(results: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """The records in *results*, and the designs that failed."""
+    """The records in *results*, list allocations left out, and the designs
+    that failed."""
     records = [r for p in sorted(results.glob('*.json'))
                if 'design' in (r := json.loads(p.read_text()))]   # not this report's own JSON
+    for r in records:
+        if 'sites' in r:
+            r['sites'] = [s for s in r['sites'] if not _allocation(s)]
     return [r for r in records if 'error' not in r], [r['design'] for r in records if 'error' in r]
 
 
@@ -199,7 +211,7 @@ def figure(data: dict[str, list[int | float]], out: Path) -> None:
 
 def _excluded(records: list[dict[str, Any]]) -> dict[str, int]:
     """Why each site digit bounds do not measure is left out."""
-    out = {'top': 0, 'not_run': 0, 'unsound': 0, 'list_allocation': 0, 'zero_or_special_only': 0}
+    out = {'top': 0, 'not_run': 0, 'unsound': 0, 'zero_or_special_only': 0}
     for rec in records:
         for site in rec['sites']:
             r = _result(site, Analysis.DIGIT_BOUND)
@@ -209,8 +221,6 @@ def _excluded(records: list[dict[str, Any]]) -> dict[str, int]:
                 out['not_run'] += 1
             elif not r['sound']:
                 out['unsound'] += 1
-            elif r['static'] is None:
-                out['list_allocation'] += 1
             elif r['observed'] is None:
                 out['zero_or_special_only'] += 1
     return out

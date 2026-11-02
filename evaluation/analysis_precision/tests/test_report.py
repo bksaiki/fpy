@@ -7,7 +7,7 @@ The report from hand-written results.
 import json
 import math
 
-from report import VENDORS, Row, main, slacks, table, tightness
+from report import VENDORS, Row, load, main, slacks, table, tightness
 
 
 def _p(digits, lsb, msb, mag):
@@ -72,3 +72,11 @@ def test_vendor_rows_pool_their_architectures():
     rows = {label: (n, means) for label, n, means in tightness([_VOLTA, amd], VENDORS)}
     assert rows['NVIDIA'] == tightness([_VOLTA])[0][1:]
     assert rows['Total'][0] == 3 and rows['AMD'][1]['digits'] == 0.5
+
+
+def test_list_allocations_are_not_sites(tmp_path):
+    alloc = _site('zs', _result(False), _result(False))   # bounded by the empty set
+    rec = {**_VOLTA, 'sites': [*_VOLTA['sites'], alloc]}
+    (tmp_path / 'volta.json').write_text(json.dumps(rec))
+    (loaded,), _ = load(tmp_path)
+    assert [s['name'] for s in loaded['sites']] == ['a', 'ts', 's']
