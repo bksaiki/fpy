@@ -57,8 +57,17 @@ class Run(swap.Run):
                       self.mode.removeprefix(PREFIX))
 
 
-def patch(model: torch.nn.Module) -> Run:
-    """:func:`swap.patch`, with a :class:`Run` that has the `mmasim` modes."""
-    run = swap.patch(model)
+def _extend(run: swap.Run) -> Run:
     run.__class__ = Run   # the patched layers hold this instance
     return run
+
+
+def patch(model: torch.nn.Module) -> Run:
+    """:func:`swap.patch`, with a :class:`Run` that has the `mmasim` modes."""
+    return _extend(swap.patch(model))
+
+
+def load(name: str = swap.MODEL) -> tuple[torch.nn.Module, Run]:
+    """:func:`swap.load`, with a :class:`Run` that has the `mmasim` modes."""
+    model, run = swap.load(name)
+    return model, _extend(run)
