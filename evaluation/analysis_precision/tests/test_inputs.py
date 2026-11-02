@@ -7,7 +7,7 @@ Input sources draw well-formed, reproducible arguments.
 import math
 
 from compile import DESIGNS, _fmt
-from inputs import SOURCES, AdversarialSource
+from inputs import SOURCES, AdversarialSource, Extreme
 
 import fpy2 as fp
 
@@ -56,3 +56,27 @@ def test_adversarial_draws_sit_at_one_end():
     assert all(0 < abs(x) <= edge_lo for x in tiny[0])
     assert all(abs(x) >= edge_hi for x in huge[0])
     assert all(abs(x) <= edge_lo or abs(x) >= edge_hi for x in mixed[0])
+
+
+def test_edge_draws_zero_lists_and_the_smallest_scalars():
+    _, ts = dict(DESIGNS)['nv.volta.f16.f32']()
+    c_fmt = _fmt(ts[2])
+    smallest = float(c_fmt.from_ordinal(4))
+    n = len(Extreme)
+    edges = [a for i, a in enumerate(SOURCES['adversarial'].inputs(ts, 10 * n, seed=0))
+             if i % n == list(Extreme).index(Extreme.EDGE)]
+    assert all(0 < abs(c) <= smallest for _, _, c in edges)
+    assert any(all(x == 0 for x in xs) for a, b, _ in edges for xs in (a, b))
+
+
+def test_subnormal_and_minval_draws_put_every_operand_there():
+    _, ts = dict(DESIGNS)['nv.volta.f16.f32']()
+    draws = list(SOURCES['adversarial'].inputs(ts, len(Extreme), seed=0))
+    sub, mini = (draws[list(Extreme).index(m)] for m in (Extreme.SUBNORMAL, Extreme.MINVAL))
+    for args, top in ((sub, lambda f: f.min_normal()), (mini, lambda f: f.from_ordinal(1))):
+        for t, a in zip(ts, args, strict=True):
+            fmt = _fmt(t)
+            xs = a if isinstance(a, list) else [a]
+            limit = float(top(fmt))
+            assert all(0 < abs(x) < limit or abs(x) == float(fmt.from_ordinal(1)) for x in xs)
+    assert all(abs(x) == 2.0 ** -24 for x in mini[0] + mini[1])
