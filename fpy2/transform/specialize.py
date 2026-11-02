@@ -613,6 +613,7 @@ class Specialize:
         *,
         size_key: bool = False,
         bound_params: dict[str, DigitBoundParams] | None = None,
+        use_digit_bounds: bool = True,
     ) -> Module:
         """Specialize *module*, to a fixpoint.
 
@@ -624,7 +625,9 @@ class Specialize:
         more is learned.  A round is compared to the last by the
         instantiations it produced; see :class:`_Shape`.
 
-        *bound_params* is filled as :meth:`_expand` describes.
+        *bound_params* is filled as :meth:`_expand` describes.  Without
+        *use_digit_bounds*, specs are derived from formats alone, and no
+        params are filled.
         """
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
@@ -637,6 +640,7 @@ class Specialize:
                 bound_params.clear()   # only the final round's bound_params describe the output
             out, shape = Specialize._expand(
                 module, origins, size_key=size_key, bound_params=bound_params,
+                use_digit_bounds=use_digit_bounds,
             )
             if shape == previous:
                 return _drop_dead_args(out, bound_params)
@@ -662,6 +666,7 @@ class Specialize:
         *,
         size_key: bool = False,
         bound_params: dict[str, DigitBoundParams] | None = None,
+        use_digit_bounds: bool = True,
     ) -> tuple[Module, _Shape]:
         """One expansion of *module*, and the shape of what it produced.
 
@@ -731,7 +736,8 @@ class Specialize:
             # params this captures are what carry that context into the emit.
             classes = ValueClassInfer.analyze(
                 mono, alias=Alias.analyze(mono, summaries=escapes))
-            fa = FormatInfer.analyze(mono, use_digit_bounds=True, value_classes=classes)
+            fa = FormatInfer.analyze(
+                mono, use_digit_bounds=use_digit_bounds, value_classes=classes)
             pe = fa.partial_eval
             # the caller without relations, for a call another already reached
             plain: FormatAnalysis | None = None

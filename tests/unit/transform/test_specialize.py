@@ -304,6 +304,24 @@ class TestDerivedBounds:
         specs = _specs(_module((caller, [l8, l8])))
         assert len([n for n in specs if n.startswith('rnd')]) == 2
 
+    def test_without_digit_bounds_no_relation_splits_a_spec(self):
+        """The calls of `test_one_relation_twice_is_two_specs`, from formats
+        alone: one spec, and no params."""
+        rnd = self._rnd()
+
+        @fp.fpy(ctx=fp.REAL)
+        def caller(xs, ys):
+            ps = [x * y for x, y in zip(xs, ys)]
+            e = max([fp.logb(p) for p in ps])
+            return rnd(ps, e - 12) + rnd(ps, e - 12)
+
+        l8 = ListType(RealType(fp.FP16), 8)
+        params: dict = {}
+        out = Specialize.apply(
+            _module((caller, [l8, l8])), bound_params=params, use_digit_bounds=False)
+        assert len([f for f in out.functions() if f.name.startswith('rnd')]) == 1
+        assert params == {}
+
     def test_trivial_bounds_add_no_key_segment(self):
         """A callee the caller bounds at nothing is named as it was before the
         axis existed -- here one segment, for the calling context alone."""
