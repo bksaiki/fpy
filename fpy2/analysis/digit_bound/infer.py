@@ -161,13 +161,13 @@ class Bounds:
     """What the store can say about a value.  Turning these into a
     :class:`Format` is the format domain's business."""
 
-    prec: int
+    prec: int | float
     """significant digits, never more than *exp* and *mag* leave room for"""
 
-    exp: int
+    exp: int | float
     """position of the least significant digit"""
 
-    mag: int
+    mag: int | float
     """the value is below ``2 ** (mag + 1)``"""
 
 
@@ -224,24 +224,18 @@ class DigitBoundAnalysis:
         return self.assume_at(e) | frozenset(own)
 
     def bounds(self, e: Expr) -> Bounds | None:
-        """*e*'s precision, digit position and magnitude.
-
-        ``None`` whenever the store leaves any of the three open.
+        """*e*'s precision, digit position and magnitude, each infinite where
+        the store leaves it open (§4.3: an open magnitude is a format with
+        `b = inf`).  ``None`` where all three are open.
         """
         terms = self.by_expr.get(e)
         if terms is None or terms.msb is None or terms.lsb is None:
             return None
-        # One open value discards all three, so each is asked only once the
-        # one before it came back closed -- every query costs a solve.
         at = self.query_at(e)
         prec = self.store.prec(terms.msb, terms.lsb, at)
-        if not isinstance(prec, int):
-            return None
         exp = -self.store.maximum(-terms.lsb, at)
-        if not isinstance(exp, int):
-            return None
         mag = self.store.maximum(terms.msb, at)
-        if not isinstance(mag, int):
+        if math.isinf(prec) and math.isinf(exp) and math.isinf(mag):
             return None
         # The three are independent maxima and need not be attained together,
         # so a precision can exceed what the other two leave room for.  Each is

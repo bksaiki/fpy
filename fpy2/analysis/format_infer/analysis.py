@@ -2578,8 +2578,6 @@ class _FormatInferInstance(Visitor):
         arg_af = to_abstract(arg_fmt) if arg_fmt is not None else None
         if arg_af is not None:
             prec = min(prec, arg_af.prec)
-        if not isinstance(prec, int):
-            return fmt
         if prec <= 0:
             # The quantum is at least as coarse as the value's own reach, so
             # every value rounds to *a* zero -- but rounding a negative one
@@ -2597,15 +2595,20 @@ class _FormatInferInstance(Visitor):
         # rather than clearing them.
         specials = cur if cur is not None else _to_abstract(REAL_FORMAT)
         assert specials is not None, 'REAL_FORMAT is abstractable'
+        # a parameter the store leaves open stays trivial
         alt = AbstractFormat(
-            prec, bounds.exp, RealFloat(exp=bounds.mag + 1, c=1),
+            prec, bounds.exp,
+            math.inf if math.isinf(bounds.mag) else RealFloat(exp=int(bounds.mag) + 1, c=1),
             has_pos_inf=specials.has_pos_inf,
             has_neg_inf=specials.has_neg_inf,
             has_nan=specials.has_nan,
             has_neg_zero=specials.has_neg_zero,
         )
         if fmt == REAL_FORMAT:
-            return alt.format()
+            try:
+                return alt.format()
+            except (ValueError, OverflowError):
+                return fmt  # no `Format` materializes it
         if cur is None or isinstance(fmt, SetFormat):
             return fmt      # a set of values is exact already
         # the store's magnitude is a binade, so a tighter `cur` need not contain it

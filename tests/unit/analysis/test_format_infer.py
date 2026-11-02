@@ -6,6 +6,7 @@ runs property tests driven by the type-directed FPy program generator.
 """
 
 import fpy2 as fp
+import math
 import time
 
 import pytest
@@ -780,11 +781,11 @@ class TestFormatInfer:
             fp.FP32.format()
         )
 
-    def test_sum_unknown_size_falls_back(self):
+    def test_sum_unknown_size_keeps_only_its_quantum(self):
         """
         ``sum(xs)`` over a symbolic-size list under REAL: the iteration
-        count isn't known, so the analysis falls back to the default
-        rule which yields ``REAL_FORMAT`` under REAL scope.
+        count isn't known, so neither precision nor magnitude is bounded,
+        but every term is a multiple of E4M3's quantum, and so is the sum.
         """
         @fp.fpy(ctx=fp.REAL)
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -794,9 +795,8 @@ class TestFormatInfer:
 
         info = self._run(f)
         sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
-        assert sums and sums[-1] == REAL_FORMAT, (
-            f'expected REAL_FORMAT fall-back when size is unknown, got {sums}'
-        )
+        af = AbstractFormat.from_format(sums[-1])
+        assert (af.prec, af.exp, af.bound) == (math.inf, -9, math.inf)
 
     def test_sum_empty_list_returns_zero_set_format(self):
         """
@@ -2569,6 +2569,8 @@ class TestAlignedSumPrecision:
                 e = fp.logb(xs[i])
                 with fp.MPFixedContext(e - 12):
                     ys[i] = fp.round(xs[i])
+            for i in range(1, n, 2):   # the sum reads every slot
+                ys[i] = xs[i] * 0
             return sum(ys)
 
         assert self._sum_bound(f, [self.L32]) > 200
@@ -3982,6 +3984,27 @@ class TestMinMaxOverKnownValues:
         fi = FormatInfer.analyze(g.ast)
         fmt = _fmt_of(fi, 'max(z, 0)')
         assert isinstance(fmt, SetFormat) and NEG_ZERO in fmt.values
+
+
+class TestAnOpenParameterStaysTrivial:
+    """Digit bounds that leave one parameter open still bound the others: the
+    open one is trivial (an infinite magnitude, an unbounded quantum), as in
+    A(prec, l, 2^(m+1), S) with m unbounded (§4.3)."""
+
+    def test_a_self_anchored_rounding_keeps_its_precision(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(fp.logb(x) - 12, fp.RM.RTN):
+                r = fp.round(x)
+            return r
+
+        g = monomorphize(f, args=[RealType(fp.REAL)])
+        # `x` is unbounded, so the result's magnitude and quantum are too
+        assert _fmt_of(FormatInfer.analyze(g.ast), 'fp.round(x)') == REAL_FORMAT
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(x)')
+        af = AbstractFormat.from_format(fmt)
+        assert (af.prec, af.exp, af.bound) == (13, -math.inf, math.inf)
 
 
 class TestPartialFramesBoundAFilledList:
