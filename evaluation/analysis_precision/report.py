@@ -36,8 +36,12 @@ ARCHS = {
 }
 """Each architecture's tag in a design's name, and its row label, in row order."""
 
-DIMENSIONS = {'digits': 'Significant digits', 'lsb': 'Lowest digit', 'msb': 'Highest digit'}
-"""Each slack in a site's result, and its panel title."""
+DIMENSIONS = {'digits': 'Significant digits', 'lsb': 'Lowest digit', 'mag': 'Magnitude'}
+"""Each slack reported, and its panel title.  The highest digit, `msb`, is
+left out for the magnitude: `log2 b - log2 max|v|`, which sees a bound `b`
+that is not a power of two."""
+
+_SLACK = {**SLACK, 'mag': lambda static, seen: static - seen}
 
 BINS = 8
 """Slacks of this many bits or more share the last bin."""
@@ -157,18 +161,19 @@ def slacks(records: Iterable[dict[str, Any]]) -> dict[str, list[int | float]]:
     for rec in records:
         for st, seen in _measured(rec):
             for d in DIMENSIONS:
-                out[d].append(SLACK[d](st[d], seen[d]))
+                out[d].append(_SLACK[d](st[d], seen[d]))
     return out
 
 
 COVERAGE = {
     'digits': ('Precision', lambda st, seen: seen['digits'] / st['digits']),
-    'span': ('Digit span', lambda st, seen: (seen['msb'] - seen['lsb'] + 1) / (st['msb'] - st['lsb'] + 1)),
+    'lsb': ('Quantum', lambda st, seen: 2.0 ** (st['lsb'] - seen['lsb'])),
     'mag': ('Magnitude', lambda st, seen: 2.0 ** (seen['mag'] - st['mag'])),
 }
 """Each coverage -- how much of what the static bound allows was observed, in
-(0, 1], or 0 where the bound is unbounded -- by its column title: significant
-digits p' / p, digit positions spanned, and largest magnitude max|v| / b."""
+(0, 1], or 0 where the bound is unbounded -- by its column title, one per
+parameter of a format A(p, exp, b): significant digits p' / p, smallest
+quantum 2^exp / 2^lsb', and largest magnitude max|v| / b."""
 
 
 def coverage(records: Iterable[dict[str, Any]]) -> list[tuple[str, int, dict[str, float]]]:
@@ -197,7 +202,8 @@ def coverage_latex(rows: list[tuple[str, int, dict[str, float]]]) -> str:
 
 
 def _bin(v: float) -> int:
-    return BINS if math.isinf(v) else min(int(v), BINS)
+    """Bin 0 holds exact bounds, bin k slacks in (k - 1, k] bits."""
+    return BINS if math.isinf(v) else min(math.ceil(v), BINS)
 
 
 def figure(data: dict[str, list[int | float]], out: Path) -> None:

@@ -42,12 +42,12 @@ def test_rows_by_architecture():
 
 
 def test_slacks_skip_top_and_unrun_sites():
-    assert slacks([_VOLTA, _FMA]) == {'digits': [0, 1], 'lsb': [0, math.inf], 'msb': [0, 9]}
+    assert slacks([_VOLTA, _FMA]) == {'digits': [0, 1], 'lsb': [0, math.inf], 'mag': [0.0, 10.0]}
 
 
 def test_coverage_is_observed_over_allowed():
-    # an unbounded lowest digit covers none of its span
-    volta = (2, {'digits': (1 + 23 / 24) / 2, 'span': 0.5, 'mag': (1 + 2 ** -10) / 2})
+    # an unbounded quantum covers none of it
+    volta = (2, {'digits': (1 + 23 / 24) / 2, 'lsb': 0.5, 'mag': (1 + 2 ** -10) / 2})
     assert coverage([_VOLTA, _FMA]) == [('Volta', *volta), ('Total', *volta)]
 
 
