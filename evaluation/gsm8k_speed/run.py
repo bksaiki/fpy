@@ -7,8 +7,8 @@ by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
     python evaluation/gsm8k_speed/run.py -n 1319 --backends torch fpy
 
 Replaces the results directory (`results/` beside this file, or `-o DIR`)
-with `torch.json` and `<design>-<backend>.json`.  Exits 1 if `fpy` and
-`mmasim` emit different tokens.
+with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.
+Exits 1 if `fpy` and `mmasim` emit different tokens.
 """
 
 import argparse
@@ -25,6 +25,7 @@ sys.path[:0] = [str(_MMASIM / 'serve'), str(_MMASIM)]
 import batched
 import gsm8k
 import mmasim_matmul
+import report
 import torch
 from core import generate, swap
 
@@ -67,7 +68,10 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
 
 def _foreign(out: Path) -> list[str]:
     """What in *out* a run did not write, and so must not be deleted."""
-    return sorted(p.name for p in out.iterdir() if p.suffix != '.json') if out.exists() else []
+    if not out.exists():
+        return []
+    return sorted(p.name for p in out.iterdir()
+                  if not (p.suffix == '.json' or p.name.startswith(report.PREFIX)))
 
 
 def main(argv: list[str]) -> int:
@@ -109,14 +113,10 @@ def main(argv: list[str]) -> int:
         r['seconds'] = time.perf_counter() - start
         (args.out / f'{name}.json').write_text(json.dumps(r, indent=1))
 
-    differ = 0
-    for d in args.designs:
-        if ('fpy', d) in records and ('mmasim', d) in records:
-            same = sum(a == b for a, b in zip(records['fpy', d]['tokens'],
-                                              records['mmasim', d]['tokens'], strict=True))
-            differ += same < len(problems)
-            print(f'{d}: fpy and mmasim identical on {same}/{len(problems)} problems')
-    return 1 if differ else 0
+    print('-- report')
+    report.main([str(args.out)])
+    rs = report.rows(list(records.values()))
+    return 1 if any(r.same is not None and r.same < r.problems for r in rs) else 0
 
 
 if __name__ == '__main__':

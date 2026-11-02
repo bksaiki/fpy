@@ -1,6 +1,6 @@
 """
 `run.py --smoke` on a tiny random Qwen3.5: every backend writes its record,
-and `fpy` and `mmasim` agree.  Needs a GPU.
+`fpy` and `mmasim` agree, and the report is written.  Needs a GPU.
 
     pytest -n 0 -q evaluation/gsm8k_speed/tests/test_run.py
 """
@@ -40,7 +40,8 @@ def test_smoke(tiny: Path, tmp_path: Path):
     assert run.main(['--smoke', '--model', str(tiny), '-o', str(out)]) == 0
     design = 'nv.hopper.bf16.f32'
     names = ['torch', f'{design}-fpy', f'{design}-mmasim']
-    assert sorted(p.stem for p in out.iterdir()) == sorted(names)
+    report = ['gsm8k-speed.tex', 'gsm8k-speed.json', 'gsm8k-summary.txt']
+    assert sorted(p.name for p in out.iterdir()) == sorted([f'{n}.json' for n in names] + report)
     records = {n: json.loads((out / f'{n}.json').read_text()) for n in names}
     for r in records.values():
         assert r['problems'] == 2 and len(r['tokens']) == 2 and r['decode'] > 0
