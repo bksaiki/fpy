@@ -18,21 +18,24 @@ QUESTIONS = [
 ]
 
 
-@pytest.mark.parametrize('reply, want', [
-    ('So 3 + 4 = 7. The answer is 7.', '7'),
-    ('The answer is 1,250.', '1250'),
-    ('The answer is -3.5.', '-3.5'),
-    ('She pays $18 in total.', '18'),
-    ('First 2, then 10, so 12', '12'),
-    ('No numbers here.', None),
+@pytest.mark.parametrize('reply, strict, flexible', [
+    ('So 3 + 4 = 7. The answer is 7.', '7', '7'),
+    ('The answer is 1,250.', '1250', '1250'),
+    ('The answer is -3.5.', '-3.5', '-3.5'),
+    ('The answer is $18.', None, '18'),
+    ('The answer is 4. Check: 2 + 2 = 4, not 5.', '4', '5'),
+    ('First 2, then 10, so 12', None, '12'),
+    ('The answer is 7.\n\nQ: what is 8?', '7', '7'),   # scored up to the stop sequence
+    ('No numbers here.', None, None),
 ])
-def test_answer(reply: str, want: str | None):
-    assert gsm8k.answer(reply) == want
+def test_metrics(reply: str, strict: str | None, flexible: str | None):
+    assert (gsm8k.strict(reply), gsm8k.flexible(reply)) == (strict, flexible)
 
 
-def test_correct():
-    p = gsm8k.Problem('', gsm8k.normalize(' 1,000'))
-    assert gsm8k.correct('The answer is 1000.', p) and not gsm8k.correct('The answer is 100.', p)
+def test_scores():
+    targets = [gsm8k.normalize(' 1,000'), '5']
+    replies = ['The answer is 1000.', 'I get $5']
+    assert gsm8k.scores(replies, targets) == {'strict-match': 1, 'flexible-extract': 2}
 
 
 def test_shared():

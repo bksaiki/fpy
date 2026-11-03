@@ -15,26 +15,6 @@ import torch
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='needs a GPU')
 
 
-@pytest.fixture(scope='module')
-def tiny(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Qwen3.5-0.8B's tokenizer and layer pattern (3 linear-attention layers,
-    then full attention), small and random; every `k` a multiple of 128."""
-    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-
-    cfg = AutoConfig.from_pretrained(run.swap.MODEL)
-    t = cfg.text_config
-    t.update({'hidden_size': 128, 'intermediate_size': 256, 'num_hidden_layers': 4,
-              'num_attention_heads': 2, 'num_key_value_heads': 1, 'head_dim': 64,
-              'linear_num_key_heads': 2, 'linear_num_value_heads': 4,
-              'linear_key_head_dim': 64, 'linear_value_head_dim': 64,
-              'layer_types': t.layer_types[:4]})
-    torch.manual_seed(0)
-    path = tmp_path_factory.mktemp('tiny')
-    AutoModelForCausalLM.from_config(cfg).save_pretrained(path)
-    AutoTokenizer.from_pretrained(run.swap.MODEL).save_pretrained(path)
-    return path
-
-
 def test_smoke(tiny: Path, tmp_path: Path):
     out = tmp_path / 'results'
     assert run.main(['--smoke', '--model', str(tiny), '-o', str(out)]) == 0

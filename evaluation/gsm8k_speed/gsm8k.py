@@ -40,6 +40,9 @@ EXEMPLARS = [
 ]
 """Wei et al.'s exemplars, `(question, answer)`."""
 
+STOP = 'Q:'
+"""`gsm8k_cot`'s stop sequence besides the end of turn: a reply is scored up to it."""
+
 _STRICT = re.compile(r'The answer is (\-?[0-9\.\,]+).')
 _FLEXIBLE = re.compile(r'(-?[$0-9.,]{2,})|(-?[0-9]+)')
 
@@ -75,14 +78,24 @@ def normalize(s: str) -> str:
     return re.sub(r'\.$', '', s.replace(',', '').replace('$', '').strip())
 
 
-def answer(reply: str) -> str | None:
-    """*reply*'s answer: the number after "The answer is", else the last
-    number; normalized."""
-    if m := _STRICT.search(reply):
-        return normalize(m.group(1))
-    found = _FLEXIBLE.findall(reply)
+def strict(reply: str) -> str | None:
+    """*reply*'s strict-match answer: the first number after "The answer
+    is", normalized."""
+    m = _STRICT.search(reply.split(STOP)[0])
+    return normalize(m.group(1)) if m else None
+
+
+def flexible(reply: str) -> str | None:
+    """*reply*'s flexible-extract answer: its last number, normalized."""
+    found = _FLEXIBLE.findall(reply.split(STOP)[0])
     return normalize(next(g for g in found[-1] if g)) if found else None
 
 
-def correct(reply: str, problem: Problem) -> bool:
-    return answer(reply) == problem.target
+METRICS = {'strict-match': strict, 'flexible-extract': flexible}
+"""`gsm8k_cot`'s metrics, each an exact match of its answer with the target."""
+
+
+def scores(replies: list[str], targets: list[str]) -> dict[str, int]:
+    """How many of *replies* each metric counts correct."""
+    return {m: sum(f(r) == t for r, t in zip(replies, targets, strict=True))
+            for m, f in METRICS.items()}

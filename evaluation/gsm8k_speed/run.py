@@ -72,7 +72,8 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
         'compile': kernels.compile_seconds(design) if backend == 'fpy' else None,
         'batches': batches, 'questions': [p.question for p in problems],
         'prompt_tokens': [len(p) for p in prompts], 'tokens': tokens, 'replies': replies,
-        'answers': [gsm8k.answer(r) for r in replies], 'targets': [p.target for p in problems],
+        'answers': {m: list(map(f, replies)) for m, f in gsm8k.METRICS.items()},
+        'targets': [p.target for p in problems],
     }
 
 

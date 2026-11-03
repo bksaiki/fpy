@@ -1,6 +1,7 @@
 """
 Tables of `run.py`'s records: per backend and design, time, throughput,
-accuracy, agreement with MMA-Sim and speedup over it.
+accuracy (`gsm8k_cot`'s two metrics, scored from the replies), agreement
+with MMA-Sim and speedup over it.
 
     python evaluation/gsm8k_speed/report.py evaluation/gsm8k_speed/results
 
@@ -19,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import gsm8k
+
 PREFIX = 'gsm8k-'
 """This report's outputs' prefix."""
 
@@ -34,7 +37,8 @@ class Row:
     tokens: int
     prefill: float
     decode: float
-    correct: int
+    correct: dict[str, int]
+    """Problems correct by each of `gsm8k.METRICS`."""
     same: int | None
     """Problems whose tokens equal MMA-Sim's, for the design's `fpy`."""
     speedup: float | None
@@ -56,10 +60,6 @@ def load(results: Path) -> list[dict[str, Any]]:
             if 'backend' in (r := json.loads(p.read_text()))]
 
 
-def _correct(r: dict[str, Any]) -> int:
-    return sum(a == t for a, t in zip(r['answers'], r['targets'], strict=True))
-
-
 def _key(design: str | None, backend: str) -> tuple[bool, str, int]:
     return design is not None, design or '', _ORDER.index(backend)
 
@@ -76,7 +76,7 @@ def rows(records: list[dict[str, Any]]) -> list[Row]:
             same = sum(a == b for a, b in zip(r['tokens'], ref['tokens'], strict=True))
             speedup = (ref['prefill'] + ref['decode']) / (r['prefill'] + r['decode'])
         out.append(Row(design, backend, r['problems'], sum(map(len, r['tokens'])),
-                       r['prefill'], r['decode'], _correct(r), same, speedup))
+                       r['prefill'], r['decode'], gsm8k.scores(r['replies'], r['targets']), same, speedup))
     return out
 
 
@@ -87,13 +87,13 @@ def _num(v: float) -> str:
 
 def _cells(r: Row) -> list[str]:
     return [str(r.problems), f'{r.tokens:,}', _num(r.prefill), _num(r.decode), _num(r.rate),
-            f'{100 * r.correct / r.problems:.1f}',
+            *(f'{100 * r.correct[m] / r.problems:.1f}' for m in gsm8k.METRICS),
             '' if r.same is None else f'{r.same}/{r.problems}',
             '' if r.speedup is None else _num(r.speedup)]
 
 
-HEADER = ['Problems', 'Tokens', 'Prefill (s)', 'Decode (s)', 'Tokens/s', 'Accuracy (\\%)',
-          'Same as MMA-Sim', 'Speedup']
+HEADER = ['Problems', 'Tokens', 'Prefill (s)', 'Decode (s)', 'Tokens/s', 'Strict (\\%)',
+          'Flexible (\\%)', 'Same as MMA-Sim', 'Speedup']
 
 
 def latex(rs: list[Row]) -> str:
