@@ -5,16 +5,23 @@
 // accumulator per row in c, of shape (...), and, for block-scaled models,
 // scales alphas and betas of shape (..., S). Each returns the new
 // accumulators, shaped like c.
+//
+// The GEMM runners chain a model along rows instead: entry p is row I[p] of A
+// dotted with row J[p] of Bt, K elements per call, from 0. With every (i, j),
+// that is A Bt^T; with I = J = 0..P-1, P paired dot products.
 
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/ops.h>
 #include <torch/csrc/stable/tensor.h>
 #include <torch/headeronly/core/ScalarType.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <thread>
 #include <type_traits>
+#include <vector>
 
 namespace fpy_models::runners {
 
@@ -111,6 +118,107 @@ Tensor run_scaled_dpa(const Tensor& a, const Tensor& b, const Tensor& c,
   }
 
   return output;
+}
+
+// The entries of A Bt^T at (I[p], J[p]): each chains call(i, j, chunk, acc)
+// over the chunks of K in a row. The entries split over `threads` threads.
+template <typename T, std::size_t K, typename Call>
+Tensor gemm(const Tensor& A, const Tensor& Bt, const Tensor& I, const Tensor& J,
+            int64_t threads, Call call) {
+  STD_TORCH_CHECK(A.dim() == 2 && Bt.dim() == 2 && A.size(1) == Bt.size(1) &&
+                      A.size(1) % K == 0,
+                  "A and Bt must be matrices with rows of a multiple of ", K);
+  STD_TORCH_CHECK(I.dim() == 1 && J.sizes().equals(I.sizes()),
+                  "I and J must be vectors of one length");
+
+  Tensor output = torch::stable::new_empty(A, {I.numel()});
+  const int64_t* i_ptr = I.const_data_ptr<int64_t>();
+  const int64_t* j_ptr = J.const_data_ptr<int64_t>();
+  T* output_ptr = output.mutable_data_ptr<T>();
+  const int64_t chunks = A.size(1) / K;
+
+  auto range = [&](int64_t lo, int64_t hi) {
+    for (int64_t p = lo; p < hi; ++p) {
+      T acc{};
+      for (int64_t chunk = 0; chunk < chunks; ++chunk) {
+        acc = call(i_ptr[p], j_ptr[p], chunk, acc);
+      }
+      output_ptr[p] = acc;
+    }
+  };
+
+  const int64_t P = I.numel();
+  const int64_t workers = std::max<int64_t>(threads, 1);
+  const int64_t step = (P + workers - 1) / workers;
+  if (step >= P) {
+    range(0, P);
+    return output;
+  }
+  std::vector<std::thread> pool;
+  for (int64_t lo = 0; lo < P; lo += step) {
+    pool.emplace_back(range, lo, std::min(P, lo + step));
+  }
+  for (auto& t : pool) {
+    t.join();
+  }
+  return output;
+}
+
+template <typename T, std::size_t K, auto Model>
+Tensor run_gemm(const Tensor& A, const Tensor& Bt, const Tensor& I,
+                const Tensor& J, int64_t threads) {
+  Tensor a = torch::stable::contiguous(A);
+  Tensor b = torch::stable::contiguous(Bt);
+  const T* a_ptr = a.const_data_ptr<T>();
+  const T* b_ptr = b.const_data_ptr<T>();
+  const int64_t L = a.size(1);
+  return gemm<T, K>(a, b, torch::stable::contiguous(I),
+                    torch::stable::contiguous(J), threads,
+                    [=](int64_t i, int64_t j, int64_t chunk, T acc) {
+                      return Model(
+                          unsafe_array_view<T, K>(a_ptr + i * L + chunk * K),
+                          unsafe_array_view<T, K>(b_ptr + j * L + chunk * K),
+                          acc);
+                    });
+}
+
+// alphas and betas hold ScaleK scales per chunk of A's and Bt's rows.
+template <typename T, std::size_t K, std::size_t ScaleK, auto Model>
+Tensor run_scaled_gemm(const Tensor& A, const Tensor& Bt, const Tensor& I,
+                       const Tensor& J, const Tensor& alphas,
+                       const Tensor& betas, int64_t threads) {
+  Tensor a = torch::stable::contiguous(A);
+  Tensor b = torch::stable::contiguous(Bt);
+  Tensor sa = torch::stable::contiguous(alphas);
+  Tensor sb = torch::stable::contiguous(betas);
+  const int64_t L = a.size(1);
+  const int64_t S = L / K * ScaleK;
+  STD_TORCH_CHECK(sa.dim() == 2 && sa.size(0) == a.size(0) &&
+                      sa.size(1) == S && sb.dim() == 2 &&
+                      sb.size(0) == b.size(0) && sb.size(1) == S,
+                  "alphas and betas must have ", ScaleK, " scales per ", K,
+                  " elements of A's and Bt's rows");
+  const T* a_ptr = a.const_data_ptr<T>();
+  const T* b_ptr = b.const_data_ptr<T>();
+  const T* sa_ptr = sa.const_data_ptr<T>();
+  const T* sb_ptr = sb.const_data_ptr<T>();
+  return gemm<T, K>(
+      a, b, torch::stable::contiguous(I), torch::stable::contiguous(J), threads,
+      [=](int64_t i, int64_t j, int64_t chunk, T acc) {
+        const auto& a_values =
+            unsafe_array_view<T, K>(a_ptr + i * L + chunk * K);
+        const auto& b_values =
+            unsafe_array_view<T, K>(b_ptr + j * L + chunk * K);
+        const T* alpha = sa_ptr + i * S + chunk * ScaleK;
+        const T* beta = sb_ptr + j * S + chunk * ScaleK;
+        if constexpr (ScaleK == 1) {
+          return Model(a_values, b_values, acc, *alpha, *beta);
+        } else {
+          return Model(a_values, b_values, acc,
+                       unsafe_array_view<T, ScaleK>(alpha),
+                       unsafe_array_view<T, ScaleK>(beta));
+        }
+      });
 }
 
 }  // namespace fpy_models::runners

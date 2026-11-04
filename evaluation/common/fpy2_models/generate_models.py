@@ -19,23 +19,29 @@ COMPILE = REPO_ROOT / "examples" / "mmasim" / "compile.py"
 
 
 def _operator(op: str, model: dict) -> str:
-    """The translation unit registering *model* as torch.ops.fpy2_models.<op>."""
+    """The translation unit registering *model* as torch.ops.fpy2_models.<op>,
+    and its chained GEMM as <op>_gemm."""
     (a, _, _, *scales), t = model["params"], model["result"]["type"]
     fn = f"&{model['namespace']}::{model['entry']}"
     if not scales:
         params, runner = "", f"run_dpa<{t}, {a['size']}, {fn}>"
+        gemm = f"run_gemm<{t}, {a['size']}, {fn}>"
     else:
         s = scales[0].get("size", 1)  # MX models take scalar scales
         params = ", Tensor alphas, Tensor betas"
         runner = f"run_scaled_dpa<{t}, {a['size']}, {s}, {fn}>"
+        gemm = f"run_scaled_gemm<{t}, {a['size']}, {s}, {fn}>"
     return (
         f'#include "models/{model["file"]}"\n'
         '#include "runners.h"\n\n'
         "STABLE_TORCH_LIBRARY_FRAGMENT(fpy2_models, m) {\n"
         f'  m.def("{op}(Tensor a, Tensor b, Tensor c{params}) -> Tensor");\n'
+        f'  m.def("{op}_gemm(Tensor A, Tensor Bt, Tensor I, Tensor J{params}, '
+        'int threads) -> Tensor");\n'
         "}\n\n"
         "STABLE_TORCH_LIBRARY_IMPL(fpy2_models, CPU, m) {\n"
         f'  m.impl("{op}", TORCH_BOX((&fpy_models::runners::{runner})));\n'
+        f'  m.impl("{op}_gemm", TORCH_BOX((&fpy_models::runners::{gemm})));\n'
         "}\n"
     )
 

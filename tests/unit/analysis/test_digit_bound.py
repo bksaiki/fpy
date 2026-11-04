@@ -635,6 +635,30 @@ class TestAPartOfAListKeepsItsPairing:
         # digits -149 (its operand's floor) to 127
         assert self._precs(f) == [277, 277, 277]
 
+    def test_with_the_step_bound_to_a_name(self):
+        """`a + s * k` with `s * k` named first, as statement form leaves it."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(xs[i]) for i in range(len(xs))]
+            evs = fp.empty(4)
+            for k in range(4):
+                with fp.INTEGER:
+                    j = 2 * k
+                    i = 0 + j
+                evs[k] = es[i]
+            ev = max(evs)
+            ts = fp.empty(4)
+            for k in range(4):
+                with fp.INTEGER:
+                    j = 2 * k
+                    i = 0 + j
+                with fp.MPFixedContext(ev - 12, fp.RM.RTZ):
+                    ts[k] = fp.round(xs[i])
+            return sum(ts)
+
+        assert self._precs(f) == [12, 12, 12]
+
     def test_but_not_across_nested_counts(self):
         """`1 + 2 * k1` and `1 + 2 * k2` are one index set, but not one index:
         only the innermost count's element is element `k` of it."""
