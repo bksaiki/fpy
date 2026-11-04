@@ -20,9 +20,9 @@ OPERATIONS: dict[str, Callable[[], MMAOperation]] = {
 
 PREFIX = 'mmasim:'
 
-_ELEMS = 1 << 26
+_ELEMS = 1 << 24
 """Elements of `[rows, n, L]` per block of rows at most: bounds MMA-Sim's
-intermediates."""
+intermediates, about 50 bytes each at peak."""
 
 
 def operation(design: str) -> MMAOperation:
