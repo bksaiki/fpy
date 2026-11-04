@@ -2189,6 +2189,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if not isinstance(e, Add):
             return None
         for start, step in ((e.first, e.second), (e.second, e.first)):
+            if isinstance(step, Var) and isinstance(d := self.def_use.find_def_from_use(step), AssignDef) \
+                    and isinstance(d.site, Assign) and isinstance(d.site.expr, Mul):
+                # `s * k` bound to a name, as statement form binds it
+                step = d.site.expr
             pairs = [(step.first, step.second), (step.second, step.first)] \
                 if isinstance(step, Mul) else [(None, step)]
             a = self._part_key(start)
