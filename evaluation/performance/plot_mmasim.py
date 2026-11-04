@@ -459,13 +459,8 @@ def plot_speedup_variants(
 ) -> None:
     """Alternative layouts of FPy's speedup over eager MMA-Sim.
 
-    `speedup-batches`: one panel per dot length, one bar per batch size for
-    each design, side by side, designs sorted by their geometric-mean speedup.
-    `speedup-stacked`: the same, with each design's bars overlaid from zero,
-    shortest in front. Speedups do not add, so the bars are not summed.
-
-    The rest have one panel per configuration, with a row per dot length and
-    a column per batch size. Unmeasured configurations stay blank.
+    Each has one panel per configuration, with a row per dot length and a
+    column per batch size. Unmeasured configurations stay blank.
     `speedup-grouped`: designs grouped by architecture in a fixed order.
     `speedup-models`: designs sorted by speedup and colored by their MMA-Sim
     arithmetic model; `speedup-formats`, the same colored by input format.
@@ -488,12 +483,6 @@ def plot_speedup_variants(
     ]
     if not measured:
         return
-    # Light to dark: larger batches are darker.
-    cmap = plt.get_cmap("Blues")
-    shades = {
-        batch: cmap(0.45 + 0.5 * index / max(1, len(batches) - 1))
-        for index, batch in enumerate(batches)
-    }
     # The measured configurations, by the grid position of their panel.
     panels = {
         (row, column): (length, batch)
@@ -502,79 +491,6 @@ def plot_speedup_variants(
         )
         if any(batch in by_length[length][design] for design in measured)
     }
-
-    # One panel per dot length, a bar per batch size, side by side or overlaid.
-    for name, stacked in (("batches", False), ("stacked", True)):
-        fig, axes = plt.subplots(
-            len(lengths),
-            1,
-            figsize=(
-                max(6.0, (0.15 if stacked else 0.2) * len(measured)),
-                5.4 * len(lengths),
-            ),
-            squeeze=False,
-        )
-        for axis, length in zip(axes[:, 0], lengths):
-            values = by_length[length]
-            order = sorted(
-                (design for design in measured if values[design]),
-                key=lambda design: geomean(list(values[design].values())),
-            )
-            labels = {
-                batch: "batch {} (geomean {:.2f}×)".format(
-                    batch,
-                    geomean(shown),
-                )
-                for batch in batches
-                if (
-                    shown := [
-                        values[design][batch]
-                        for design in order
-                        if batch in values[design]
-                    ]
-                )
-            }
-            if stacked:
-                for position, design in enumerate(order):
-                    # Tallest first, so each shorter bar is drawn in front.
-                    for batch, value in sorted(
-                        values[design].items(), key=lambda item: -item[1]
-                    ):
-                        axis.bar(position, value, 0.85, color=shades[batch])
-                for batch in labels:
-                    axis.bar(0, 0, color=shades[batch], label=labels[batch])
-            else:
-                width = 0.85 / len(batches)
-                for index, batch in enumerate(batches):
-                    if batch not in labels:
-                        continue
-                    offset = (index - (len(batches) - 1) / 2) * width
-                    shown = [
-                        (position + offset, values[design][batch])
-                        for position, design in enumerate(order)
-                        if batch in values[design]
-                    ]
-                    axis.bar(
-                        *zip(*shown),
-                        width,
-                        color=shades[batch],
-                        label=labels[batch],
-                    )
-            axis.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
-            axis.set_title(f"length {length}", fontsize=10)
-            axis.set_xticks(range(len(order)), order, rotation=90, fontsize=6)
-            axis.set_xlim(-0.6, len(order) - 0.4)
-            axis.set_ylim(bottom=0)
-            axis.yaxis.set_major_formatter(times)
-            axis.set_ylabel(ylabel)
-            axis.grid(True, axis="y", alpha=0.25)
-            axis.set_axisbelow(True)
-            axis.spines[["top", "right"]].set_visible(False)
-            axis.legend(fontsize=7, frameon=False, loc="upper left")
-        fig.tight_layout()
-        for suffix in ("png", "pdf"):
-            fig.savefig(output / f"speedup-{name}{tag}.{suffix}", dpi=180)
-        plt.close(fig)
 
     # One panel per configuration, designs grouped by architecture.
     order = sorted(
@@ -706,6 +622,53 @@ def plot_speedup_variants(
         plt.close(fig)
 
 
+def plot_speedup_row(
+    rows: list[dict[str, Any]], designs: list[str], output: Path, batch: int
+) -> None:
+    """`speedup-batch-<batch>`: FPy's speedup over eager MMA-Sim at one batch
+    size, one panel per dot length side by side, designs sorted ascending.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+
+    lengths = sorted(
+        {row["dot_length"] for row in rows if row["batch_size"] == batch}
+    )
+    if not lengths:
+        return
+    fig, axes = plt.subplots(
+        1,
+        len(lengths),
+        figsize=(max(6.0, 0.15 * len(designs)) * len(lengths), 5.5),
+        squeeze=False,
+    )
+    for axis, length in zip(axes[0], lengths):
+        values = speedups(rows, designs, length)
+        order = sorted(
+            (design for design in designs if batch in values[design]),
+            key=lambda design: values[design][batch],
+        )
+        heights = [values[design][batch] for design in order]
+        axis.bar(range(len(order)), heights, 0.85, color=COLORS["mmasim"])
+        mark_geomean(axis, heights, COLORS["mmasim"])
+        axis.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
+        axis.set_title(f"length {length}, batch {batch}", fontsize=10)
+        axis.set_xticks(range(len(order)), order, rotation=90, fontsize=6)
+        axis.set_xlim(-0.6, len(order) - 0.4)
+        axis.set_ylim(bottom=0)
+        axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}×"))
+        axis.set_ylabel(PLOTS["speedup"][0])
+        axis.grid(True, axis="y", alpha=0.25)
+        axis.set_axisbelow(True)
+    fig.tight_layout()
+    for suffix in ("png", "pdf"):
+        fig.savefig(output / f"speedup-batch-{batch}.{suffix}", dpi=180)
+    plt.close(fig)
+
+
 def print_headline(
     rows: list[dict[str, Any]],
     designs: list[str],
@@ -778,12 +741,9 @@ def main() -> None:
         raise SystemExit("summary.csv contains no measurements")
     designs = list(dict.fromkeys(row["design"] for row in rows))
     batch = args.batch_size or max(row["batch_size"] for row in rows)
-    # One set of figures per dot length, named `<plot>-<length>`.
-    for length in sorted({row["dot_length"] for row in rows}):
-        selected = [row for row in rows if row["dot_length"] == length]
-        plot_results(selected, designs, output, f"-{length}")
-        plot_speedup_variants(selected, designs, output, f"-{length}")
-    plot_speedup_lengths(rows, designs, output)
+    plot_results(rows, designs, output)
+    plot_speedup_variants(rows, designs, output)
+    plot_speedup_row(rows, designs, output, 16384)
     lengths = (
         [args.dot_length]
         if args.dot_length
