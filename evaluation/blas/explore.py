@@ -237,6 +237,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 1,
                     help='processes compiling the designs, and threads grading them '
                     '(default: every CPU)')
+    ap.add_argument('--no-grade', action='store_true',
+                    help='compile and build only: a row per point, its times but no errors')
     args = ap.parse_args(argv)
 
     pts = sweep.grid()
@@ -254,7 +256,7 @@ def main(argv: list[str]) -> int:
 
     rows = []
     for f, (fmt, ss) in FORMATS.items():
-        cases = [case(test, n, s, fmt) for test in ('1c', '2c') for n in NS for s in ss]
+        cases = [] if args.no_grade else [case(test, n, s, fmt) for test in ('1c', '2c') for n in NS for s in ss]
         fma = [error(models[FMA], c, args.jobs) for c in cases]
         mine = [p for p in pts if p.design.a == fmt]
         for p in mine:
@@ -267,6 +269,9 @@ def main(argv: list[str]) -> int:
                 rows.append(point)
                 continue
             point['cxx_seconds'] = cxx[op(cpp['model'])]
+            if args.no_grade:
+                rows.append(point)
+                continue
             t1 = time.perf_counter()
             errs = [error(models[p.design], c, args.jobs) for c in cases]
             point['seconds'] = time.perf_counter() - t1
@@ -274,7 +279,8 @@ def main(argv: list[str]) -> int:
                      for c, e, b in zip(cases, errs, fma)]
             print(f'{p.anchor} {p.value}: worst {max(errs):.3g} in {point["seconds"]:.1f}s', flush=True)
 
-    wall['grade'] = time.perf_counter() - t0
+    if not args.no_grade:
+        wall['grade'] = time.perf_counter() - t0
 
     table = args.results / 'blas' / 'blas-grid.csv'
     outputs.write_csv(table, rows)
