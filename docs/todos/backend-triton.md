@@ -1,7 +1,7 @@
 # Triton backend
 
 `fpy2/backend/triton/` compiles FPy to Triton kernels.  Its test bed is
-`examples/mmasim/compile_triton.py`, which compiles each MMA-Sim design as an
+`evaluation/common/mma/compile_triton.py`, which compiles each MMA-Sim design as an
 `m x k` by `n x k` matmul and, with `-r DRAWS`, compares every output bit for
 bit with the interpreter.
 
@@ -10,7 +10,7 @@ bit with the interpreter.
 **60/62 designs compile, and all 60 agree** (`compile_triton.py -j 8 -r 8`).
 Refused: `amd.cdna1.*`, 280-525 bits of exact sum, which C++ refuses too.
 The FP16-output designs at `e_zero = -133` (Hopper wgmma, Blackwell
-tcgen05) compile since #325 (`format_infer` and digit bound fixes).  `examples/mmasim/serve/` runs an LLM through them.
+tcgen05) compile since #325 (`format_infer` and digit bound fixes).  `evaluation/dse/llm/` runs an LLM through them.
 
 Speed on the TITAN V (`bench/speed.py --best`, 1024 x 1024, `k` = 256, each
 design's fastest tile; measured 2026-09-27):
@@ -129,7 +129,7 @@ that, and blocked chaining block-scaled designs over `k` in one kernel.
   Exact only inside the range (past the largest finite, rounding down and up
   cannot tell where FPy's round to odd overflows), so the emitter refuses it
   unless the operands bound the result: `+`, `-`, `*`, `fma`, `sqrt`; not `/`.
-- **What a generated design still hits** (`examples/mmasim/tests/test_triton.py`'s
+- **What a generated design still hits** (`evaluation/common/mma/tests/test_triton.py`'s
   `REFUSED` pins them):
   - *A chain of FMAs with a separate join* (CDNA3's, `cdna3-fma`):
     `round_down_at(t, e - F2 - 2) + round_down_at(c, e - F - 1)` adds two

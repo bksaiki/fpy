@@ -2,7 +2,7 @@
 
     python evaluation/common/fpy2_models/generate_models.py OUT_DIR
 
-`examples/mmasim/compile.py -o` compiles every design to OUT_DIR/models/ and
+`evaluation/common/mma/compile.py -o` compiles every design to OUT_DIR/models/ and
 lists their signatures; this wraps each one in a Torch operator, OUT_DIR/<op>.cpp.
 """
 
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # this file is in evaluation/common/fpy2_models
-COMPILE = REPO_ROOT / "examples" / "mmasim" / "compile.py"
+COMPILE = REPO_ROOT / "evaluation" / "common" / "mma" / "compile.py"
 
 
 def _operator(op: str, model: dict) -> str:

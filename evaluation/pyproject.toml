@@ -1,0 +1,44 @@
+# The evaluation's environment: `uv sync` here installs it, from uv.lock.
+[project]
+name = "fpy2-evaluation"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fpy2",
+  # the versions the results were made with
+  "torch==2.14.0",
+  "triton==3.8.0; sys_platform == 'linux'",   # the designs' GPU kernels
+  "transformers==5.17.0",     # Qwen3.5
+  "datasets==5.1.0",          # WikiText-2, GSM8K
+  "matplotlib==3.11.2",
+  # the reference the GSM8K evaluation runs against
+  "mmasim @ git+https://github.com/microsoft/MMA-Sim@2e57de2bb8e120409b00bfc2fd7bc59227631712#subdirectory=src/mmasim",
+]
+
+[dependency-groups]
+dev = [
+  "torchao==0.18.0",          # the quantizers' reference
+  "pytest",
+  "pytest-xdist",
+]
+
+[tool.uv]
+package = false
+# Linux runs every evaluation; Apple silicon macOS, the CPU ones (analysis,
+# blas).  Not Intel macOS: torch has no wheels for it after 2.2.
+environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[tool.uv.sources]
+fpy2 = { path = "..", editable = true }
+torch = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }
+torchao = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }
+
+# CUDA 12.6: the only build of torch >= 2.11 that supports Volta (the TITAN V
+# the results ran on); torch 2.14 is the last release to ship it
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
