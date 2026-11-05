@@ -9,17 +9,8 @@ Blackwell FP8 is MXFP8), swept over the alignment width `F` (the paper's
 
 ## Setup
 
-From the repository root:
-
-```sh
-uv sync && source .venv/bin/activate
-uv pip install torch triton -r evaluation/dse/llm/requirements.txt
-```
-
-(`uv sync` removes packages installed by hand; rerun the second line after
-it.) A CUDA GPU is required. Do not install `causal-conv1d` or
-`flash-linear-attention`: `transformers` would then run Qwen3.5's linear
-attention through their kernels, and every result would move. Everything below runs from `evaluation/dse/llm` and
+As in [`evaluation/README.md`](../../README.md). A CUDA GPU is required.
+Everything below runs from `evaluation/dse/llm` and
 writes under `evaluation/results/llm/`, `results/` below (`--results` to change
 it). The model and WikiText-2 download from Hugging Face on first use.
 

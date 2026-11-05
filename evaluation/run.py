@@ -6,7 +6,8 @@ drawn.  Defaults are `config.py`'s.
 
 An evaluation whose final output exists is finished and not rerun; its plots
 are redrawn.  After changing `config.py`, rerun what it affects with
-`--no-cache`.
+`--no-cache`.  Before anything runs, checks that the machine has what each
+evaluation to run needs (README.md, Setup).
 
     python evaluation/run.py evaluation/results                  # every evaluation
     python evaluation/run.py DIR --disable gsm8k --disable llm   # all but these
@@ -16,6 +17,8 @@ are redrawn.  After changing `config.py`, rerun what it affects with
 """
 
 import argparse
+import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -45,31 +48,52 @@ class Eval:
     plot: Commands
     done: str
     """Its final output, under its results directory: present when finished."""
+    needs: tuple[str, ...]
+    """Modules its run imports, beyond `fpy2`."""
+    tools: tuple[str, ...] = ()
+    """Programs its run calls."""
+    gpu: bool = False
 
 
 EVALS = {
     'analysis': Eval(
         run=lambda d, j: [[PY, str(HERE / 'analysis' / 'run.py'), '-o', str(d), *j]],
         plot=lambda d: [[PY, str(HERE / 'analysis' / 'report.py'), str(d)]],
-        done='precision-paper.json'),
+        done='precision-paper.json', needs=('matplotlib',)),
     # `explore.py` and `plots.py` add `blas/` to the root they are given
     'blas': Eval(
         run=lambda d, j: [[PY, str(HERE / 'dse' / 'blas' / 'explore.py'), '--results', str(d.parent), *j]],
         plot=lambda d: [[PY, str(HERE / 'dse' / 'blas' / 'plots.py'), '--results', str(d.parent)]],
-        done='blas-grid.csv'),
+        done='blas-grid.csv', needs=('torch', 'matplotlib'),
+        tools=(os.environ.get('CXX', 'c++'),)),  # as `torch.utils.cpp_extension` picks it
     'gsm8k': Eval(
         run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d)]],
         plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)]],
-        done='gsm8k-speed.json'),
+        done='gsm8k-speed.json', needs=('torch', 'triton', 'transformers', 'datasets', 'mmasim'),
+        gpu=True),
     'llm': Eval(
         # the manifest compiles one design at a time, so each compile time is its own
         run=lambda d, j: [[PY, str(HERE / 'dse' / 'llm' / 'sweep.py'), '--results', str(d), '--manifest', '-j', '1'],
                           [PY, str(HERE / 'dse' / 'llm' / 'sweep.py'), '--results', str(d), *j]],
         plot=lambda d: [[PY, str(HERE / 'dse' / 'llm' / 'plot_grid.py'), '--results', str(d),
                          '--table', f'sweep-grid-{TAG}.csv']],
-        done=f'sweep/sweep-grid-{TAG}.provenance.json'),
+        done=f'sweep/sweep-grid-{TAG}.provenance.json',
+        needs=('torch', 'triton', 'transformers', 'datasets', 'matplotlib'), gpu=True),
 }
 """Every evaluation, in the order run: CPU first."""
+
+
+def _missing(evals: list[Eval]) -> list[str]:
+    """What *evals* need that this machine lacks."""
+    out = [f'the Python module `{m}`' for m in sorted({m for e in evals for m in e.needs})
+           if importlib.util.find_spec(m) is None]
+    out += [f'`{t}` on PATH' for t in sorted({t for e in evals for t in e.tools}) if shutil.which(t) is None]
+    if any(e.gpu for e in evals) and importlib.util.find_spec('torch') is not None:
+        import torch
+
+        if not torch.cuda.is_available():
+            out.append('a CUDA GPU')
+    return out
 
 
 def _run(cmds: list[list[str]]) -> bool:
@@ -95,8 +119,15 @@ def main(argv: list[str]) -> int:
     if args.plot and args.no_cache:
         ap.error('--plot redraws from results that --no-cache would discard')
 
+    names = [n for n in EVALS if n not in args.disable]
+    todo = [EVALS[n] for n in names if not args.plot
+            and (args.no_cache or not (args.results / n / EVALS[n].done).exists())]
+    if missing := _missing(todo):
+        sys.exit('missing: ' + '; '.join(missing) + f'\nsee {HERE / "README.md"}, Setup, or --disable '
+                 'the evaluations that need them')
+
     failed = []
-    for name in [n for n in EVALS if n not in args.disable]:
+    for name in names:
         ev, out = EVALS[name], args.results.resolve() / name
         print(f'== {name}: {out}', flush=True)
         if args.no_cache:
