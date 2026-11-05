@@ -267,9 +267,9 @@ def main(argv: list[str]) -> int:
                 rows.append(point)
                 continue
             point['cxx_seconds'] = cxx[op(cpp['model'])]
-            t0 = time.perf_counter()
+            t1 = time.perf_counter()
             errs = [error(models[p.design], c, args.jobs) for c in cases]
-            point['seconds'] = time.perf_counter() - t0
+            point['seconds'] = time.perf_counter() - t1
             rows += [point | {'test': c.test, 'n': c.n, 's': c.s, 'error': e, 'fma_error': b}
                      for c, e, b in zip(cases, errs, fma)]
             print(f'{p.anchor} {p.value}: worst {max(errs):.3g} in {point["seconds"]:.1f}s', flush=True)
