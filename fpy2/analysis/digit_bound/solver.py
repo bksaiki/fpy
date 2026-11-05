@@ -8,9 +8,10 @@ means.
 """
 
 import math
-from dataclasses import dataclass
+import time
+from dataclasses import astuple, dataclass
 from enum import Enum, auto
-from typing import Protocol, TypeAlias
+from typing import Generic, Protocol, TypeAlias, TypeVar
 
 import z3
 
@@ -21,6 +22,7 @@ _Z3Solver: TypeAlias = 'z3.Solver | z3.Optimize'
 __all__ = [
     'Constraint',
     'Solver',
+    'SolverStats',
     'Term',
     'Z3Solver',
 ]
@@ -132,6 +134,9 @@ class Solver(Protocol):
     asks many objectives against the accumulated system.
     """
 
+    stats: 'SolverStats'
+    """What the backend has done so far."""
+
     def assume(self, constraint: Constraint) -> None:
         """State *constraint*.  Constraints only ever narrow."""
         ...
@@ -156,26 +161,55 @@ class Solver(Protocol):
         ...
 
 
-class Z3Solver:
-    """:class:`Solver` backed by z3's ``Optimize``.
+@dataclass
+class SolverStats:
+    """What a backend has done, and the time it took.
 
-    The store is quantifier-free linear integer arithmetic over a handful of
-    variables; *timeout_ms* guards against a pathological one rather than an
-    expected path.
+    Always kept.  Each update is a counter or a clock read, which a solver
+    check outweighs by orders of magnitude.
+    """
+
+    solver_time: float = 0.0
+    """Seconds in the backend: stating constraints, which z3 and cvc5 encode
+    into live solvers as they arrive, and answering queries."""
+    constraints: int = 0
+    """Constraints assumed."""
+    queries: int = 0
+    """Calls to :meth:`Solver.maximize`."""
+    calls: int = 0
+    """Backend calls -- a satisfiability check, or one solve."""
+    degraded: int = 0
+    """Answers loosened because the backend could not decide: a timeout, an
+    unknown, or a box too wide to solve."""
+
+    def __add__(self, other: 'SolverStats') -> 'SolverStats':
+        return SolverStats(*(a + b for a, b in zip(astuple(self), astuple(other))))
+
+
+class Status(Enum):
+    """A backend call's result."""
+
+    SAT = auto()
+    UNSAT = auto()
+    UNKNOWN = auto()
+
+
+_S = TypeVar('_S')
+"""A backend's solver for one component."""
+
+
+class _ComponentSolver(Generic[_S]):
+    """What every backend shares: components, the cutoff, bisection, and the
+    statistics.
+
+    A backend supplies :meth:`_new`, :meth:`_encode`, :meth:`_check` and
+    :meth:`_value`; one that optimizes natively overrides :meth:`_maximum`
+    instead of bisecting, and needs no :meth:`_value`.
     """
 
     timeout_ms: int
 
-    bisect: bool
-    """Find the maximum by refuting ``objective >= k`` rather than by asking
-    z3 to optimize.
-
-    Refutation reuses the plain solver already built for the component,
-    where `Optimize` is a second encoding of the same constraints.  Off only
-    so `test_both_backends_agree` can check the two against each other.
-    """
-
-    _env: dict[_Var, z3.ArithRef]
+    stats: SolverStats
 
     _components: Unionfind[int]
     """Variable indices grouped into components: constraints that share no
@@ -185,16 +219,9 @@ class Z3Solver:
     _group: dict[int, list[Constraint]]
     """Constraints by component root, kept unencoded until asked for."""
 
-    _built: dict[tuple[int, bool], _Z3Solver]
+    _built: dict[tuple[int, bool], _S]
     """A component's solvers, by root and by whether it optimizes.  Each is
     encoded once and then learns incrementally."""
-
-    _encoded: dict[Term, z3.ArithRef]
-    """Each term's z3 form, built once: the same terms recur across one
-    store's constraints."""
-
-    _lits: dict[int, z3.BoolRef]
-    """Each guard literal's z3 form."""
 
     _span: int
     """Total magnitude of the constants assumed so far."""
@@ -209,30 +236,47 @@ class Z3Solver:
     system has some solution, so the downward probe always terminates.
     """
 
-    def __init__(self, timeout_ms: int = 10_000, bisect: bool = True):
+    _degraded: bool
+    """Whether the query being answered has met an undecided call."""
+
+    def __init__(self, timeout_ms: int = 10_000):
         self.timeout_ms = timeout_ms
-        self.bisect = bisect
-        self._env = {}
+        self.stats = SolverStats()
         self._components = Unionfind()
         self._group = {}
         self._built = {}
-        self._encoded = {}
-        self._lits = {}
         self._span = 0
         self._scale = 1
+        self._degraded = False
 
-    def _to_z3(self, term: Term) -> z3.ArithRef:
-        cached = self._encoded.get(term)
-        if cached is not None:
-            return cached
-        acc = z3.IntVal(term.const)
-        for v, c in term.coeffs:
-            z = self._env.get(v)
-            if z is None:
-                z = self._env[v] = z3.Int(f'{v.name}#{v.index}')
-            acc = acc + c * z
-        self._encoded[term] = acc
-        return acc
+    # -- what a backend supplies -------------------------------------------
+
+    @property
+    def _optimizes(self) -> bool:
+        """Whether a maximum is asked of a separate, optimizing solver."""
+        return False
+
+    def _new(self, optimize: bool) -> _S:
+        """An empty solver, optimizing where *optimize*."""
+        raise NotImplementedError
+
+    def _encode(self, into: _S, constraint: Constraint) -> None:
+        """State *constraint* into the solver *into*."""
+        raise NotImplementedError
+
+    def _check(
+        self, into: _S, lits: tuple[int, ...], bound: tuple[Term, int] | None = None,
+    ) -> Status:
+        """Is what *into* holds satisfiable where the literals *lits* hold,
+        and, given *bound* ``(t, k)``, where ``t >= k``?"""
+        raise NotImplementedError
+
+    def _value(self, into: _S, objective: Term) -> int | None:
+        """*objective*'s value in the model of *into*'s last satisfiable
+        check, where it has one."""
+        raise NotImplementedError
+
+    # -- components --------------------------------------------------------
 
     def _union(self, vs: set[int]) -> int:
         """Merge every component the variables *vs* touch into one, and
@@ -263,6 +307,7 @@ class Z3Solver:
         return out
 
     def assume(self, constraint: Constraint) -> None:
+        start = time.perf_counter()
         for t in (constraint.lhs, *constraint.rhs):
             self._span += abs(t.const)
             for _, k in t.coeffs:
@@ -273,34 +318,16 @@ class Z3Solver:
         assert named, f'constraint over no variable: {constraint}'
         root = self._union(named)
         self._group.setdefault(root, []).append(constraint)
-        # z3 is incremental: state it into the live solvers rather than
-        # discarding ones that have already learned from their neighbours
+        # the backends are incremental: state it into the live solvers rather
+        # than discarding ones that have already learned from their neighbours
         for opt in (False, True):
             live = self._built.get((root, opt))
             if live is not None:
                 self._encode(live, constraint)
+        self.stats.constraints += 1
+        self.stats.solver_time += time.perf_counter() - start
 
-    def _lit(self, i: int) -> z3.BoolRef:
-        lit = self._lits.get(i)
-        if lit is None:
-            lit = self._lits[i] = z3.Bool(f'g#{i}')
-        return lit
-
-    def _encode(self, into: _Z3Solver, constraint: Constraint) -> None:
-        lhs = self._to_z3(constraint.lhs)
-        rhs = [self._to_z3(r) for r in constraint.rhs]
-        match constraint.op:
-            case Rel.EQ:
-                rel = lhs == rhs[0]
-            case Rel.LE:
-                rel = lhs <= rhs[0]
-            case Rel.LE_MAX:
-                rel = z3.Or([lhs <= r for r in rhs])
-        if constraint.guard:
-            rel = z3.Implies(z3.And([self._lit(g) for g in constraint.guard]), rel)
-        into.add(rel)
-
-    def _solver_for_vars(self, named: set[int], *, optimize: bool) -> _Z3Solver:
+    def _solver_for_vars(self, named: set[int], *, optimize: bool) -> _S:
         """A solver holding just what can bear on the variables *named*.
 
         A constraint reaching none of them cannot move a bound over them, so
@@ -318,66 +345,79 @@ class Z3Solver:
         cached = self._built.get(key)
         if cached is not None:
             return cached
-        s = z3.Optimize() if optimize else z3.Solver()
-        s.set('timeout', self.timeout_ms)
+        s = self._new(optimize)
         for r in roots:
             for c in self._group.get(r, ()):
                 self._encode(s, c)
         self._built[key] = s
         return s
 
+    # -- queries -----------------------------------------------------------
+
     def maximize(
         self, objective: Term, cutoff: int | None = None,
         assuming: frozenset[int] = frozenset(),
     ) -> int | float:
-        e = self._to_z3(objective)
-        named = {v.index for v, _ in objective.coeffs}
-        lits = [self._lit(g) for g in sorted(assuming)]
-        if cutoff is not None:
-            # one refutation settles it: reaching the cutoff answers `inf`,
-            # and failing to reach it puts the maximum at `cutoff - 1` or
-            # below.  Both are upper bounds, so the answer stays usable as
-            # one, and `Optimize` is not needed for a `check`.
-            solver = self._solver_for_vars(named, optimize=False)
-            return math.inf if self._reaches(solver, e, cutoff, lits) else cutoff - 1
-        solver = self._solver_for_vars(named, optimize=not self.bisect)
-        if self.bisect:
-            return self._bisect(solver, e, objective, lits)
-        else:
-            return self._optimize(solver, e, lits)
-
-    def _optimize(
-        self, solver: _Z3Solver, e: z3.ArithRef, lits: list[z3.BoolRef],
-    ) -> int | float:
-        """The maximum from ``Optimize``: one search, run by z3."""
-        solver.push()
+        start = time.perf_counter()
+        self._degraded = False
         try:
-            handle = solver.maximize(e)
-            status = solver.check(*lits)
-            if status == z3.unsat:
-                return -math.inf
-            if status != z3.sat:
-                return math.inf
-            bound = solver.upper(handle)
-            # an unbounded objective comes back as the symbolic `oo`
-            return bound.as_long() if z3.is_int_value(bound) else math.inf
+            named = {v.index for v, _ in objective.coeffs}
+            lits = tuple(sorted(assuming))
+            if cutoff is not None:
+                # one refutation settles it: reaching the cutoff answers
+                # `inf`, and failing to reach it puts the maximum at
+                # `cutoff - 1` or below.  Both are upper bounds, so the
+                # answer stays usable as one, and no optimizing solver is
+                # needed for a check.
+                solver = self._solver_for_vars(named, optimize=False)
+                reached = self._reaches(solver, objective, cutoff, lits)
+                return math.inf if reached else cutoff - 1
+            solver = self._solver_for_vars(named, optimize=self._optimizes)
+            return self._maximum(solver, objective, lits)
         finally:
-            solver.pop()
+            self.stats.queries += 1
+            self.stats.degraded += self._degraded
+            self.stats.solver_time += time.perf_counter() - start
+
+    def _record(self, status: Status) -> Status:
+        """Count a backend call: an undecided one degrades the query it
+        serves."""
+        self.stats.calls += 1
+        if status is Status.UNKNOWN:
+            self._degraded = True
+        return status
+
+    def _status(
+        self, into: _S, lits: tuple[int, ...], bound: tuple[Term, int] | None = None,
+    ) -> Status:
+        return self._record(self._check(into, lits, bound))
 
     def _reaches(
-        self, solver: _Z3Solver, e: z3.ArithRef, k: int,
-        lits: list[z3.BoolRef],
+        self, solver: _S, objective: Term, k: int, lits: tuple[int, ...],
     ) -> bool:
         """Can the objective reach *k*?
 
         An undecided check reads as ``True``, which widens the bracket and
         so the answer -- the direction a backend that cannot answer must
         fail in."""
-        return solver.check(e >= k, *lits) != z3.unsat
+        return self._status(solver, lits, (objective, k)) is not Status.UNSAT
+
+    def _ceiling(self, objective: Term) -> int:
+        """How far a bound on *objective* can reach: the constants either
+        side, scaled by the widest coefficient over them."""
+        scale = self._scale
+        for _, k in objective.coeffs:
+            scale = max(scale, abs(k))
+        return (self._span + abs(objective.const)) * scale
+
+    def _maximum(
+        self, solver: _S, objective: Term, lits: tuple[int, ...],
+    ) -> int | float:
+        """*objective*'s maximum, where no cutoff was given."""
+        return self._bisect(solver, objective, lits)
 
     def _bisect(
-        self, solver: _Z3Solver, e: z3.ArithRef, objective: Term,
-        lits: list[z3.BoolRef],
+        self, solver: _S, objective: Term, lits: tuple[int, ...],
     ) -> int | float:
         """The maximum by refutation: ``max >= k`` is one satisfiability
         question, and monotone in *k*, so a bracket and a bisection inside it
@@ -391,27 +431,22 @@ class Z3Solver:
         a genuine upper bound, so the answer is never below the true maximum.
         """
 
-        status = solver.check(*lits)
-        if status == z3.unsat:
+        status = self._status(solver, lits)
+        if status is Status.UNSAT:
             return -math.inf
-        if status != z3.sat:
+        if status is not Status.SAT:
             return math.inf
 
-        # how far a bound can reach: the constants either side, scaled by
-        # the widest coefficient over them
-        scale = self._scale
-        for _, k in objective.coeffs:
-            scale = max(scale, abs(k))
-        ceiling = (self._span + abs(objective.const)) * scale
+        ceiling = self._ceiling(objective)
 
         # start from a value the objective actually takes, so the bracket does
         # not have to be walked to from zero
-        found = solver.model().eval(e, model_completion=True)
-        lo = found.as_long() if z3.is_int_value(found) else 0
+        found = self._value(solver, objective)
+        lo = found if found is not None else 0
 
         # widen upward by doubling the gap until the objective cannot reach
         step, hi = 1, lo + 1
-        while self._reaches(solver, e, hi, lits):
+        while self._reaches(solver, objective, hi, lits):
             lo, step = hi, step * 2
             hi = lo + step
             if lo > ceiling:
@@ -420,8 +455,133 @@ class Z3Solver:
         # invariant: reaches(lo), not reaches(hi); the maximum is in [lo, hi)
         while hi - lo > 1:
             mid = lo + (hi - lo) // 2
-            if self._reaches(solver, e, mid, lits):
+            if self._reaches(solver, objective, mid, lits):
                 lo = mid
             else:
                 hi = mid
         return lo
+
+
+class Z3Solver(_ComponentSolver[_Z3Solver]):
+    """:class:`Solver` backed by z3.
+
+    The store is quantifier-free linear integer arithmetic over a handful of
+    variables; *timeout_ms* guards against a pathological one rather than an
+    expected path.
+    """
+
+    bisect: bool
+    """Find the maximum by refuting ``objective >= k`` rather than by asking
+    z3 to optimize.
+
+    Refutation reuses the plain solver already built for the component,
+    where `Optimize` is a second encoding of the same constraints.  Off only
+    so `test_both_backends_agree` can check the two against each other.
+    """
+
+    _env: dict[_Var, z3.ArithRef]
+
+    _encoded: dict[Term, z3.ArithRef]
+    """Each term's z3 form, built once: the same terms recur across one
+    store's constraints."""
+
+    _lits: dict[int, z3.BoolRef]
+    """Each guard literal's z3 form."""
+
+    def __init__(self, timeout_ms: int = 10_000, bisect: bool = True):
+        super().__init__(timeout_ms)
+        self.bisect = bisect
+        self._env = {}
+        self._encoded = {}
+        self._lits = {}
+
+    @property
+    def _optimizes(self) -> bool:
+        return not self.bisect
+
+    def _to_z3(self, term: Term) -> z3.ArithRef:
+        cached = self._encoded.get(term)
+        if cached is not None:
+            return cached
+        acc = z3.IntVal(term.const)
+        for v, c in term.coeffs:
+            z = self._env.get(v)
+            if z is None:
+                z = self._env[v] = z3.Int(f'{v.name}#{v.index}')
+            acc = acc + c * z
+        self._encoded[term] = acc
+        return acc
+
+    def _lit(self, i: int) -> z3.BoolRef:
+        lit = self._lits.get(i)
+        if lit is None:
+            lit = self._lits[i] = z3.Bool(f'g#{i}')
+        return lit
+
+    def _new(self, optimize: bool) -> _Z3Solver:
+        s = z3.Optimize() if optimize else z3.Solver()
+        s.set('timeout', self.timeout_ms)
+        return s
+
+    def _encode(self, into: _Z3Solver, constraint: Constraint) -> None:
+        lhs = self._to_z3(constraint.lhs)
+        rhs = [self._to_z3(r) for r in constraint.rhs]
+        match constraint.op:
+            case Rel.EQ:
+                rel = lhs == rhs[0]
+            case Rel.LE:
+                rel = lhs <= rhs[0]
+            case Rel.LE_MAX:
+                rel = z3.Or([lhs <= r for r in rhs])
+        if constraint.guard:
+            rel = z3.Implies(z3.And([self._lit(g) for g in constraint.guard]), rel)
+        into.add(rel)
+
+    @staticmethod
+    def _status_of(result: z3.CheckSatResult) -> Status:
+        if result == z3.sat:
+            return Status.SAT
+        if result == z3.unsat:
+            return Status.UNSAT
+        return Status.UNKNOWN
+
+    def _check(
+        self, into: _Z3Solver, lits: tuple[int, ...],
+        bound: tuple[Term, int] | None = None,
+    ) -> Status:
+        assumptions = [self._lit(g) for g in lits]
+        if bound is not None:
+            t, k = bound
+            assumptions.insert(0, self._to_z3(t) >= k)
+        return self._status_of(into.check(*assumptions))
+
+    def _value(self, into: _Z3Solver, objective: Term) -> int | None:
+        found = into.model().eval(self._to_z3(objective), model_completion=True)
+        return found.as_long() if z3.is_int_value(found) else None
+
+    def _maximum(
+        self, solver: _Z3Solver, objective: Term, lits: tuple[int, ...],
+    ) -> int | float:
+        if self.bisect:
+            return self._bisect(solver, objective, lits)
+        return self._optimize(solver, objective, lits)
+
+    def _optimize(
+        self, solver: _Z3Solver, objective: Term, lits: tuple[int, ...],
+    ) -> int | float:
+        """The maximum from ``Optimize``: one search, run by z3."""
+        assert isinstance(solver, z3.Optimize)
+        solver.push()
+        try:
+            handle = solver.maximize(self._to_z3(objective))
+            status = self._record(self._status_of(
+                solver.check(*[self._lit(g) for g in lits])))
+            if status is Status.UNSAT:
+                return -math.inf
+            if status is not Status.SAT:
+                return math.inf
+            bound = solver.upper(handle)
+            # an unbounded objective comes back as the symbolic `oo`
+            return bound.as_long() if z3.is_int_value(bound) else math.inf
+        finally:
+            solver.pop()

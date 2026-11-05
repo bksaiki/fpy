@@ -10,7 +10,8 @@ out of the constraints and the store decidable.  What the variables mean is
 import math
 from collections.abc import Iterable, Sequence
 
-from .solver import Constraint, Rel, Solver, Term, Z3Solver, _Var
+from .backends import default_solver
+from .solver import Constraint, Rel, Solver, Term, _Var
 from .spaces import IndexSpaces, Key
 
 __all__ = ['DigitBoundStore']
@@ -72,7 +73,7 @@ class DigitBoundStore:
     every walk sharing them shares it."""
 
     def __init__(self, solver: Solver | None = None) -> None:
-        self._solver = solver if solver is not None else Z3Solver()
+        self._solver = solver if solver is not None else default_solver()
         self._constraints = []
         self._answers = {}
         self._decisions = {}
