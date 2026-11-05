@@ -1,7 +1,7 @@
 """
 MMA-Sim's backend agrees with FPy's kernels bit for bit.  Needs a GPU.
 
-    pytest -n 0 -q evaluation/gsm8k_speed/tests/test_mmasim_matmul.py
+    pytest -n 0 -q evaluation/gsm8k/tests/test_mmasim_matmul.py
 """
 
 import mmasim_matmul

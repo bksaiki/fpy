@@ -25,7 +25,7 @@ it). The model and WikiText-2 download from Hugging Face on first use.
 
 ## Running
 
-`python evaluation/run.py evaluation/results --disable precision --disable blas --disable gsm8k`
+`python evaluation/run.py evaluation/results --disable analysis --disable blas --disable gsm8k`
 runs the three steps below; by hand:
 
 ```sh

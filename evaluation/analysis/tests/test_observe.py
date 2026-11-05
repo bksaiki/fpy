@@ -1,7 +1,7 @@
 """
 Observed values against static bounds, on programs whose answers are known.
 
-    pytest -n 8 evaluation/analysis_precision/tests/test_observe.py
+    pytest -n 8 evaluation/analysis/tests/test_observe.py
 """
 
 

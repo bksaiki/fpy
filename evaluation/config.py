@@ -15,7 +15,7 @@ from generator.catalog import CATALOG
 import fpy2 as fp
 
 MODEL = 'Qwen/Qwen3.5-0.8B'
-"""The LLM the LLM evaluations run (`dse/llm`, `gsm8k_speed`); of `swap.MODELS`."""
+"""The LLM the LLM evaluations run (`dse/llm`, `gsm8k`); of `swap.MODELS`."""
 
 
 # ---------------------------------------------------------------------------
@@ -115,16 +115,16 @@ BLAS_FORMATS: dict[str, tuple[fp.Context, list[int]]] = {
 
 
 # ---------------------------------------------------------------------------
-# `analysis_precision`
+# `analysis`
 
-PRECISION_INPUTS_PER_DESIGN = 5000
-PRECISION_SEED = 0
-PRECISION_INPUTS = 'mixed'
+ANALYSIS_INPUTS_PER_DESIGN = 5000
+ANALYSIS_SEED = 0
+ANALYSIS_INPUTS = 'mixed'
 """Input source (`inputs.SOURCES`): random, every fifth adversarial."""
 
 
 # ---------------------------------------------------------------------------
-# `gsm8k_speed`
+# `gsm8k`
 
 GSM8K_DESIGNS = ('nv.hopper.bf16.f32',)
 GSM8K_PROBLEMS = 32

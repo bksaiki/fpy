@@ -2,10 +2,10 @@
 Measures format inference's precision, with and without digit bounds, on the
 MMA-Sim designs: each site's static bound against every value it takes.
 
-    python evaluation/analysis_precision/run.py           # everything, about 7 min
-    python evaluation/analysis_precision/run.py volta     # matching designs only
+    python evaluation/analysis/run.py           # everything, about 7 min
+    python evaluation/analysis/run.py volta     # matching designs only
 
-Replaces the results directory (`evaluation/results/precision/`, or `-o DIR`)
+Replaces the results directory (`evaluation/results/analysis/`, or `-o DIR`)
 with `<design>.json` per design, an `anf/` pass (sites counted with every
 scalar subexpression named; analysis only), and `report.py`'s tables, figure
 and `precision-summary.txt`.  Exits 1 if any observed value lies outside its
@@ -44,7 +44,7 @@ from observe import (
     statics,
 )
 
-RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'precision'
+RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'analysis'
 
 
 def _foreign(out: Path) -> list[str]:
@@ -136,10 +136,10 @@ def main(argv: list[str]) -> int:
                     help='only designs whose name contains one of these')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the results directory, replaced (default %(default)s)')
-    ap.add_argument('-n', '--inputs-per-design', type=int, default=config.PRECISION_INPUTS_PER_DESIGN,
+    ap.add_argument('-n', '--inputs-per-design', type=int, default=config.ANALYSIS_INPUTS_PER_DESIGN,
                     help='inputs per design (default %(default)s)')
-    ap.add_argument('-s', '--seed', type=int, default=config.PRECISION_SEED, help='seed (default %(default)s)')
-    ap.add_argument('--inputs', choices=sorted(SOURCES), default=config.PRECISION_INPUTS,
+    ap.add_argument('-s', '--seed', type=int, default=config.ANALYSIS_SEED, help='seed (default %(default)s)')
+    ap.add_argument('--inputs', choices=sorted(SOURCES), default=config.ANALYSIS_INPUTS,
                     help='input source (default %(default)s)')
     ap.add_argument('-j', '--jobs', type=int, default=8,
                     help='measure in this many processes (default 8)')

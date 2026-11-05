@@ -2,7 +2,7 @@
 `lmeval.py` on a tiny random Qwen3.5: lm-eval's records, and their
 comparison with `run.py`'s.  Needs a GPU.
 
-    pytest -n 0 -q evaluation/gsm8k_speed/tests/test_lmeval.py
+    pytest -n 0 -q evaluation/gsm8k/tests/test_lmeval.py
 """
 
 import json

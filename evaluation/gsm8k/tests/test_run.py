@@ -2,7 +2,7 @@
 `run.py --smoke` on a tiny random Qwen3.5: every backend writes its record,
 `fpy` and `mmasim` agree, and the report is written.  Needs a GPU.
 
-    pytest -n 0 -q evaluation/gsm8k_speed/tests/test_run.py
+    pytest -n 0 -q evaluation/gsm8k/tests/test_run.py
 """
 
 import json

@@ -1,7 +1,7 @@
 """
 The tracer sees every value at every site, keyed per call path.
 
-    pytest -n 8 evaluation/analysis_precision/tests/test_trace.py
+    pytest -n 8 evaluation/analysis/tests/test_trace.py
 """
 
 

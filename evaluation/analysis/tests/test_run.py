@@ -1,7 +1,7 @@
 """
 The driver on one design: a record per site, both analyses, nothing unsound.
 
-    pytest -n 8 evaluation/analysis_precision/tests/test_run.py
+    pytest -n 8 evaluation/analysis/tests/test_run.py
 """
 
 import json

@@ -3,8 +3,8 @@ GSM8K accuracy as lm-evaluation-harness reports it: its `gsm8k_cot` task
 (8-shot chain of thought, chat template, few-shot as turns, thinking off)
 on Qwen3.5-0.8B, with every linear layer computed by a backend.
 
-    python evaluation/gsm8k_speed/lmeval.py                      # torch and fpy, all 1319
-    python evaluation/gsm8k_speed/lmeval.py --against evaluation/results/gsm8k
+    python evaluation/gsm8k/lmeval.py                      # torch and fpy, all 1319
+    python evaluation/gsm8k/lmeval.py --against evaluation/results/gsm8k
 
 Replaces the output directory (`results-lmeval/` beside this file, or
 `-o DIR`) with `<backend>.json`: lm-eval's metrics, every sample, and the

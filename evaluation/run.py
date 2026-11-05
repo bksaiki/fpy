@@ -48,9 +48,9 @@ class Eval:
 
 
 EVALS = {
-    'precision': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'analysis_precision' / 'run.py'), '-o', str(d), *j]],
-        plot=lambda d: [[PY, str(HERE / 'analysis_precision' / 'report.py'), str(d)]],
+    'analysis': Eval(
+        run=lambda d, j: [[PY, str(HERE / 'analysis' / 'run.py'), '-o', str(d), *j]],
+        plot=lambda d: [[PY, str(HERE / 'analysis' / 'report.py'), str(d)]],
         done='precision-paper.json'),
     # `explore.py` and `plots.py` add `blas/` to the root they are given
     'blas': Eval(
@@ -58,8 +58,8 @@ EVALS = {
         plot=lambda d: [[PY, str(HERE / 'dse' / 'blas' / 'plots.py'), '--results', str(d.parent)]],
         done='blas-grid.csv'),
     'gsm8k': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'gsm8k_speed' / 'run.py'), '-o', str(d)]],
-        plot=lambda d: [[PY, str(HERE / 'gsm8k_speed' / 'report.py'), str(d)]],
+        run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d)]],
+        plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)]],
         done='gsm8k-speed.json'),
     'llm': Eval(
         # the manifest compiles one design at a time, so each compile time is its own

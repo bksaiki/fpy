@@ -14,10 +14,10 @@ and its record: `docs/todos/analysis-precision.md`.
 From the repository root, one command (about 8 minutes):
 
 ```sh
-.venv/bin/python evaluation/analysis_precision/run.py
+.venv/bin/python evaluation/analysis/run.py
 ```
 
-It replaces `evaluation/results/precision/` with:
+It replaces `evaluation/results/analysis/` with:
 
 - `<design>.json` per design: each site's inferred and observed parameters,
   under format inference alone and with digit bounds, over all inputs and
@@ -45,5 +45,5 @@ regenerates the tables and summary alone.
 ## Tests
 
 ```sh
-.venv/bin/python -m pytest -n 8 -q evaluation/analysis_precision/tests
+.venv/bin/python -m pytest -n 8 -q evaluation/analysis/tests
 ```

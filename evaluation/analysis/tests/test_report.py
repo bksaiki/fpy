@@ -1,7 +1,7 @@
 """
 The report from hand-written results.
 
-    pytest -n 8 evaluation/analysis_precision/tests/test_report.py
+    pytest -n 8 evaluation/analysis/tests/test_report.py
 """
 
 import json

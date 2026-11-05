@@ -1,7 +1,7 @@
 """
 Input sources draw well-formed, reproducible arguments.
 
-    pytest -n 8 evaluation/analysis_precision/tests/test_inputs.py
+    pytest -n 8 evaluation/analysis/tests/test_inputs.py
 """
 
 import math

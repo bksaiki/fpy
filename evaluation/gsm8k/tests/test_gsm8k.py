@@ -2,7 +2,7 @@
 GSM8K answer extraction, and batched generation against one prompt at a
 time.  The latter needs a GPU and Qwen3.5-0.8B.
 
-    pytest -n 0 -q evaluation/gsm8k_speed/tests/test_gsm8k.py
+    pytest -n 0 -q evaluation/gsm8k/tests/test_gsm8k.py
 """
 
 import batched

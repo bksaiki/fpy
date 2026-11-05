@@ -1,7 +1,7 @@
 """
 The report on hand-written records.
 
-    pytest -n 8 -q evaluation/gsm8k_speed/tests/test_report.py
+    pytest -n 8 -q evaluation/gsm8k/tests/test_report.py
 """
 
 import json

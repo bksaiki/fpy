@@ -2,9 +2,9 @@
 Times GSM8K on Qwen3.5-0.8B with every linear layer computed by a design:
 by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
 
-    python evaluation/gsm8k_speed/run.py                  # Hopper BF16, 32 problems, about 3.5 h
-    python evaluation/gsm8k_speed/run.py --smoke          # 2 problems, 8 tokens
-    python evaluation/gsm8k_speed/run.py -n 1319 --backends torch fpy
+    python evaluation/gsm8k/run.py                  # Hopper BF16, 32 problems, about 3.5 h
+    python evaluation/gsm8k/run.py --smoke          # 2 problems, 8 tokens
+    python evaluation/gsm8k/run.py -n 1319 --backends torch fpy
 
 Replaces the results directory (`evaluation/results/gsm8k/`, or `-o DIR`)
 with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.

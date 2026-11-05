@@ -3,7 +3,7 @@ Tables of `run.py`'s records: per backend and design, time, throughput,
 accuracy (`gsm8k_cot`'s two metrics, scored from the replies), agreement
 with MMA-Sim and speedup over it.
 
-    python evaluation/gsm8k_speed/report.py evaluation/results/gsm8k
+    python evaluation/gsm8k/report.py evaluation/results/gsm8k
 
 Writes, beside the records:
 
