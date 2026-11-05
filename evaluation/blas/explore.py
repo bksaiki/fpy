@@ -6,8 +6,10 @@ scores. Each design runs on the CPU as FPy's C++ for it, chained by
 `fpy2_models`' `<op>_gemm`.
 
 The table, `<results>/blas/blas-grid.csv` (`plots.py`), has a row per grid
-point and case (test, `n`, `s`): the point's columns, its error, and the FP32
-FMA loop's error on the same matrices.
+point and case (test, `n`, `s`): the point's columns, its error, the FP32
+FMA loop's error on the same matrices, and the seconds the point took in FPy
+(to C++), in the C++ compiler, and to grade. Its provenance has each stage's
+wall time.
 
     python evaluation/blas/explore.py
 """
@@ -16,6 +18,7 @@ import argparse
 import math
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -88,23 +91,26 @@ def to_cpp(d: generator.Design) -> dict:
     return out | {'seconds': time.perf_counter() - t0}
 
 
-def build(compiled: list[dict], out: Path, jobs: int) -> None:
+def build(compiled: list[dict], out: Path, jobs: int) -> dict[str, float]:
     """Each compiled design loaded as torch.ops.fpy2_models.<op> and <op>_gemm,
-    its translation units written as `generate_models.py` writes them."""
+    its translation units written as `generate_models.py` writes them, and
+    built from scratch; the seconds the C++ compiler took on each, by
+    operator."""
     os.environ['MAX_JOBS'] = str(jobs)
-    (out / 'models').mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(out, ignore_errors=True)
+    (out / 'models').mkdir(parents=True)
     sources = []
     for c in compiled:
         m = c['model']
         sources.append(out / f'{op(m)}.cpp')
-        for path, text in ((out / 'models' / m['file'], mm._translation_unit(m['name'], c['src'])),
-                           (sources[-1], generate_models._operator(op(m), m))):
-            # an unchanged file keeps its time, so ninja does not rebuild it
-            if not path.exists() or path.read_text() != text:
-                path.write_text(text)
+        (out / 'models' / m['file']).write_text(mm._translation_unit(m['name'], c['src']))
+        sources[-1].write_text(generate_models._operator(op(m), m))
     cpp_extension.load('fpy2_blas', [str(s) for s in sources], extra_cflags=CXXFLAGS,
                        extra_include_paths=[str(COMMON / 'fpy2_models' / 'csrc')],
                        build_directory=str(out), is_python_module=False)
+    # ninja's log: a line per output, `start  end  mtime  output  hash`, in milliseconds
+    lines = (line.split('\t') for line in (out / '.ninja_log').read_text().splitlines()[1:])
+    return {Path(o).stem: (int(end) - int(start)) / 1000 for start, end, _, o, _ in lines if o.endswith('.o')}
 
 
 def op(model: dict) -> str:
@@ -235,9 +241,16 @@ def main(argv: list[str]) -> int:
 
     pts = sweep.grid()
     designs = [FMA, *(p.design for p in pts)]
+    # each stage's wall time
+    wall = {}
+    t0 = time.perf_counter()
     compiled = dict(zip(designs, mm.in_processes(to_cpp, designs, args.jobs)))
-    build([c for c in compiled.values() if 'src' in c], args.results / 'blas' / 'build', args.jobs)
+    wall['fpy'] = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    cxx = build([c for c in compiled.values() if 'src' in c], args.results / 'blas' / 'build', args.jobs)
+    wall['cxx'] = time.perf_counter() - t0
     models = {d: c['model'] for d, c in compiled.items() if 'src' in c}
+    t0 = time.perf_counter()
 
     rows = []
     for f, (fmt, ss) in FORMATS.items():
@@ -249,10 +262,11 @@ def main(argv: list[str]) -> int:
             point = {'anchor': p.anchor, 'format': f, 'value': p.value, 'is_anchor': p.is_anchor,
                      'status': 'refused' if 'reason' in cpp else 'ok',
                      'reason': cpp.get('reason', ''), 'design': generator.name(p.design),
-                     **sweep._about(p.design), 'compile_seconds': cpp['seconds']}
+                     **sweep._about(p.design), 'fpy_seconds': cpp['seconds']}
             if 'reason' in cpp:
                 rows.append(point)
                 continue
+            point['cxx_seconds'] = cxx[op(cpp['model'])]
             t0 = time.perf_counter()
             errs = [error(models[p.design], c, args.jobs) for c in cases]
             point['seconds'] = time.perf_counter() - t0
@@ -260,13 +274,16 @@ def main(argv: list[str]) -> int:
                      for c, e, b in zip(cases, errs, fma)]
             print(f'{p.anchor} {p.value}: worst {max(errs):.3g} in {point["seconds"]:.1f}s', flush=True)
 
+    wall['grade'] = time.perf_counter() - t0
+
     table = args.results / 'blas' / 'blas-grid.csv'
     outputs.write_csv(table, rows)
     outputs.write_json(table.with_suffix('.provenance.json'), {
         'argv': sys.argv, **outputs.commit(), 'machine': platform.platform(),
         'cxx': subprocess.run([os.environ.get('CXX', 'c++'), '--version'], capture_output=True,
                               text=True, check=True).stdout.splitlines()[0],
-        'settings': {k: v if isinstance(v, int) else str(v) for k, v in vars(args).items()}})
+        'settings': {k: v if isinstance(v, int) else str(v) for k, v in vars(args).items()},
+        'seconds': wall | {'total': sum(wall.values())}})
     print(f'{len(pts)} points, {sum(r["status"] == "refused" for r in rows)} refused: {table}')
     return 0
 
