@@ -2,7 +2,7 @@
 The BLAS evaluation's figure and numbers, from `explore.py`'s table, drawn as
 `plot_grid.py` draws the grid's KL.
 
-    python evaluation/blas/plots.py    # -> evaluation/results/blas/plots/k.{png,pdf}; numbers on stdout
+    python evaluation/blas/plots.py    # -> evaluation/results/blas/plots/{k,compile}.{png,pdf}; numbers on stdout
 """
 
 import argparse
@@ -107,6 +107,74 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
     return fig
 
 
+def compile_times(results: Path) -> list[dict]:
+    """Each point of `explore.py`'s table, graded or refused, with the seconds
+    FPy took to compile it to C++."""
+    points: dict[str, dict] = {}
+    with (results / 'blas' / 'blas-grid.csv').open() as f:
+        for r in csv.DictReader(f):
+            points.setdefault(r['design'], {
+                'anchor': r['anchor'], 'format': r['format'], 'is_anchor': r['is_anchor'] == 'True',
+                'F': int(r['F']), 'join': r['join'], 'refused': r['status'] == 'refused',
+                'seconds': float(r['fpy_seconds'])})
+    return list(points.values())
+
+
+def compile_figure(points: list[dict]) -> plt.Figure:
+    """FPy's compile time, a bar per design, a panel per input format: grouped
+    by generation, and within each by join, then k; hatched: `c` added after
+    the products; a cross on the axis: failed, its time not a compile's; each
+    generation's own design ringed."""
+    groups = {f: [a for a in BASES if any(d['anchor'] == a and d['format'] in fmts for d in points)]
+              for f, fmts in PANELS.items()}
+    widths = [sum(len([d for d in points if d['anchor'] == a]) + 2 for a in anchors) for anchors in groups.values()]
+    fig, axes = plt.subplots(1, len(PANELS), figsize=(13, 4.2), layout='constrained', sharey=True,
+                             gridspec_kw={'width_ratios': widths})
+    for (f, anchors), ax in zip(groups.items(), axes):
+        x, ticks = 0, []
+        for a in anchors:
+            color, _ = _look(a)
+            mine = sorted((d for d in points if d['anchor'] == a),
+                          key=lambda d: (list(JOINS).index(d['join']), d['F']))
+            for d in mine:
+                if d['refused']:
+                    ax.scatter(x, 0, s=40, marker='x', color=color, linewidth=1.5, clip_on=False, zorder=3)
+                    x += 1
+                    continue
+                hatch = '////' if d['join'] == 'separate' else None
+                ax.bar(x, d['seconds'], width=0.7, color='white' if hatch else color,
+                       edgecolor=color, hatch=hatch, linewidth=0.9)
+                if d['is_anchor']:
+                    ax.scatter(x, d['seconds'] + 1.5, s=100, facecolor='none', edgecolor=color, linewidth=1.5)
+                x += 1
+            ticks.append(x - (len(mine) + 1) / 2)
+            x += 2
+        ax.set_xticks(ticks, [BASES[a][1] for a in anchors])
+        ax.set_xlim(-1.5, x - 1.5)
+        ax.set_title(f, loc='left', **LARGE)
+        ax.tick_params(colors=SMALL['color'], labelsize=SMALL['fontsize'])
+        ax.tick_params(axis='x', length=0)
+        ax.grid(axis='y', color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        for side in ('top', 'right'):
+            ax.spines[side].set_visible(False)
+    # limits widened to the nearest ticks
+    hi = axes[0].get_ylim()[1]
+    axes[0].set_ylim(0, min(t for t in axes[0].yaxis.get_major_locator().tick_values(0, hi) if t >= hi))
+    axes[0].set_ylabel('FPy to C++ (s)', **LARGE)
+    swatch = {'with the products': {'facecolor': MUTED}, 'after the products': {'facecolor': 'white', 'hatch': '////'}}
+    handles = [plt.Line2D([], [], linestyle='None', label='c added'),
+               *(plt.Rectangle((0, 0), 1, 1, edgecolor=MUTED, label=lab, **swatch[lab]) for _, lab in JOINS.values()),
+               plt.Line2D([], [], linestyle='None', label=' '),
+               plt.Line2D([], [], linestyle='None', marker='x', markersize=7, markeredgewidth=1.5, color=MUTED,
+                          label='failed')]
+    leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles),
+                     fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False,
+                     handlelength=2.4, columnspacing=1.2)
+    leg.get_texts()[0].set(fontweight='bold', **LARGE)
+    return fig
+
+
 def numbers(points: list[dict], fma: dict[str, dict]) -> None:
     """Each generation's own design's and the FP32 FMA loop's `eta`, and how
     many designs are grade A."""
@@ -127,8 +195,10 @@ def main(argv: list[str]) -> int:
     out = args.results / 'blas' / 'plots'
     out.mkdir(parents=True, exist_ok=True)
     fig = figure(points, fma)
+    times = compile_figure(compile_times(args.results))
     for ext in ('png', 'pdf'):
         fig.savefig(out / f'k.{ext}', dpi=200)
+        times.savefig(out / f'compile.{ext}', dpi=200)
     numbers(points, fma)
     return 0
 
