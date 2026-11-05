@@ -1,9 +1,9 @@
 """
 Grade MMA designs as Grading the BLAS (GtB) grades a GEMM: each design of
-`sweep.grid()` multiplies GtB's Test 1c and 2c matrices, scored by the worst
-componentwise backward error `|C^ - C| / (|A| |B|)` over the entries GtB
-scores. Each design runs on the CPU as FPy's C++ for it, chained by
-`fpy2_models`' `<op>_gemm`.
+`sweep.grid()` multiplies GtB's Test 1c and 2c matrices, `N` by `N`, scored
+by the worst componentwise backward error `|C^ - C| / (|A| |B|)` over the
+entries GtB scores. Each design runs on the CPU as FPy's C++ for it, chained
+by `fpy2_models`' `<op>_gemm`.
 
 The table, `<results>/blas/blas-grid.csv` (`plots.py`), has a row per grid
 point and case (test, `n`, `s`): the point's columns, its error, the FP32
@@ -52,7 +52,7 @@ RESULTS = ROOT / 'evaluation' / 'results'
 CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
             '-DTORCH_TARGET_VERSION=0x020a000000000000']
 SEED = 0
-NS = [32, 64, 128, 256, 512, 1024]
+N = 1024
 FP32_UN = 2.0 ** -126
 FORMATS = {
     # name: (context, s)
@@ -215,7 +215,7 @@ def case(test: str, n: int, s: int, fmt) -> Case:
     exact = (A.double() @ B.double())[I, J]
     size = (A.double().abs() @ B.double().abs())[I, J]
     if test == '1c':
-        # below FP32's normals, even a correctly rounded result misses grade A
+        # below FP32's normals, even a correctly rounded result has a large relative error
         keep = (exact == 0) | (exact.abs() >= FP32_UN)
         I, J, exact, size = I[keep], J[keep], exact[keep], size[keep]
     return Case(test, n, s, A, B.T.contiguous(), I, J, exact, size)
@@ -237,8 +237,6 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 1,
                     help='processes compiling the designs, and threads grading them '
                     '(default: every CPU)')
-    ap.add_argument('--no-grade', action='store_true',
-                    help='compile and build only: a row per point, its times but no errors')
     args = ap.parse_args(argv)
 
     pts = sweep.grid()
@@ -256,7 +254,7 @@ def main(argv: list[str]) -> int:
 
     rows = []
     for f, (fmt, ss) in FORMATS.items():
-        cases = [] if args.no_grade else [case(test, n, s, fmt) for test in ('1c', '2c') for n in NS for s in ss]
+        cases = [case(test, N, s, fmt) for test in ('1c', '2c') for s in ss]
         fma = [error(models[FMA], c, args.jobs) for c in cases]
         mine = [p for p in pts if p.design.a == fmt]
         for p in mine:
@@ -269,9 +267,6 @@ def main(argv: list[str]) -> int:
                 rows.append(point)
                 continue
             point['cxx_seconds'] = cxx[op(cpp['model'])]
-            if args.no_grade:
-                rows.append(point)
-                continue
             t1 = time.perf_counter()
             errs = [error(models[p.design], c, args.jobs) for c in cases]
             point['seconds'] = time.perf_counter() - t1
@@ -279,8 +274,7 @@ def main(argv: list[str]) -> int:
                      for c, e, b in zip(cases, errs, fma)]
             print(f'{p.anchor} {p.value}: worst {max(errs):.3g} in {point["seconds"]:.1f}s', flush=True)
 
-    if not args.no_grade:
-        wall['grade'] = time.perf_counter() - t0
+    wall['grade'] = time.perf_counter() - t0
 
     table = args.results / 'blas' / 'blas-grid.csv'
     outputs.write_csv(table, rows)
