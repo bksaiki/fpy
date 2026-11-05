@@ -22,8 +22,10 @@ import time
 from pathlib import Path
 
 _EVAL = Path(__file__).resolve().parents[2]
-# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`
+# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`;
+# `evaluation` last, for `config`
 sys.path[:0] = [str(_EVAL / 'common' / 'mma'), str(_EVAL.parent / 'examples' / 'mmasim')]
+sys.path.append(str(_EVAL))
 
 import cli
 from core import generate, swap

@@ -6,6 +6,7 @@ time.  The latter needs a GPU and Qwen3.5-0.8B.
 """
 
 import batched
+import config
 import gsm8k
 import pytest
 import torch
@@ -48,8 +49,8 @@ def test_shared():
 def test_batched_decodes_as_one_at_a_time():
     from transformers import AutoTokenizer
 
-    model, _ = swap.load()   # fp32: the unpatched model
-    tok = AutoTokenizer.from_pretrained(swap.MODEL)
+    model, _ = swap.load(config.MODEL)   # fp32: the unpatched model
+    tok = AutoTokenizer.from_pretrained(config.MODEL)
     eos = generate.stop_tokens(model, tok)
     prompts = [generate.encode(tok, gsm8k.messages(q)) for q in QUESTIONS]
     alone = [generate.greedy(model, p, 24, eos) for p in prompts]

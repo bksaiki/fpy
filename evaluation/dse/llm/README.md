@@ -20,10 +20,13 @@ uv pip install torch triton -r evaluation/dse/llm/requirements.txt
 it.) A CUDA GPU is required. Do not install `causal-conv1d` or
 `flash-linear-attention`: `transformers` would then run Qwen3.5's linear
 attention through their kernels, and every result would move. Everything below runs from `evaluation/dse/llm` and
-writes under `results/` (`--results` to change it). The model and WikiText-2
-download from Hugging Face on first use.
+writes under `evaluation/results/llm/`, `results/` below (`--results` to change
+it). The model and WikiText-2 download from Hugging Face on first use.
 
 ## Running
+
+`python evaluation/run.py evaluation/results --disable precision --disable blas --disable gsm8k`
+runs the three steps below; by hand:
 
 ```sh
 cd evaluation/dse/llm
@@ -55,7 +58,7 @@ added after the products. Run it detached, e.g. with the three commands
 above in `run.sh`:
 
 ```sh
-tmux new-session -d -s grid "bash run.sh 2>&1 | tee results/sweep/grid.log"
+tmux new-session -d -s grid "bash run.sh 2>&1 | tee ../../results/llm/sweep/grid.log"
 ```
 
 ## Outputs
@@ -90,6 +93,7 @@ compiler's sources; delete it to measure compile times afresh.
 To replot elsewhere, the table is all `plot_grid.py` reads:
 
 ```sh
-tar czf grid-data.tar.gz results/sweep/sweep-grid-Qwen3.5-0.8B.* results/sweep/manifest.csv
+tar czf grid-data.tar.gz -C ../../results/llm sweep/sweep-grid-Qwen3.5-0.8B.csv \
+    sweep/sweep-grid-Qwen3.5-0.8B.provenance.json sweep/manifest.csv
 python plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
 ```

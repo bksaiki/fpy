@@ -46,8 +46,6 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
 MODELS = ('Qwen/Qwen3.5-0.8B', 'Qwen/Qwen3-0.6B')
 """The models these scripts run, BF16 masters from the Hub."""
 
-MODEL = MODELS[0]
-
 _ROWS = 256
 """Rows per block of an exact run's FP64 product."""
 
@@ -276,7 +274,7 @@ def use(run: Run, model: torch.nn.Module, scheme: quant.Scheme) -> None:
     run.ignore = set() if scheme.name == BF16.name else {id(dict(model.named_modules())['lm_head'].weight)}
 
 
-def load(name: str = MODEL, scheme: quant.Scheme = BF16) -> tuple[torch.nn.Module, Run]:
+def load(name: str, scheme: quant.Scheme = BF16) -> tuple[torch.nn.Module, Run]:
     """*name*'s causal LM from the Hub, in FP32 on the GPU, patched
     (:func:`patch`) and under *scheme* (:func:`use`)."""
     from transformers import AutoModelForCausalLM

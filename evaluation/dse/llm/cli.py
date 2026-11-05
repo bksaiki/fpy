@@ -9,11 +9,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import config
 import torch
 from core import kernels, outputs, quant, swap
 
-RESULTS = Path('results')
-"""The outputs' root, from `evaluation/dse/llm` (gitignored): `cache/` for
+RESULTS = Path(__file__).resolve().parents[2] / 'results' / 'llm'
+"""The outputs' root (gitignored): `cache/` for
 artifacts reused across runs, `plots/` for plots, a run's outputs in its own
 directory."""
 
@@ -22,7 +23,7 @@ def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
     """The options every script shares: the model, designs to register, the
     outputs' root, and (with *seed*) the seed of its random subsets
     (`workloads.pick`)."""
-    ap.add_argument('--model', choices=swap.MODELS, default=swap.MODEL,
+    ap.add_argument('--model', choices=swap.MODELS, default=config.MODEL,
                     help='the model, from the Hub, in BF16 (default: %(default)s)')
     ap.add_argument('--register', type=Path, action='append', default=[], metavar='FILE',
                     help='a Python file whose register() adds designs (kernels.register) '
@@ -30,7 +31,7 @@ def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
     ap.add_argument('--results', type=Path, default=RESULTS,
                     help='the outputs\' root: <results>/cache, <results>/plots (default: %(default)s)')
     if seed:
-        ap.add_argument('--seed', type=int, default=0,
+        ap.add_argument('--seed', type=int, default=config.LLM_SEED,
                         help='seed of the random subsets (default: %(default)s)')
 
 

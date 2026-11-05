@@ -6,7 +6,7 @@ by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
     python evaluation/gsm8k_speed/run.py --smoke          # 2 problems, 8 tokens
     python evaluation/gsm8k_speed/run.py -n 1319 --backends torch fpy
 
-Replaces the results directory (`results/` beside this file, or `-o DIR`)
+Replaces the results directory (`evaluation/results/gsm8k/`, or `-o DIR`)
 with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.
 Exits 1 if `fpy` and `mmasim` emit different tokens.
 """
@@ -25,15 +25,17 @@ from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examples' / 'mmasim')]
+sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
 import batched
+import config
 import gsm8k
 import mmasim_matmul
 import report
 import torch
 from core import generate, kernels, swap
 
-RESULTS = Path(__file__).resolve().parent / 'results'
+RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'gsm8k'
 BACKENDS = ('torch', 'fpy', 'mmasim')
 
 
@@ -105,17 +107,20 @@ def _foreign(out: Path) -> list[str]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('designs', nargs='*', default=['nv.hopper.bf16.f32'],
+    ap.add_argument('designs', nargs='*', default=list(config.GSM8K_DESIGNS),
                     choices=sorted(mmasim_matmul.OPERATIONS), metavar='DESIGN',
-                    help=f'designs (default nv.hopper.bf16.f32; of {", ".join(mmasim_matmul.OPERATIONS)})')
+                    help=f'designs (default {" ".join(config.GSM8K_DESIGNS)}; of {", ".join(mmasim_matmul.OPERATIONS)})')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
-                    help='the results directory, replaced (default results/ here)')
-    ap.add_argument('-n', '--problems', type=int, default=32, help='test problems (default 32)')
-    ap.add_argument('--max-new', type=int, default=256, help='tokens per reply at most (default 256)')
-    ap.add_argument('--batch', type=int, default=32, help='problems per batch (default 32)')
+                    help='the results directory, replaced (default %(default)s)')
+    ap.add_argument('-n', '--problems', type=int, default=config.GSM8K_PROBLEMS,
+                    help='test problems (default %(default)s)')
+    ap.add_argument('--max-new', type=int, default=config.GSM8K_MAX_NEW,
+                    help='tokens per reply at most (default %(default)s)')
+    ap.add_argument('--batch', type=int, default=config.GSM8K_BATCH,
+                    help='problems per batch (default %(default)s)')
     ap.add_argument('--backends', nargs='+', choices=BACKENDS, default=list(BACKENDS),
                     help='default: all')
-    ap.add_argument('--model', default=swap.MODEL, help=f'default {swap.MODEL}')
+    ap.add_argument('--model', default=config.MODEL, help='default %(default)s')
     ap.add_argument('--smoke', action='store_true', help='2 problems, 8 tokens')
     args = ap.parse_args(argv)
     if args.smoke:

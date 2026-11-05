@@ -2,7 +2,7 @@
 The precision evaluation's tables, figure and summary, from `run.py`'s results;
 `run.py` calls it last.
 
-    python evaluation/analysis_precision/report.py evaluation/analysis_precision/results
+    python evaluation/analysis_precision/report.py evaluation/results/precision
 
 Writes into the results directory:
 

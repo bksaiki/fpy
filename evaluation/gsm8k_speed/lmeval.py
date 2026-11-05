@@ -4,7 +4,7 @@ GSM8K accuracy as lm-evaluation-harness reports it: its `gsm8k_cot` task
 on Qwen3.5-0.8B, with every linear layer computed by a backend.
 
     python evaluation/gsm8k_speed/lmeval.py                      # torch and fpy, all 1319
-    python evaluation/gsm8k_speed/lmeval.py --against evaluation/gsm8k_speed/results
+    python evaluation/gsm8k_speed/lmeval.py --against evaluation/results/gsm8k
 
 Replaces the output directory (`results-lmeval/` beside this file, or
 `-o DIR`) with `<backend>.json`: lm-eval's metrics, every sample, and the
@@ -23,7 +23,9 @@ from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examples' / 'mmasim')]
+sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
+import config
 import gsm8k
 import mmasim_matmul
 import report
@@ -76,10 +78,10 @@ def compare(lmeval: dict[str, Any], ours: dict[str, Any]) -> dict[str, Any]:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('--backends', nargs='+', choices=('torch', 'fpy'), default=['torch', 'fpy'])
-    ap.add_argument('--design', default='nv.hopper.bf16.f32', help='for fpy (default %(default)s)')
+    ap.add_argument('--design', default=config.GSM8K_DESIGNS[0], help='for fpy (default %(default)s)')
     ap.add_argument('--limit', type=int, help='the first LIMIT problems only (default all)')
-    ap.add_argument('--batch', type=int, default=32, help='default 32')
-    ap.add_argument('--model', default=swap.MODEL, help=f'default {swap.MODEL}')
+    ap.add_argument('--batch', type=int, default=config.GSM8K_BATCH, help='default %(default)s')
+    ap.add_argument('--model', default=config.MODEL, help='default %(default)s')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the output directory, replaced (default results-lmeval/ here)')
     ap.add_argument('--against', metavar='DIR', type=Path, help="run.py's results to compare with")

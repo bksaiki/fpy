@@ -67,7 +67,7 @@ def patch(model: torch.nn.Module) -> Run:
     return _extend(swap.patch(model))
 
 
-def load(name: str = swap.MODEL) -> tuple[torch.nn.Module, Run]:
+def load(name: str) -> tuple[torch.nn.Module, Run]:
     """:func:`swap.load`, with a :class:`Run` that has the `mmasim` modes."""
     model, run = swap.load(name)
     return model, _extend(run)

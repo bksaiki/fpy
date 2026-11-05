@@ -1,6 +1,6 @@
 """
 Grade MMA designs as Grading the BLAS (GtB) grades a GEMM: each design of
-`sweep.grid()` multiplies GtB's Test 1c and 2c matrices, scored by the worst
+`config.grid()` multiplies GtB's Test 1c and 2c matrices, scored by the worst
 componentwise backward error `|C^ - C| / (|A| |B|)` over the entries GtB
 scores. Each design runs on the CPU as FPy's C++ for it, chained by
 `fpy2_models`' `<op>_gemm`.
@@ -27,15 +27,15 @@ from torch.utils import cpp_extension
 
 ROOT = Path(__file__).resolve().parents[3]
 COMMON = ROOT / 'evaluation' / 'common'
-# `dse/llm`, for `sweep`; `common/mma`, for `core`, `compile` and `generator`;
-# `examples/mmasim`, for `models`
-sys.path[:0] = [str(ROOT / 'evaluation' / 'dse' / 'llm'), str(COMMON / 'mma'),
-                str(COMMON / 'fpy2_models'), str(ROOT / 'examples' / 'mmasim')]
+# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`;
+# `evaluation` last, for `config`
+sys.path[:0] = [str(COMMON / 'mma'), str(COMMON / 'fpy2_models'), str(ROOT / 'examples' / 'mmasim')]
+sys.path.append(str(ROOT / 'evaluation'))
 
 import compile as mm
+import config
 import generate_models
 import generator
-import sweep
 from core import outputs, quant
 from generator.catalog import CATALOG
 
@@ -49,16 +49,7 @@ RESULTS = ROOT / 'evaluation' / 'results'
 # fpy2_models' flags (setup.py): the models set rounding modes with `fesetround`
 CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
             '-DTORCH_TARGET_VERSION=0x020a000000000000']
-SEED = 0
-NS = [32, 64, 128, 256, 512, 1024]
 FP32_UN = 2.0 ** -126
-FORMATS = {
-    # name: (context, s)
-    'BF16': (fp.BF16, [0, 11, 23, 34, 46, 57]),
-    'E4M3': (fp.MX_E4M3, list(range(7))),
-    # FNUZ tops out at 240, below 6 * 2^6
-    'E4M3FNUZ': (fp.S1E4M3, list(range(6))),
-}
 # graded on every format's matrices, beside each point
 FMA = CATALOG['fp32 (fma)']
 
@@ -135,9 +126,9 @@ def _mask(n: int, k: int, g: torch.Generator) -> torch.Tensor:
 
 def test_1c(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """A, B, and the rows and columns of the target entries."""
-    g = torch.Generator().manual_seed(SEED)
+    g = torch.Generator().manual_seed(config.BLAS_SEED)
     A, B = torch.randn(n, n, generator=g), torch.randn(n, n, generator=g)
-    g = torch.Generator().manual_seed(SEED)
+    g = torch.Generator().manual_seed(config.BLAS_SEED)
     rows, cols = torch.randperm(n, generator=g)[:n // 2], torch.randperm(n, generator=g)[:n // 2]
     tiny = _mask(n // 2, n // 4, g)
     for r, c, has_tiny in zip(rows.tolist(), cols.tolist(), tiny.tolist()):
@@ -155,7 +146,7 @@ def test_1c(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, t
 
 def test_2b(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Products from about 2^-2s to 2^2s in every entry."""
-    g = torch.Generator().manual_seed(SEED)
+    g = torch.Generator().manual_seed(config.BLAS_SEED)
     x = 1 + torch.rand(n, generator=g)
     # from -s + 2s/n to s, truncated as GtB's conversion to int does
     e = torch.trunc((torch.arange(n) - n // 2 + 1) * (s / (n // 2)))
@@ -163,7 +154,7 @@ def test_2b(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor]:
     a0, b0 = torch.ldexp(x, e), torch.ldexp(x, -e)
     shift = (torch.arange(n) - torch.arange(n)[:, None]) % n  # (j - i) mod n
     A, B = a0[shift], b0[shift.T]
-    g = torch.Generator().manual_seed(SEED)
+    g = torch.Generator().manual_seed(config.BLAS_SEED)
     p1, p2, p3 = (torch.randperm(n, generator=g) for _ in range(3))
     return A[p1][:, p3], B[p3][:, p2]
 
@@ -171,7 +162,7 @@ def test_2b(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor]:
 def test_2c(n: int, s: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Test 2b's, a quarter of the values in a quarter of the rows and columns negated."""
     A, B = test_2b(n, s)
-    g = torch.Generator().manual_seed(SEED)
+    g = torch.Generator().manual_seed(config.BLAS_SEED)
     for i in _mask(n, n // 4, g).nonzero().flatten().tolist():
         A[i, _mask(n, n // 4, g)] *= -1
     for j in _mask(n, n // 4, g).nonzero().flatten().tolist():
@@ -234,15 +225,15 @@ def main(argv: list[str]) -> int:
                     '(default: every CPU)')
     args = ap.parse_args(argv)
 
-    pts = sweep.grid()
+    pts = config.grid()
     designs = [FMA, *(p.design for p in pts)]
     compiled = dict(zip(designs, mm.in_processes(to_cpp, designs, args.jobs)))
     build([c for c in compiled.values() if 'src' in c], args.results / 'blas' / 'build', args.jobs)
     models = {d: c['model'] for d, c in compiled.items() if 'src' in c}
 
     rows = []
-    for f, (fmt, ss) in FORMATS.items():
-        cases = [case(test, n, s, fmt) for test in ('1c', '2c') for n in NS for s in ss]
+    for f, (fmt, ss) in config.BLAS_FORMATS.items():
+        cases = [case(test, n, s, fmt) for test in ('1c', '2c') for n in config.BLAS_NS for s in ss]
         fma = [error(models[FMA], c, args.jobs) for c in cases]
         mine = [p for p in pts if p.design.a == fmt]
         for p in mine:
@@ -250,7 +241,7 @@ def main(argv: list[str]) -> int:
             point = {'anchor': p.anchor, 'format': f, 'value': p.value, 'is_anchor': p.is_anchor,
                      'status': 'refused' if 'reason' in cpp else 'ok',
                      'reason': cpp.get('reason', ''), 'design': generator.name(p.design),
-                     **sweep._about(p.design), 'compile_seconds': cpp['seconds']}
+                     **p.about, 'compile_seconds': cpp['seconds']}
             if 'reason' in cpp:
                 rows.append(point)
                 continue

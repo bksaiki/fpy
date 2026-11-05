@@ -17,7 +17,7 @@ From the repository root, one command (about 8 minutes):
 .venv/bin/python evaluation/analysis_precision/run.py
 ```
 
-It replaces `evaluation/analysis_precision/results/` with:
+It replaces `evaluation/results/precision/` with:
 
 - `<design>.json` per design: each site's inferred and observed parameters,
   under format inference alone and with digit bounds, over all inputs and

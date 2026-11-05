@@ -1,8 +1,9 @@
-"""The grid (`sweep.py`) and its plot (`plot_grid.py`), without running them."""
+"""The grid (`config.grid`), its registration (`sweep.py`) and its plot (`plot_grid.py`), without running them."""
 
 import importlib.util
 from pathlib import Path
 
+import config
 import generator
 from core import kernels
 
@@ -15,7 +16,7 @@ _SPEC.loader.exec_module(sweep)
 
 def test_every_point_is_a_design(registry: None) -> None:
     """None invalid; `register()` adds each, and again without a clash."""
-    pts = sweep.grid()
+    pts = config.grid()
     assert not [p for p in pts if generator.invalid(p.design)]
     sweep.register()
     assert {generator.name(p.design) for p in pts} <= set(kernels.TILES)
@@ -47,10 +48,10 @@ def test_the_grid_is_113_designs() -> None:
     at its own alone, each also with its join swapped: 113, each distinct,
     each anchor's own among them, its accumulator its own; every separate
     join keeps CDNA3's 7 guard bits."""
-    pts = sweep.grid()
+    pts = config.grid()
     assert len(pts) == len({p.design for p in pts}) == 113
     swapped = [p for p in pts if p.value.endswith('join=swapped')]
-    assert len(swapped) == 60 and all(p.design.join != sweep.CATALOG[p.anchor].join for p in swapped)
+    assert len(swapped) == 60 and all(p.design.join != config.CATALOG[p.anchor].join for p in swapped)
     assert all(p.design.F2 - p.design.F == 7 for p in pts if p.design.join == 'separate')
-    assert all(p.design.rho == sweep.CATALOG[p.anchor].rho for p in pts)
-    assert {p.anchor for p in pts if p.is_anchor} == set(sweep.GRID_ANCHORS)
+    assert all(p.design.rho == config.CATALOG[p.anchor].rho for p in pts)
+    assert {p.anchor for p in pts if p.is_anchor} == set(config.GRID_ANCHORS)

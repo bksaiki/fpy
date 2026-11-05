@@ -17,10 +17,13 @@ import sys
 from pathlib import Path
 
 _EVAL = Path(__file__).resolve().parents[2]
-# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`
+# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`;
+# `evaluation` last, for `config`
 sys.path[:0] = [str(_EVAL / 'common' / 'mma'), str(_EVAL.parent / 'examples' / 'mmasim')]
+sys.path.append(str(_EVAL))
 
 import cli
+import config
 import scoring
 import workloads
 from core import kernels, outputs
@@ -33,7 +36,7 @@ def main(argv: list[str]) -> int:
     cli.add_runs(ap)
     ap.add_argument('--free', nargs='*', default=[], metavar='MATMUL',
                     help='matmuls run as they are, frozen too if in --matmuls (default: none)')
-    ap.add_argument('--segments', type=int, default=10,
+    ap.add_argument('--segments', type=int, default=config.LLM_SEGMENTS,
                     help='this many WikiText-2 segments at random, 0 for all (default: %(default)s)')
     ap.add_argument('-o', '--out', type=Path, default=None,
                     help='write the results as JSON here, and a table beside it (.csv)')

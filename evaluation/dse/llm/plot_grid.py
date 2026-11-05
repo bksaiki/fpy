@@ -23,7 +23,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import ticker
 
-RESULTS = Path('results')
+RESULTS = Path(__file__).resolve().parents[2] / 'results' / 'llm'
 COLORS = ('#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4')
 MARKERS = ('o', 's', '^', 'D', 'v')
 INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
