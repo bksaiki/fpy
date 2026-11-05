@@ -13,23 +13,23 @@ From the repository root:
 
 ```sh
 uv sync && source .venv/bin/activate
-uv pip install torch triton -r examples/mmasim/serve/requirements.txt
+uv pip install torch triton -r evaluation/dse/llm/requirements.txt
 ```
 
 (`uv sync` removes packages installed by hand; rerun the second line after
 it.) A CUDA GPU is required. Do not install `causal-conv1d` or
 `flash-linear-attention`: `transformers` would then run Qwen3.5's linear
-attention through their kernels, and every result would move. Everything below runs from `examples/mmasim` and
+attention through their kernels, and every result would move. Everything below runs from `evaluation/dse/llm` and
 writes under `results/` (`--results` to change it). The model and WikiText-2
 download from Hugging Face on first use.
 
 ## Running
 
 ```sh
-cd examples/mmasim
-python serve/sweep.py --manifest --model Qwen/Qwen3.5-0.8B -j 1
-python serve/sweep.py --model Qwen/Qwen3.5-0.8B --segments 10 --seed 0
-python serve/plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
+cd evaluation/dse/llm
+python sweep.py --manifest --model Qwen/Qwen3.5-0.8B -j 1
+python sweep.py --model Qwen/Qwen3.5-0.8B --segments 10 --seed 0
+python plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
 ```
 
 1. **`--manifest`** compiles every grid design and launches it as the
@@ -91,5 +91,5 @@ To replot elsewhere, the table is all `plot_grid.py` reads:
 
 ```sh
 tar czf grid-data.tar.gz results/sweep/sweep-grid-Qwen3.5-0.8B.* results/sweep/manifest.csv
-python serve/plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
+python plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
 ```

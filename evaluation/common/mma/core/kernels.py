@@ -21,7 +21,7 @@ from typing import Any
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import compile_triton as ct
 import generator
@@ -189,8 +189,9 @@ def compile_seconds(design: str) -> float | None:
 def _sources() -> str:
     """A digest of every source a kernel depends on: FPy, the models, the
     generator, the compilers."""
-    here = Path(__file__).resolve().parents[2]
-    return outputs.sources(Path(fpy2.__file__).parent, here / 'models', here / 'generator',
+    here = Path(__file__).resolve().parents[1]
+    models = here.parents[2] / 'examples' / 'mmasim' / 'models'
+    return outputs.sources(Path(fpy2.__file__).parent, models, here / 'generator',
                            here / 'compile.py', here / 'compile_triton.py')
 
 

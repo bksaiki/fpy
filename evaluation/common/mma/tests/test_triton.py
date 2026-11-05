@@ -3,7 +3,7 @@ The Triton kernels against the interpreter on hard test cases: zeros of both
 signs, the smallest and largest magnitudes, the least normal, and the
 specials each format has.  Needs a GPU; skipped without one.
 
-    pytest tests/test_triton.py
+    pytest evaluation/common/mma/tests/test_triton.py
 """
 
 import functools
@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_MMA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [_MMA, os.path.join(_MMA, '..', '..', '..', 'examples', 'mmasim')]
 
 from fpy2.backend.triton import unavailable
 

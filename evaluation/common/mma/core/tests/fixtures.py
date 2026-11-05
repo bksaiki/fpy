@@ -1,13 +1,8 @@
-"""A small random Qwen3 for the serve tests; needs a GPU and `transformers`."""
-
-import sys
-from pathlib import Path
+"""Fixtures for the harness's GPU tests: a small random Qwen3 (needs `transformers`)
+and `kernels`' registries."""
 
 import pytest
 import torch
-
-# `serve`, for `core`; `examples/mmasim`, for `generator`
-sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2])]
 
 
 @pytest.fixture(scope='module')

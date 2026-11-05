@@ -1,4 +1,4 @@
-"""Puts the evaluation's modules and MMA-Sim's serving harness on the import path;
+"""Puts the evaluation's modules and the MMA serving harness on the import path;
 a tiny random Qwen3.5 for the GPU tests."""
 
 import sys
@@ -8,8 +8,8 @@ import pytest
 import torch
 
 _ROOT = Path(__file__).resolve().parents[1]
-_MMASIM = _ROOT.parents[1] / 'examples' / 'mmasim'
-sys.path[:0] = [str(_ROOT), str(_MMASIM / 'serve'), str(_MMASIM)]
+sys.path[:0] = [str(_ROOT), str(_ROOT.parent / 'common' / 'mma'),
+                str(_ROOT.parents[1] / 'examples' / 'mmasim')]
 
 MODEL = 'Qwen/Qwen3.5-0.8B'
 

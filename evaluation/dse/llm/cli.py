@@ -10,11 +10,10 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
-from . import kernels, outputs, quant, swap
+from core import kernels, outputs, quant, swap
 
 RESULTS = Path('results')
-"""The outputs' root, from `examples/mmasim` (gitignored): `cache/` for
+"""The outputs' root, from `evaluation/dse/llm` (gitignored): `cache/` for
 artifacts reused across runs, `plots/` for plots, a run's outputs in its own
 directory."""
 

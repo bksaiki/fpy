@@ -1,7 +1,7 @@
 # Analysis precision
 
 How precise format inference is, with and without digit-bound analysis, on
-the MMA-Sim designs (`examples/mmasim/compile.py`'s `DESIGNS`).  Each design
+the MMA-Sim designs (`evaluation/common/mma/compile.py`'s `DESIGNS`).  Each design
 is specialized per call site as the C++ compiler does, analyzed both ways, and
 run on 5000 inputs.  Every value each assignment takes is abstracted, as a
 set, to the least format A(p′, exp′, b′) containing it.  That format is

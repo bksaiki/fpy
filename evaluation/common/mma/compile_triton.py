@@ -8,17 +8,17 @@ is a row, with `out[i][j]` one call.  `m = n = 1` is the dot product itself.
 block-scaled design runs as a chain of its instructions, each taking its
 scales.  Asserts are dropped: a kernel cannot raise.
 
-    python examples/mmasim/compile_triton.py              # one line per design
-    python examples/mmasim/compile_triton.py -v           # full error text
-    python examples/mmasim/compile_triton.py -e volta     # print a design's kernel
-    python examples/mmasim/compile_triton.py -o out/      # write each one to out/
-    python examples/mmasim/compile_triton.py -r 64        # also launch 64 draws and
+    python evaluation/common/mma/compile_triton.py              # one line per design
+    python evaluation/common/mma/compile_triton.py -v           # full error text
+    python evaluation/common/mma/compile_triton.py -e volta     # print a design's kernel
+    python evaluation/common/mma/compile_triton.py -o out/      # write each one to out/
+    python evaluation/common/mma/compile_triton.py -r 64        # also launch 64 draws and
                                                           # compare with the interpreter
-    python examples/mmasim/compile_triton.py -m 4 -n 4 -r 1   # a 4 x 4 matmul
-    python examples/mmasim/compile_triton.py -r 8 --autotune  # the launch picks
+    python evaluation/common/mma/compile_triton.py -m 4 -n 4 -r 1   # a 4 x 4 matmul
+    python evaluation/common/mma/compile_triton.py -r 8 --autotune  # the launch picks
                                                           # its block and warps
-    python examples/mmasim/compile_triton.py -j 8         # compile in 8 processes
-    python examples/mmasim/compile_triton.py blackwell -r 8 -k 192   # three or six
+    python evaluation/common/mma/compile_triton.py -j 8         # compile in 8 processes
+    python evaluation/common/mma/compile_triton.py blackwell -r 8 -k 192   # three or six
                                                           # instructions a call
 """
 

@@ -23,8 +23,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-_MMASIM = Path(__file__).resolve().parents[2] / 'examples' / 'mmasim'
-sys.path[:0] = [str(_MMASIM / 'serve'), str(_MMASIM)]
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examples' / 'mmasim')]
 
 import batched
 import gsm8k

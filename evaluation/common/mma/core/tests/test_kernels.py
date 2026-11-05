@@ -1,7 +1,7 @@
 """
 `kernels.matmul`.  Needs a GPU; skipped without one.
 
-    pytest serve/tests
+    pytest evaluation/common/mma/core/tests
 """
 
 import gc

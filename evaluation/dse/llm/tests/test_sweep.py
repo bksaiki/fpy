@@ -1,4 +1,4 @@
-"""The grid (`serve/sweep.py`) and its plot (`serve/plot_grid.py`), without running them."""
+"""The grid (`sweep.py`) and its plot (`plot_grid.py`), without running them."""
 
 import importlib.util
 from pathlib import Path

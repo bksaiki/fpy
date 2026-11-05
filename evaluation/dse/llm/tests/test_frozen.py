@@ -2,7 +2,7 @@
 `scoring.frozen` on a small random Qwen3.  Needs a GPU and `transformers`;
 skipped without either.
 
-    pytest serve/tests
+    pytest evaluation/dse/llm/tests
 """
 
 import math
@@ -15,7 +15,9 @@ from fpy2.backend.triton import unavailable
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
-from core import quant, scoring, swap, workloads
+import scoring
+import workloads
+from core import quant, swap
 
 
 def test_a_frozen_run_is_its_arithmetic_alone(model: torch.nn.Module, tokens: torch.Tensor) -> None:

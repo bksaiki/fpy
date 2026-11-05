@@ -25,7 +25,8 @@ from typing import Any
 
 from fpy2.utils import Location
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'examples' / 'mmasim'))
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examples' / 'mmasim')]
 
 import report
 from compile import DESIGNS, _filename, in_processes

@@ -2,7 +2,7 @@
 The BLAS evaluation's figure and numbers, from `explore.py`'s table, drawn as
 `plot_grid.py` draws the grid's KL.
 
-    python evaluation/blas/plots.py    # -> evaluation/results/blas/plots/k.{png,pdf}; numbers on stdout
+    python evaluation/dse/blas/plots.py    # -> evaluation/results/blas/plots/k.{png,pdf}; numbers on stdout
 """
 
 import argparse
@@ -17,9 +17,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import ticker
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 RESULTS = ROOT / 'evaluation' / 'results'
-sys.path.insert(0, str(ROOT / 'examples' / 'mmasim' / 'serve'))
+sys.path.insert(0, str(ROOT / 'evaluation' / 'dse' / 'llm'))
 
 # `plot_grid.py`'s look: each generation's colour and marker, each join's
 # line, its colours and its text styles

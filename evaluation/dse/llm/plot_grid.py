@@ -8,7 +8,7 @@ quantization held to ref); each generation's own design ringed, one that does
 not read `F` (CDNA2's) a point alone.  Observed, designs carry their standard
 errors.  Writes `<results>/plots/<table>.png` and `.pdf`.
 
-    python serve/plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
+    python plot_grid.py --table sweep-grid-Qwen3.5-0.8B.csv
 """
 
 import argparse

@@ -5,12 +5,12 @@ A roadmap tracker: the point is to see *which* refusal each design hits and
 how the count moves.  With `-r`, each design that compiles is also run
 against the interpreter.
 
-    python examples/mmasim/compile.py           # one line per design
-    python examples/mmasim/compile.py -v        # full error text
-    python examples/mmasim/compile.py -e cdna2  # print the C++ of a design
-    python examples/mmasim/compile.py -o out/   # write each one to out/
-    python examples/mmasim/compile.py -j 8      # in 8 processes
-    python examples/mmasim/compile.py -r 256    # also run 256 draws and
+    python evaluation/common/mma/compile.py           # one line per design
+    python evaluation/common/mma/compile.py -v        # full error text
+    python evaluation/common/mma/compile.py -e cdna2  # print the C++ of a design
+    python evaluation/common/mma/compile.py -o out/   # write each one to out/
+    python evaluation/common/mma/compile.py -j 8      # in 8 processes
+    python evaluation/common/mma/compile.py -r 256    # also run 256 draws and
                                                 # compare with the interpreter
 """
 
@@ -28,7 +28,7 @@ from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'examples' / 'mmasim'))
 
 from models import amd, nv
 from models.nv import RNE_FP16, RZ_E8M13, RZ_FP32

@@ -1,7 +1,7 @@
 """
 `quant`: the schemes, and its quantizers, bit for bit against `torchao`'s.
 
-    pytest serve/tests
+    pytest evaluation/common/mma/core/tests
 """
 
 import pytest

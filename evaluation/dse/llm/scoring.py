@@ -13,8 +13,7 @@ from collections.abc import Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 
 import torch
-
-from . import swap
+from core import swap
 
 _ROWS = 512
 """Tokens per block of log-softmax and comparison."""

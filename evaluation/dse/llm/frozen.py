@@ -8,15 +8,22 @@ share of activation elements (and scales) its own run would round
 differently, its seconds and its kernels' compile seconds; `--free`
 matmuls also as deployed.  Over WikiText-2 segments, every token scored.
 
-    python serve/frozen.py --scheme fp8-row
-    python serve/frozen.py --scheme fp8-row --matmuls nv.hopper.e4m3.f32 --free nv.hopper.e4m3.f32
+    python frozen.py --scheme fp8-row
+    python frozen.py --scheme fp8-row --matmuls nv.hopper.e4m3.f32 --free nv.hopper.e4m3.f32
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-from core import cli, kernels, outputs, scoring, workloads
+_EVAL = Path(__file__).resolve().parents[2]
+# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`
+sys.path[:0] = [str(_EVAL / 'common' / 'mma'), str(_EVAL.parent / 'examples' / 'mmasim')]
+
+import cli
+import scoring
+import workloads
+from core import kernels, outputs
 
 
 def main(argv: list[str]) -> int:

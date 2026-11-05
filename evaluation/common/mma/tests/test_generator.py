@@ -4,7 +4,7 @@ point it computes as `compile.DESIGNS`' builder does, bit for bit, under the
 interpreter; every combination of its stages is a design, only sizes that
 disagree refused; and structures agree where they must.
 
-    pytest -n 8 tests/test_generator.py
+    pytest -n 8 evaluation/common/mma/tests/test_generator.py
 """
 
 import os
@@ -14,7 +14,8 @@ from dataclasses import replace
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_MMA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [_MMA, os.path.join(_MMA, '..', '..', '..', 'examples', 'mmasim')]
 
 from compile import DESIGNS, _fmt, _length, _row, _same
 from generator import Design, build, invalid

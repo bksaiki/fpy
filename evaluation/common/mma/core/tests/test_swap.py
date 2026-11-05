@@ -2,7 +2,7 @@
 `swap.patch` on a small random Qwen3.  Needs a GPU and `transformers`;
 skipped without either.
 
-    pytest serve/tests
+    pytest evaluation/common/mma/core/tests
 """
 
 import pytest

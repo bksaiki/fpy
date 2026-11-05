@@ -10,9 +10,9 @@ keeps its `ok` rows whose design is unchanged and runs the rest.
 (at each of `--model`'s layer widths), and writes `manifest.csv`: a row per
 design, its parameters, name, status and compile time.
 
-    python serve/sweep.py --manifest --model Qwen/Qwen3.5-0.8B   # from examples/mmasim
-    python serve/sweep.py --model Qwen/Qwen3.5-0.8B
-    python serve/sweep.py --list                                 # the points, and stop
+    python sweep.py --manifest --model Qwen/Qwen3.5-0.8B   # from evaluation/dse/llm
+    python sweep.py --model Qwen/Qwen3.5-0.8B
+    python sweep.py --list                                 # the points, and stop
 """
 
 import argparse
@@ -23,12 +23,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-# `serve`, for `core`; `examples/mmasim`, for `generator`
-sys.path[:0] = [str(Path(__file__).resolve().parent), str(Path(__file__).resolve().parents[1])]
+_EVAL = Path(__file__).resolve().parents[2]
+# this directory, for `cli`; `common/mma`, for `core` and `generator`; `examples/mmasim`, for `models`
+sys.path[:0] = [str(Path(__file__).resolve().parent), str(_EVAL / 'common' / 'mma'),
+                str(_EVAL.parent / 'examples' / 'mmasim')]
 
+import cli
 import generator
 import torch
-from core import cli, kernels, outputs, quant, swap
+from core import kernels, outputs, quant, swap
 from generator.catalog import CATALOG
 
 GRID_ANCHORS = ('nv.hopper.bf16.f32', 'nv.ampere.bf16.f32', 'amd.cdna3.bf16', 'amd.cdna2.bf16',

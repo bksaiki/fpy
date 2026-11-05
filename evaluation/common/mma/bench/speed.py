@@ -9,11 +9,11 @@ Throughput counts `2 m n k` operations, as a matmul does, so the
 The inputs are random rather than drawn from each format: every branch is
 flattened, so a kernel's time does not depend on its data.
 
-    python examples/mmasim/bench/speed.py                   # every design
-    python examples/mmasim/bench/speed.py volta nvfp4       # some
-    python examples/mmasim/bench/speed.py -m 512 --blocks 64 128
-    python examples/mmasim/bench/speed.py cdna2 --blocks-m 16 32   # tile heights
-    python examples/mmasim/bench/speed.py --best            # fastest tile only
+    python evaluation/common/mma/bench/speed.py                   # every design
+    python evaluation/common/mma/bench/speed.py volta nvfp4       # some
+    python evaluation/common/mma/bench/speed.py -m 512 --blocks 64 128
+    python evaluation/common/mma/bench/speed.py cdna2 --blocks-m 16 32   # tile heights
+    python evaluation/common/mma/bench/speed.py --best            # fastest tile only
 """
 
 import argparse

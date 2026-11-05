@@ -7,8 +7,8 @@ Checked bit for bit against the interpreter, special values included, then
 timed at the work `speed.py` gives the generated kernel: `rows` dot products
 of length `k`.
 
-    python examples/mmasim/bench/volta_block.py
-    python examples/mmasim/bench/volta_block.py --rows 65536 -k 1024
+    python evaluation/common/mma/bench/volta_block.py
+    python evaluation/common/mma/bench/volta_block.py --rows 65536 -k 1024
 """
 
 import argparse

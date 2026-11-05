@@ -10,17 +10,23 @@ under `--scheme`, its weights quantized by round-to-nearest.  Commands:
     /reset          forget the conversation
     /quit           leave (or end of input)
 
-    python serve/chat.py                               # fp32
-    python serve/chat.py --matmul amd.cdna2.bf16
-    python serve/chat.py --scheme fp8-row --matmul nv.ada.e4m3.f32
-    python serve/chat.py --scheme mxfp8 --matmul nv.blackwell.mx.e4m3
+    python chat.py                               # fp32
+    python chat.py --matmul amd.cdna2.bf16
+    python chat.py --scheme fp8-row --matmul nv.ada.e4m3.f32
+    python chat.py --scheme mxfp8 --matmul nv.blackwell.mx.e4m3
 """
 
 import argparse
 import sys
 import time
+from pathlib import Path
 
-from core import cli, generate, swap
+_EVAL = Path(__file__).resolve().parents[2]
+# `common/mma`, for `core`, `compile` and `generator`; `examples/mmasim`, for `models`
+sys.path[:0] = [str(_EVAL / 'common' / 'mma'), str(_EVAL.parent / 'examples' / 'mmasim')]
+
+import cli
+from core import generate, swap
 
 
 def main(argv: list[str]) -> int:

@@ -9,7 +9,7 @@ The table, `<results>/blas/blas-grid.csv` (`plots.py`), has a row per grid
 point and case (test, `n`, `s`): the point's columns, its error, and the FP32
 FMA loop's error on the same matrices.
 
-    python evaluation/blas/explore.py
+    python evaluation/dse/blas/explore.py
 """
 
 import argparse
@@ -25,11 +25,12 @@ from pathlib import Path
 import torch
 from torch.utils import cpp_extension
 
-ROOT = Path(__file__).resolve().parents[2]
-MMASIM = ROOT / 'examples' / 'mmasim'
-COMMON = ROOT / 'evaluation' / 'common' / 'fpy2_models'
-# `serve`, for `sweep` and `core`; `examples/mmasim`, for `compile` and `generator`
-sys.path[:0] = [str(MMASIM / 'serve'), str(MMASIM), str(COMMON)]
+ROOT = Path(__file__).resolve().parents[3]
+COMMON = ROOT / 'evaluation' / 'common'
+# `dse/llm`, for `sweep`; `common/mma`, for `core`, `compile` and `generator`;
+# `examples/mmasim`, for `models`
+sys.path[:0] = [str(ROOT / 'evaluation' / 'dse' / 'llm'), str(COMMON / 'mma'),
+                str(COMMON / 'fpy2_models'), str(ROOT / 'examples' / 'mmasim')]
 
 import compile as mm
 import generate_models
