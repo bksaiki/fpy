@@ -38,8 +38,7 @@ Commands = Callable[[Path], list[list[str]]]
 """An evaluation's commands, given its results directory."""
 
 RunCommands = Callable[[Path, list[str]], list[list[str]]]
-"""Its run's commands, given also `-j N` (`--threads`) or nothing; an
-evaluation without such an option ignores it."""
+"""Its run's commands, given also `-j N` (`--threads`) or nothing."""
 
 
 @dataclass(frozen=True)
@@ -67,7 +66,7 @@ EVALS = {
         done='blas-grid.csv', needs=('torch', 'matplotlib'),
         tools=(os.environ.get('CXX', 'c++'),)),  # as `torch.utils.cpp_extension` picks it
     'gsm8k': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d)]],
+        run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d), *j]],
         plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)]],
         done='gsm8k-speed.json', needs=('torch', 'triton', 'transformers', 'datasets', 'mmasim'),
         gpu=True),

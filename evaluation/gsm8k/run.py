@@ -6,6 +6,8 @@ by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
     python evaluation/gsm8k/run.py --smoke          # 2 problems, 8 tokens
     python evaluation/gsm8k/run.py -n 1319 --backends torch fpy
 
+FPy's kernels compile first, so every timing is of the compiled model.
+
 Replaces the results directory (`evaluation/results/gsm8k/`, or `-o DIR`)
 with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.
 Exits 1 if `fpy` and `mmasim` emit different tokens.
@@ -52,7 +54,7 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     eos = generate.stop_tokens(model, tok)
     prompts = [generate.encode(tok, gsm8k.messages(p.question))[0].tolist() for p in problems]
     warmup = time.perf_counter()
-    if backend != 'mmasim':   # compiles and loads kernels outside the timing
+    if backend != 'mmasim':   # Triton's JIT and CUDA's start-up, outside the timing
         batched.generate(model, prompts[:batch], 2, eos)
     warmup = time.perf_counter() - warmup
     tokens: list[list[int]] = []
@@ -121,6 +123,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--backends', nargs='+', choices=BACKENDS, default=list(BACKENDS),
                     help='default: all')
     ap.add_argument('--model', default=config.MODEL, help='default %(default)s')
+    ap.add_argument('-j', '--jobs', type=int, default=1,
+                    help='processes compiling the designs; above 1, their compile times '
+                         'contend (default %(default)s)')
     ap.add_argument('--smoke', action='store_true', help='2 problems, 8 tokens')
     args = ap.parse_args(argv)
     if args.smoke:
@@ -129,6 +134,10 @@ def main(argv: list[str]) -> int:
         ap.error(f'{args.out} holds files a run did not write: {", ".join(foreign)}')
     shutil.rmtree(args.out, ignore_errors=True)
     args.out.mkdir(parents=True)
+
+    fpy = args.designs if 'fpy' in args.backends else []
+    if refused := kernels.compile_designs(fpy, args.jobs):
+        sys.exit(f'refused: {refused}')
 
     from transformers import AutoTokenizer
 
