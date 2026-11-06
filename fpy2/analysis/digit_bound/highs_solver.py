@@ -3,8 +3,7 @@ A HiGHS backend for the digit-bound store, for comparison with z3.
 
 The store as a mixed-integer program: one integer column per variable, a 0/1
 column per guard literal, and big-M rows for guards and ``max``.  HiGHS
-optimizes natively, so a maximum is one solve; a cutoff is one feasibility
-solve.  Needs the optional ``highspy`` package.
+optimizes natively, so a maximum is one solve.  Needs the optional ``highspy`` package.
 
 **Not a sound default.**  Big-M needs every column bounded, to ``[-B, B]``,
 and a ``B`` too small removes solutions: a maximum can come back below the

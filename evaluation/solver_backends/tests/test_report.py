@@ -7,7 +7,7 @@ compiled, differing C++ named, and only the table and the figure written.
 
 import json
 
-from report import main, numbers, plotted, summary
+from report import main, numbers, queries, summary
 
 
 def _ok(seconds, solver, sha, queries=10, degraded=0):
@@ -16,6 +16,8 @@ def _ok(seconds, solver, sha, queries=10, degraded=0):
         'solver_time': solver,
         'stats': {'solver_time': solver, 'constraints': 6, 'queries': queries,
                   'calls': 5, 'degraded': degraded},
+        'trace': {'constraints': [0, 4, 6], 'calls': [1, 2, 2],
+                  'seconds': [solver / 4, solver / 4, solver / 2]},
     }
 
 
@@ -62,18 +64,21 @@ def test_it_writes_every_output(tmp_path):
     for rec in RECORDS:
         (tmp_path / f'{rec["design"]}.json').write_text(json.dumps(rec))
     (tmp_path / 'report').mkdir()
-    (tmp_path / 'report' / 'stale.png').write_text('')   # replaced, not merged
+    (tmp_path / 'report' / 'notes.md').write_text('mine')   # kept: only its own files
     assert main([str(tmp_path)]) == 0
-    made = {p.name for p in (tmp_path / 'report').iterdir()}
-    assert made == {f'backends-scatter{v}.{e}' for v in ('', '-all', '-linear', '-all-linear')
-                    for e in ('pdf', 'png')} | {'backends-totals.tex'}
+    assert (tmp_path / 'report' / 'notes.md').read_text() == 'mine'
+    made = {p.name for p in (tmp_path / 'report').iterdir()} - {'notes.md'}
+    assert made == {'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
+                    'backends-totals.tex'}
     totals = (tmp_path / 'report' / 'backends-totals.tex').read_text()
     # design `a` alone: every backend compiled it
-    assert 'HiGHS & 8\\,s & 2\\,s & 25\\% & 5 & 0.50 & 200.0\\,ms' in totals
+    assert 'HiGHS & Optimize & 8\\,s & 2\\,s & 25\\% & 200.0\\,ms' in totals
     assert 'Constraints' not in totals and 'Queries' not in totals
+    assert 'calls' not in totals
 
 
-def test_the_figure_leaves_out_designs_with_no_solver_work():
-    idle = {'design': 'fma', 'backends': {b: _ok(0.1, 0.001, 'q') for b in ('z3', 'cvc5')}}
-    busy = {'design': 'big', 'backends': {'z3': _ok(5, 2, 'r'), 'cvc5': _ok(5, 0.001, 'r')}}
-    assert [r['design'] for r in plotted([idle, busy])] == ['big']
+def test_the_figure_plots_every_query_log_axes_can_show():
+    # design `a`'s and `b`'s queries under z3; HiGHS has none from `b`, a timeout
+    assert queries(RECORDS, 'z3', log=False) == ([0, 4, 6, 0, 4, 6], [1, 1, 2, 0.25, 0.25, 0.5])
+    assert queries(RECORDS, 'z3', log=True) == ([4, 6, 4, 6], [1, 2, 0.25, 0.5])
+    assert queries(RECORDS, 'highs', log=True) == ([4, 6], [0.5, 1])

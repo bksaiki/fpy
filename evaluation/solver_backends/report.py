@@ -4,18 +4,14 @@ The solver-backend evaluation's table and figures, from `run.py`'s results;
 
     python evaluation/solver_backends/report.py evaluation/solver_backends/results
 
-Replaces `report/` in the results directory with:
+Writes into `report/` in the results directory, overwriting only these:
 
 - `backends-totals.tex`: one row per backend, over the designs every backend
-  compiled: compile and solver time, the solver's share, backend calls,
-  and calls and solver time per query;
-- `backends-scatter.{pdf,png}`: each design's solver time against its number of
-  constraints, one point per design and backend, leaving out designs no
-  backend spends :data:`MIN_SOLVER_SECONDS` on;
-- `backends-scatter-all.{pdf,png}`: the same with every design.
-
-Both are log-log; `backends-scatter-linear.{pdf,png}` and
-`backends-scatter-all-linear.{pdf,png}` are the same on linear axes.
+  compiled: how it finds a maximum (binary search or optimize), compile
+  and solver time, the solver's share, and solver time per query;
+- `sensitivity-scatter.{pdf,png}`: each query's time against the
+  constraints in the component it was asked of, from every design's median
+  run, a panel per backend, log-log.
 
 The summary, with the designs whose C++ differs between backends, and those
 whose counts differ between one backend's repeats, is printed.
@@ -23,7 +19,6 @@ whose counts differ between one backend's repeats, is printed.
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,9 +27,19 @@ import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5', 'highs': 'HiGHS'}
 """Each backend's label."""
+
+METHODS = {'z3': 'Binary search', 'z3-opt': 'Optimize', 'cvc5': 'Binary search',
+           'highs': 'Optimize'}
+"""How each backend finds a maximum: bisecting over satisfiability queries,
+or asking the solver to optimize."""
+
+ROW_NAMES = {**NAMES, 'z3-opt': 'z3'}
+"""Each backend's label in the table, whose method column tells the two z3
+rows apart."""
 
 COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6', 'highs': '#d6772a'}
 MARKERS = {'z3': 'o', 'z3-opt': 's', 'cvc5': '^', 'highs': 'D'}
@@ -42,12 +47,6 @@ INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
 
 REPORT_DIR = 'report'
 """Where in the results directory the report goes, apart from the run's data."""
-
-MIN_SOLVER_SECONDS = 0.01
-"""A design every backend answers in less solver time than this is left out
-of the figure: its time is the timer's noise, and its point (the FMA chains,
-at a few hundred constraints and a millisecond) only stretches both axes."""
-
 
 def load(out: Path) -> list[dict[str, Any]]:
     """Every design record in *out*, in the order the run measured them."""
@@ -78,40 +77,62 @@ def backends_of(records: list[dict[str, Any]]) -> list[str]:
     return list(records[0]['backends']) if records else []
 
 
-def plotted(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The designs the figure shows: those some backend spends at least
-    :data:`MIN_SOLVER_SECONDS` in the solver on."""
-    return [rec for rec in records
-            if any((r := _ok(rec, b)) is not None and r['solver_time'] >= MIN_SOLVER_SECONDS
-                   for b in rec['backends'])]
+def queries(records: list[dict[str, Any]], b: str, log: bool) -> tuple[list[int], list[float]]:
+    """Every query backend *b* answered in *records*' median runs: the
+    constraints it saw, and its time.  On log axes, only those with both
+    above zero: a constant objective sees no constraint."""
+    xs: list[int] = []
+    ys: list[float] = []
+    for rec in records:
+        if (r := _ok(rec, b)) is None or 'trace' not in r:
+            continue
+        for c, s in zip(r['trace']['constraints'], r['trace']['seconds']):
+            if not log or (c > 0 and s > 0):
+                xs.append(c)
+                ys.append(s)
+    return xs, ys
 
 
 def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
-    """Each of *records*' solver time against its number of constraints, a
-    point per backend, on log axes where *log* and linear ones otherwise, as
-    *path* with `.pdf` and with `.png`."""
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    for b in backends_of(records):
-        pts = [(r['stats']['constraints'], r['solver_time'])
-               for rec in records if (r := _ok(rec, b)) is not None and r['solver_time'] > 0]
-        if pts:
-            xs, ys = zip(*pts)
-            ax.scatter(xs, ys, s=22, color=COLORS.get(b, INK), marker=MARKERS.get(b, 'o'),
-                       label=NAMES.get(b, b), alpha=0.8, linewidths=0)
-    if log:
-        ax.set_xscale('log')
-        ax.set_yscale('log')
-    else:
-        ax.set_xlim(left=0)
-        ax.set_ylim(bottom=0)
-    ax.set_xlabel('Constraints', color=INK)
-    ax.set_ylabel('Solver time (s)', color=INK)
-    ax.grid(True, color=GRID, linewidth=0.6)
-    ax.set_axisbelow(True)
-    for side in ('top', 'right'):
-        ax.spines[side].set_visible(False)
-    if ax.collections:
-        ax.legend(frameon=False)
+    """Each query's time against the constraints it saw, a panel per
+    backend on shared axes, log where *log* and linear otherwise, as *path*
+    with `.pdf` and with `.png`.
+
+    A panel each, not one cloud: tens of thousands of points a backend
+    overlap until only the last drawn shows."""
+    bs = backends_of(records)
+    cols = 2 if len(bs) > 1 else 1
+    rows = -(-len(bs) // cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(3.4 * cols, 2.8 * rows),
+                             sharex=True, sharey=True, squeeze=False)
+    for ax in axes.flat[len(bs):]:
+        ax.set_visible(False)
+    shown = 0
+    for ax, b in zip(axes.flat, bs):
+        xs, secs = queries(records, b, log)
+        shown += len(xs)
+        ys = [1000 * s for s in secs]
+        # rasterized: a vector PDF of this many points is slow to open
+        ax.scatter(xs, ys, s=3, color=COLORS.get(b, INK), alpha=0.25,
+                   linewidths=0, rasterized=True)
+        ax.set_title(NAMES.get(b, b), color=INK, fontsize=10)
+        ax.grid(True, color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for side in ('top', 'right'):
+            ax.spines[side].set_visible(False)
+    ax0 = axes.flat[0]
+    if log and shown:   # a log axis over no point is an error
+        ax0.set_xscale('log')
+        ax0.set_yscale('log')
+        # 10, 100, 1,000 rather than powers of ten
+        plain = FuncFormatter(lambda v, _: f'{v:,.10g}')
+        ax0.xaxis.set_major_formatter(plain)
+        ax0.yaxis.set_major_formatter(plain)
+    elif not log:
+        ax0.set_xlim(left=0)
+        ax0.set_ylim(bottom=0)
+    fig.supxlabel('Constraints in the queried component', color=INK, fontsize=10)
+    fig.supylabel('Query time (ms)', color=INK, fontsize=10)
     fig.tight_layout()
     fig.savefig(path.with_suffix('.pdf'))
     fig.savefig(path.with_suffix('.png'), dpi=200)
@@ -160,11 +181,6 @@ def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _count(n: int) -> str:
-    """*n* rounded to thousands past ten thousand: `227332` -> `227k`."""
-    return f'{n / 1000:.0f}k' if n >= 10_000 else str(n)
-
-
 def totals_latex(nums: dict[str, Any]) -> str:
     """One row per backend, totalled over the designs every backend compiled.
 
@@ -173,20 +189,17 @@ def totals_latex(nums: dict[str, Any]) -> str:
     same questions of it, whichever answers.  The summary prints them once.
     """
     lines = [
-        '\\begin{tabular}{lrrrrrr}',
+        '\\begin{tabular}{llrrrr}',
         '\\toprule',
-        ('Backend & Compile & Solver & Solver share & '
-         'Backend calls & Calls/query & Time/query \\\\'),
+        'Backend & Solver method & Compile & Solver & Solver share & Time/query \\\\',
         '\\midrule',
     ]
     for b, t in nums['totals'].items():
         q = t['queries']
-        per_call = t['calls'] / q if q else 0.0
         per_query = 1000 * t['solver_seconds'] / q if q else 0.0
         lines.append(
-            f'{NAMES.get(b, b)} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
-            f'{100 * t["solver_share"]:.0f}\\% & '
-            f'{_count(t["calls"])} & {per_call:.2f} & {per_query:.1f}\\,ms \\\\')
+            f'{ROW_NAMES.get(b, b)} & {METHODS.get(b, "")} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
+            f'{100 * t["solver_share"]:.0f}\\% & {per_query:.1f}\\,ms \\\\')
     lines += ['\\bottomrule', '\\end{tabular}', '']
     return '\n'.join(lines)
 
@@ -232,12 +245,9 @@ def main(argv: list[str]) -> int:
         ap.error(f'no results in {out}')
     nums = numbers(records)
     dest = out / REPORT_DIR
-    shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir()
+    dest.mkdir(exist_ok=True)
     (dest / 'backends-totals.tex').write_text(totals_latex(nums))
-    for log, suffix in ((True, ''), (False, '-linear')):
-        figure(plotted(records), dest / f'backends-scatter{suffix}', log)
-        figure(records, dest / f'backends-scatter-all{suffix}', log)
+    figure(records, dest / 'sensitivity-scatter')
     print(summary(nums))
     return 0
 

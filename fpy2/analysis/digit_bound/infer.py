@@ -232,9 +232,11 @@ class DigitBoundAnalysis:
         if terms is None or terms.msb is None or terms.lsb is None:
             return None
         at = self.query_at(e)
-        prec = self.store.prec(terms.msb, terms.lsb, at)
-        exp = -self.store.maximum(-terms.lsb, at)
-        mag = self.store.maximum(terms.msb, at)
+        # asked together: z3's optimizer answers all three in one search
+        digits, neg_exp, mag = self.store.maximums(
+            [terms.msb - terms.lsb + 1, -terms.lsb, terms.msb], at)
+        prec = max(digits, 0)   # as :meth:`DigitBoundStore.prec` floors it
+        exp = -neg_exp
         if math.isinf(prec) and math.isinf(exp) and math.isinf(mag):
             return None
         # The three are independent maxima and need not be attained together,

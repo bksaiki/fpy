@@ -1,7 +1,7 @@
 """
 A cvc5 backend for the digit-bound store, for comparison with z3.
 
-The same encoding as :class:`~fpy2.analysis.digit_bound.solver.Z3Solver`,
+The same encoding as :class:`~fpy2.analysis.digit_bound.z3_solver.Z3Solver`,
 through cvc5's base API.  cvc5 does not optimize, so every maximum is found
 by bisection, as z3 finds it by default.  Needs the optional ``cvc5``
 package.

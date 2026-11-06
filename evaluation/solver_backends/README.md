@@ -22,28 +22,31 @@ From the repository root:
 .venv/bin/python evaluation/solver_backends/run.py
 ```
 
-It replaces `evaluation/solver_backends/results/` with:
+Each run writes a new folder, `evaluation/solver_backends/results/<date>-<time>/`,
+and deletes nothing; `-o DIR` names the folder instead, which must be new or
+empty.  It holds:
 
 - `<design>.json` per design: each backend's runs (wall time, solver
   statistics summed over every store, C++ hash, or the error or timeout),
-  and the median run by compile time, whose time and counts are reported
-  together;
+  and the median run by compile time, whose time, counts and queries are
+  reported together.  Each query (`trace`) is the constraints in the
+  component it was asked of, its backend calls, its time, and how many
+  objectives it asked;
 - `backends-run.json`: the run's settings;
 
-and, apart in `results/report/` (replaced whenever the report is made):
+and, apart in `report/` (whose files are overwritten when the report is
+made again):
 
 - `backends-totals.tex`: one row per backend, over the designs every backend
-  compiled: compile and solver time, the solver's share, backend calls,
-  and calls and solver time per query.  Constraints and queries are left
-  out: they are the same under every backend, and the summary prints them;
-- `backends-scatter.{pdf,png}`: each design's solver time against its number of
-  constraints, one point per design and backend.  Designs every backend
-  answers in under 10 ms of solver time (the two FMA chains) are left out:
-  their time is noise, and they only stretch the axes;
-- `backends-scatter-all.{pdf,png}`: the same, with every design.
-
-Both figures are log-log; `backends-scatter-linear.{pdf,png}` and
-`backends-scatter-all-linear.{pdf,png}` are the same on linear axes.
+  compiled: how it finds a maximum (binary search or optimize), compile
+  and solver time, the solver's share, and solver time per query.
+  Constraints, queries and backend calls are left out: the summary prints
+  them;
+- `sensitivity-scatter.{pdf,png}`: each query's time against the
+  constraints in the component it was asked of, over every design's median
+  run, a panel per backend on shared log-log axes.  The component is all a
+  backend sees, so it is the size that matters to the solver, not the
+  design's total.
 
 The two JSON files are the run's data; the table and the figures are all the
 report writes.  It prints a summary, with the designs whose C++ differs from
@@ -52,7 +55,9 @@ call hit its limit in some repeats and not others, so the repeats did not do
 the same work, and `-c` is worth raising.
 
 The backends: `z3` (bisection, the default), `z3-opt` (z3's `Optimize`, one
-search per query), `cvc5` (bisection) and `highs` (one MIP solve per query).
+search per query, all its objectives together), `cvc5` (bisection) and
+`highs` (one MIP solve per objective).  A query is one `maximize` call: a
+format's three bounds are one query of three objectives.
 
 Every compilation runs in a fresh process, killed past `-t` seconds, and
 each backend call in it may take `-c` seconds (default 60).  The solvers'

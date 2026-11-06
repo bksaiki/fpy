@@ -393,7 +393,7 @@ def check(fn: fp.Function, arg_types: list[Type]) -> list[str]:
     for t, groups in claims.items():
         ranked = sorted(groups.items(), key=lambda g: -g[1][0])[:_GROUPS]
         for lits, (d, where) in ranked:
-            if not store.reaches([(t, d)], lits):
+            if store.maximum(t, lits) < d:
                 bad.append(f'{where} = {d}, above every bound')
     return list(dict.fromkeys(bad))
 

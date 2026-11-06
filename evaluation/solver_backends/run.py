@@ -5,9 +5,10 @@ compilation and the solver queries inside it.
     python evaluation/solver_backends/run.py               # everything
     python evaluation/solver_backends/run.py volta -r 1    # matching designs, once each
 
-Replaces the results directory (`results/` beside this file, or `-o DIR`)
-with `<design>.json` per design, `backends-run.json`, and `report.py`'s
-table and figures in `report/`.  Each compilation runs in a fresh process,
+Each run writes into a folder of its own, `results/<date>-<time>/` beside
+this file (or `-o DIR`, new or empty), and deletes nothing: `<design>.json`
+per design, `backends-run.json`, and `report.py`'s table and figures in
+`report/`.  Each compilation runs in a fresh process,
 under a wall-clock limit; each backend call inside it under a limit of its
 own (`-c`).  Exits 1 if a backend fails a design z3 compiles.
 """
@@ -17,7 +18,6 @@ import dataclasses
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -32,6 +32,7 @@ import report
 from compile import DESIGNS, _filename
 
 RESULTS = Path(__file__).resolve().parent / 'results'
+"""Where each run's folder goes, by default."""
 
 BACKENDS = ('z3', 'z3-opt', 'cvc5', 'highs')
 """The backends compared, z3 first: the others are read against it."""
@@ -48,8 +49,8 @@ on the same work."""
 def compile_once(name: str, backend: str, call_timeout: float = CALL_TIMEOUT) -> dict[str, Any]:
     """Compile design *name* under *backend*, in this process, each backend
     call limited to *call_timeout* seconds: the wall time, the solver
-    statistics summed over every store, and the C++'s hash, or the error that
-    stopped it."""
+    statistics summed over every store, each query (`trace`, as columns), and
+    the C++'s hash, or the error that stopped it."""
     from compile import compile_design
 
     from fpy2.analysis.digit_bound import SolverStats, solver_backend
@@ -64,7 +65,14 @@ def compile_once(name: str, backend: str, call_timeout: float = CALL_TIMEOUT) ->
             outcome = {'error': traceback.format_exc()}
     seconds = time.perf_counter() - start
     stats = sum((s.stats for s in solvers), SolverStats())
-    return {'seconds': seconds, 'stats': dataclasses.asdict(stats), **outcome}
+    queries = [q for s in solvers for q in s.trace]
+    trace = {
+        'constraints': [q.constraints for q in queries],
+        'calls': [q.calls for q in queries],
+        'seconds': [round(q.seconds, 7) for q in queries],
+        'objectives': [q.objectives for q in queries],
+    }
+    return {'seconds': seconds, 'stats': dataclasses.asdict(stats), 'trace': trace, **outcome}
 
 
 def _run_child(
@@ -89,18 +97,20 @@ def _summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
     """One backend's runs on one design: the median run by compile time, of
     those that compiled, and their outcome.
 
-    The time and the counts are that one run's.  The counts are the same
-    every run unless a backend call hit its limit in some runs and not
-    others; the report names the designs where they differ."""
+    The time, the counts and the queries are that one run's.  The counts
+    are the same every run unless a backend call hit its limit in some runs
+    and not others; the report names the designs where they differ.  Only
+    that run's queries are kept: the others' would triple the results."""
     ok = [r for r in runs if 'cpp_sha256' in r]
+    kept = [{k: v for k, v in r.items() if k != 'trace'} for r in runs]
     if not ok:
-        return {'runs': runs, 'outcome': 'timeout' if 'timeout' in runs[0] else 'error'}
+        return {'runs': kept, 'outcome': 'timeout' if 'timeout' in runs[0] else 'error'}
     # the lower median on an even count: a run that happened
     mid = sorted(ok, key=lambda r: r['seconds'])[(len(ok) - 1) // 2]
     return {
-        'runs': runs, 'outcome': 'ok', 'cpp_sha256': mid['cpp_sha256'],
+        'runs': kept, 'outcome': 'ok', 'cpp_sha256': mid['cpp_sha256'],
         'seconds': mid['seconds'], 'solver_time': mid['stats']['solver_time'],
-        'stats': mid['stats'],
+        'stats': mid['stats'], 'trace': mid['trace'],
     }
 
 
@@ -143,14 +153,6 @@ def _line(record: dict[str, Any]) -> str:
     return '  '.join(parts)
 
 
-def _foreign(out: Path) -> list[str]:
-    """What in *out* a run did not write, and so must not be deleted."""
-    if not out.exists():
-        return []
-    return sorted(p.name for p in out.iterdir()
-                  if not (p.suffix == '.json' or p.name == report.REPORT_DIR))
-
-
 def main(argv: list[str]) -> int:
     if argv[:1] == ['--child']:
         name, backend, call_timeout = argv[1:4]
@@ -160,8 +162,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('filter', nargs='*', metavar='SUBSTRING',
                     help='only designs whose name contains one of these')
-    ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
-                    help='the results directory, replaced (default results/ here)')
+    ap.add_argument('-o', '--out', metavar='DIR', type=Path,
+                    help='the folder to write, new or empty (default results/<date>-<time>/ here)')
     ap.add_argument('-b', '--backends', nargs='+', choices=BACKENDS, default=list(BACKENDS),
                     help='backends to compare, the first the reference (default all, z3 first)')
     ap.add_argument('-r', '--repeats', type=int, default=3,
@@ -179,10 +181,12 @@ def main(argv: list[str]) -> int:
              if not args.filter or any(f in name for f in args.filter)]
     if not names:
         ap.error(f'no design matches {args.filter}')
-    if foreign := _foreign(args.out):
-        ap.error(f'{args.out} holds files a run did not write: {", ".join(foreign)}')
-    shutil.rmtree(args.out, ignore_errors=True)
-    args.out.mkdir(parents=True)
+    if args.out is None:
+        args.out = RESULTS / time.strftime('%Y-%m-%d-%H%M%S')
+    if args.out.exists() and any(args.out.iterdir()):
+        ap.error(f'{args.out} already holds files; a run writes only into a new folder')
+    args.out.mkdir(parents=True, exist_ok=True)
+    print(f'-- writing {args.out}', flush=True)
 
     (args.out / 'backends-run.json').write_text(json.dumps({
         'backends': args.backends, 'repeats': args.repeats, 'jobs': args.jobs,

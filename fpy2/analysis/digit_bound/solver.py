@@ -1,30 +1,29 @@
 """
-Solver backends for the digit-bound store.
+The solver interface for the digit-bound store.
 
-The constraint language -- affine terms over integer variables -- and the
-backend that answers questions about it.  :mod:`fpy2.analysis.digit_bound.store`
+The constraint language -- affine terms over integer variables -- the
+interface a backend answers questions about it through, and what every
+backend shares.  Each backend is a module of its own: z3 in :mod:`z3_solver`,
+cvc5 and HiGHS beside it.  :mod:`fpy2.analysis.digit_bound.store`
 states the constraints; nothing here walks an AST or knows what a variable
 means.
 """
 
 import math
 import time
+from collections.abc import Sequence
 from dataclasses import astuple, dataclass
 from enum import Enum, auto
-from typing import Generic, Protocol, TypeAlias, TypeVar
-
-import z3
+from typing import Generic, NamedTuple, Protocol, TypeVar
 
 from ...utils import Unionfind
 
-_Z3Solver: TypeAlias = 'z3.Solver | z3.Optimize'
-
 __all__ = [
     'Constraint',
+    'QueryRecord',
     'Solver',
     'SolverStats',
     'Term',
-    'Z3Solver',
 ]
 
 
@@ -137,26 +136,27 @@ class Solver(Protocol):
     stats: 'SolverStats'
     """What the backend has done so far."""
 
+    trace: 'list[QueryRecord]'
+    """Each query the backend answered, in order."""
+
     def assume(self, constraint: Constraint) -> None:
         """State *constraint*.  Constraints only ever narrow."""
         ...
 
     def maximize(
-        self, objective: Term, cutoff: int | None = None,
-        assuming: frozenset[int] = frozenset(),
-    ) -> int | float:
-        """An upper bound on the greatest value *objective* can take under
-        what was assumed, and the literals *assuming* -- every caller may use
-        the answer as one.
+        self, objectives: Sequence[Term], assuming: frozenset[int] = frozenset(),
+    ) -> list[int | float]:
+        """An upper bound on the greatest value each of *objectives* can take
+        under what was assumed, and the literals *assuming* -- every caller
+        may use each answer as one.  One call is one query.
 
-        ``math.inf`` when unbounded **or** undecided: a backend that cannot
+        The maxima are independent: each may be attained by a different
+        solution, as the bounds of one format are.  A backend that can
+        optimize several objectives in one search may ask them together.
+
+        ``math.inf`` where unbounded **or** undecided: a backend that cannot
         answer must degrade rather than raise.  ``-math.inf`` when the
         constraints are unsatisfiable.
-
-        *cutoff*, where given, says the caller will not distinguish anything
-        at or above it, so the backend may answer ``inf`` as soon as it knows
-        the maximum gets there -- one refutation instead of a search.
-        Ignoring it is correct.
         """
         ...
 
@@ -179,11 +179,24 @@ class SolverStats:
     calls: int = 0
     """Backend calls -- a satisfiability check, or one solve."""
     degraded: int = 0
-    """Answers loosened because the backend could not decide: a timeout, an
+    """Queries with an answer loosened because the backend could not decide: a timeout, an
     unknown, or a box too wide to solve."""
 
     def __add__(self, other: 'SolverStats') -> 'SolverStats':
         return SolverStats(*(a + b for a, b in zip(astuple(self), astuple(other))))
+
+
+class QueryRecord(NamedTuple):
+    """One query, as :attr:`Solver.trace` keeps it."""
+
+    constraints: int
+    """Constraints in the component it was asked of: all the backend saw."""
+    calls: int
+    """Backend calls it took."""
+    seconds: float
+    """Time in the backend answering it."""
+    objectives: int
+    """Objectives it asked."""
 
 
 class Status(Enum):
@@ -198,18 +211,22 @@ _S = TypeVar('_S')
 """A backend's solver for one component."""
 
 
+
 class _ComponentSolver(Generic[_S]):
-    """What every backend shares: components, the cutoff, bisection, and the
+    """What every backend shares: components, bisection, and the
     statistics.
 
     A backend supplies :meth:`_new`, :meth:`_encode`, :meth:`_check` and
     :meth:`_value`; one that optimizes natively overrides :meth:`_maximum`
-    instead of bisecting, and needs no :meth:`_value`.
+    instead of bisecting, or :meth:`_maxima` to optimize a query's
+    objectives together, and needs no :meth:`_value`.
     """
 
     timeout_ms: int
 
     stats: SolverStats
+
+    trace: list[QueryRecord]
 
     _components: Unionfind[int]
     """Variable indices grouped into components: constraints that share no
@@ -242,6 +259,7 @@ class _ComponentSolver(Generic[_S]):
     def __init__(self, timeout_ms: int = 10_000):
         self.timeout_ms = timeout_ms
         self.stats = SolverStats()
+        self.trace = []
         self._components = Unionfind()
         self._group = {}
         self._built = {}
@@ -355,29 +373,30 @@ class _ComponentSolver(Generic[_S]):
     # -- queries -----------------------------------------------------------
 
     def maximize(
-        self, objective: Term, cutoff: int | None = None,
-        assuming: frozenset[int] = frozenset(),
-    ) -> int | float:
+        self, objectives: Sequence[Term], assuming: frozenset[int] = frozenset(),
+    ) -> list[int | float]:
         start = time.perf_counter()
+        calls = self.stats.calls
         self._degraded = False
+        # every objective's variables: one solver answers the whole query
+        named = {v.index for t in objectives for v, _ in t.coeffs}
         try:
-            named = {v.index for v, _ in objective.coeffs}
-            lits = tuple(sorted(assuming))
-            if cutoff is not None:
-                # one refutation settles it: reaching the cutoff answers
-                # `inf`, and failing to reach it puts the maximum at
-                # `cutoff - 1` or below.  Both are upper bounds, so the
-                # answer stays usable as one, and no optimizing solver is
-                # needed for a check.
-                solver = self._solver_for_vars(named, optimize=False)
-                reached = self._reaches(solver, objective, cutoff, lits)
-                return math.inf if reached else cutoff - 1
             solver = self._solver_for_vars(named, optimize=self._optimizes)
-            return self._maximum(solver, objective, lits)
+            return self._maxima(solver, objectives, tuple(sorted(assuming)))
         finally:
+            seconds = time.perf_counter() - start
             self.stats.queries += 1
             self.stats.degraded += self._degraded
-            self.stats.solver_time += time.perf_counter() - start
+            self.stats.solver_time += seconds
+            self.trace.append(QueryRecord(
+                self._size(named), self.stats.calls - calls, seconds, len(objectives)))
+
+    def _size(self, named: set[int]) -> int:
+        """How many constraints the solver for *named* holds, once
+        :meth:`_solver_for_vars` has put them in one component."""
+        if not named:
+            return 0
+        return len(self._group.get(self._components.add(min(named)), ()))
 
     def _record(self, status: Status) -> Status:
         """Count a backend call: an undecided one degrades the query it
@@ -410,10 +429,16 @@ class _ComponentSolver(Generic[_S]):
             scale = max(scale, abs(k))
         return (self._span + abs(objective.const)) * scale
 
+    def _maxima(
+        self, solver: _S, objectives: Sequence[Term], lits: tuple[int, ...],
+    ) -> list[int | float]:
+        """Each objective's maximum, one :meth:`_maximum` apiece."""
+        return [self._maximum(solver, t, lits) for t in objectives]
+
     def _maximum(
         self, solver: _S, objective: Term, lits: tuple[int, ...],
     ) -> int | float:
-        """*objective*'s maximum, where no cutoff was given."""
+        """*objective*'s maximum."""
         return self._bisect(solver, objective, lits)
 
     def _bisect(
@@ -460,128 +485,3 @@ class _ComponentSolver(Generic[_S]):
             else:
                 hi = mid
         return lo
-
-
-class Z3Solver(_ComponentSolver[_Z3Solver]):
-    """:class:`Solver` backed by z3.
-
-    The store is quantifier-free linear integer arithmetic over a handful of
-    variables; *timeout_ms* guards against a pathological one rather than an
-    expected path.
-    """
-
-    bisect: bool
-    """Find the maximum by refuting ``objective >= k`` rather than by asking
-    z3 to optimize.
-
-    Refutation reuses the plain solver already built for the component,
-    where `Optimize` is a second encoding of the same constraints.  Off only
-    so `test_both_backends_agree` can check the two against each other.
-    """
-
-    _env: dict[_Var, z3.ArithRef]
-
-    _encoded: dict[Term, z3.ArithRef]
-    """Each term's z3 form, built once: the same terms recur across one
-    store's constraints."""
-
-    _lits: dict[int, z3.BoolRef]
-    """Each guard literal's z3 form."""
-
-    def __init__(self, timeout_ms: int = 10_000, bisect: bool = True):
-        super().__init__(timeout_ms)
-        self.bisect = bisect
-        self._env = {}
-        self._encoded = {}
-        self._lits = {}
-
-    @property
-    def _optimizes(self) -> bool:
-        return not self.bisect
-
-    def _to_z3(self, term: Term) -> z3.ArithRef:
-        cached = self._encoded.get(term)
-        if cached is not None:
-            return cached
-        acc = z3.IntVal(term.const)
-        for v, c in term.coeffs:
-            z = self._env.get(v)
-            if z is None:
-                z = self._env[v] = z3.Int(f'{v.name}#{v.index}')
-            acc = acc + c * z
-        self._encoded[term] = acc
-        return acc
-
-    def _lit(self, i: int) -> z3.BoolRef:
-        lit = self._lits.get(i)
-        if lit is None:
-            lit = self._lits[i] = z3.Bool(f'g#{i}')
-        return lit
-
-    def _new(self, optimize: bool) -> _Z3Solver:
-        s = z3.Optimize() if optimize else z3.Solver()
-        s.set('timeout', self.timeout_ms)
-        return s
-
-    def _encode(self, into: _Z3Solver, constraint: Constraint) -> None:
-        lhs = self._to_z3(constraint.lhs)
-        rhs = [self._to_z3(r) for r in constraint.rhs]
-        match constraint.op:
-            case Rel.EQ:
-                rel = lhs == rhs[0]
-            case Rel.LE:
-                rel = lhs <= rhs[0]
-            case Rel.LE_MAX:
-                rel = z3.Or([lhs <= r for r in rhs])
-        if constraint.guard:
-            rel = z3.Implies(z3.And([self._lit(g) for g in constraint.guard]), rel)
-        into.add(rel)
-
-    @staticmethod
-    def _status_of(result: z3.CheckSatResult) -> Status:
-        if result == z3.sat:
-            return Status.SAT
-        if result == z3.unsat:
-            return Status.UNSAT
-        return Status.UNKNOWN
-
-    def _check(
-        self, into: _Z3Solver, lits: tuple[int, ...],
-        bound: tuple[Term, int] | None = None,
-    ) -> Status:
-        assumptions = [self._lit(g) for g in lits]
-        if bound is not None:
-            t, k = bound
-            assumptions.insert(0, self._to_z3(t) >= k)
-        return self._status_of(into.check(*assumptions))
-
-    def _value(self, into: _Z3Solver, objective: Term) -> int | None:
-        found = into.model().eval(self._to_z3(objective), model_completion=True)
-        return found.as_long() if z3.is_int_value(found) else None
-
-    def _maximum(
-        self, solver: _Z3Solver, objective: Term, lits: tuple[int, ...],
-    ) -> int | float:
-        if self.bisect:
-            return self._bisect(solver, objective, lits)
-        return self._optimize(solver, objective, lits)
-
-    def _optimize(
-        self, solver: _Z3Solver, objective: Term, lits: tuple[int, ...],
-    ) -> int | float:
-        """The maximum from ``Optimize``: one search, run by z3."""
-        assert isinstance(solver, z3.Optimize)
-        solver.push()
-        try:
-            handle = solver.maximize(self._to_z3(objective))
-            status = self._record(self._status_of(
-                solver.check(*[self._lit(g) for g in lits])))
-            if status is Status.UNSAT:
-                return -math.inf
-            if status is not Status.SAT:
-                return math.inf
-            bound = solver.upper(handle)
-            # an unbounded objective comes back as the symbolic `oo`
-            return bound.as_long() if z3.is_int_value(bound) else math.inf
-        finally:
-            solver.pop()

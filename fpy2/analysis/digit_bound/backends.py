@@ -16,7 +16,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from .solver import Solver, Z3Solver
+from .solver import Solver
+from .z3_solver import Z3Solver
 
 __all__ = [
     'BACKENDS',

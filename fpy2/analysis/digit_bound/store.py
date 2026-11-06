@@ -31,11 +31,6 @@ class DigitBoundStore:
     """Each term's maximum under each assumption set, which :meth:`_add` and
     :meth:`imply` invalidate."""
 
-    _decisions: dict[tuple, bool]
-    """Each :meth:`reaches` question's answer, kept apart from
-    :attr:`_answers`: a capped query returns an upper bound rather than the
-    maximum, so the two must not be mistaken for each other."""
-
     _n_lits: int
     """How many guard literals exist."""
 
@@ -76,7 +71,6 @@ class DigitBoundStore:
         self._solver = solver if solver is not None else default_solver()
         self._constraints = []
         self._answers = {}
-        self._decisions = {}
         self._n_lits = 0
         self._own = {}
         self._owner = {}
@@ -95,7 +89,6 @@ class DigitBoundStore:
                 self._naming.setdefault(v.index, []).append(len(self._constraints) - 1)
         self._solver.assume(c)
         self._answers.clear()
-        self._decisions.clear()
 
     def var(self, name: str) -> Term:
         """A fresh variable, as a term."""
@@ -243,7 +236,6 @@ class DigitBoundStore:
             if owner is not None:
                 self._imp_naming.setdefault(owner[0], []).append(k)
         self._answers.clear()
-        self._decisions.clear()
 
     def closed(self, assuming: frozenset[int]) -> frozenset[int]:
         """*assuming* and everything it implies."""
@@ -298,59 +290,38 @@ class DigitBoundStore:
 
         Memoized: the same term is asked many times over an unchanged store.
         """
-        assuming = self.closed(assuming)
-        key = (term, assuming)
-        answer = self._answers.get(key)
-        if answer is None:
-            answer = self._bound(term, assuming)
-            self._answers[key] = answer
-        return answer
+        return self.maximums([term], assuming)[0]
 
-    def reaches(
-        self, bounds: Sequence[tuple[Term, int]],
-        assuming: frozenset[int] = frozenset(),
-    ) -> bool:
-        """Can any ``term >= k`` hold?
+    def maximums(
+        self, terms: Sequence[Term], assuming: frozenset[int] = frozenset(),
+    ) -> list[int | float]:
+        """Each of *terms*' :meth:`maximum`, those not already settled asked
+        of the solver as one query, so a backend that optimizes several
+        objectives in one search can.  Each is still the term's own maximum:
+        they need not be attained together.
 
-        A decision, where :meth:`maximum` is an optimisation -- the question
-        to ask where the answer is only ever compared against a threshold.
-        Each term is asked with its own `k` as the solver's cutoff, so the
-        backend may stop at the first refutation instead of searching for a
-        maximum nothing will read, and the first `True` ends the question --
-        so a caller puts the term most likely to reach first.  An empty list
-        reaches nothing.
+        A free term is unbounded above, which a set lookup settles where the
+        solver would have to search.
         """
-        if not bounds:
-            return False
         assuming = self.closed(assuming)
-        key = (tuple(bounds), assuming)
-        answer = self._decisions.get(key)
-        if answer is None:
-            answer = any(self._at_least(t, k, assuming) for t, k in bounds)
-            self._decisions[key] = answer
-        return answer
+        asked: list[Term] = []
+        for t in terms:
+            key = (t, assuming)
+            if key in self._answers or t in asked:
+                continue
+            if self._free(t):
+                self._answers[key] = math.inf
+            else:
+                asked.append(t)
+        if asked:
+            for t, answer in zip(asked, self._solver.maximize(asked, assuming)):
+                self._answers[(t, assuming)] = answer
+        return [self._answers[(t, assuming)] for t in terms]
 
     def _free(self, term: Term) -> bool:
         """Whether *term* names a variable no constraint mentions, which runs
         to both infinities and so leaves *term* unbounded either way."""
         return any(v.index not in self._naming for v, _ in term.coeffs)
-
-    def _at_least(self, term: Term, k: int, assuming: frozenset[int]) -> bool:
-        """Can *term* reach *k*?  A free variable reaches anything."""
-        if self._free(term):
-            return True
-        return self._solver.maximize(term, k, assuming) >= k
-
-    def _bound(self, term: Term, assuming: frozenset[int]) -> int | float:
-        """*term*'s greatest value, asking the solver only where the answer
-        is not already settled.
-
-        A free term is unbounded above, which a set lookup settles where the
-        solver would have to search.
-        """
-        if self._free(term):
-            return math.inf
-        return self._solver.maximize(term, assuming=assuming)
 
     # -- the query -------------------------------------------------------
 

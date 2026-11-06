@@ -47,20 +47,20 @@ def _term(b, text: str):
 
 
 class _FakeSolver:
-    """A backend answering every query with *answer*, recording what it is
-    told and each query's cutoff."""
+    """A backend answering every objective with *answer*, recording what it
+    is told and each query's objectives."""
 
     def __init__(self, answer):
         self.answer = answer
         self.assumed = []
-        self.cutoffs = []
+        self.asked = []
 
     def assume(self, constraint):
         self.assumed.append(constraint)
 
-    def maximize(self, objective, cutoff=None, assuming=frozenset()):
-        self.cutoffs.append(cutoff)
-        return self.answer
+    def maximize(self, objectives, assuming=frozenset()):
+        self.asked.append(list(objectives))
+        return [self.answer] * len(objectives)
 
 
 class TestTerm:
@@ -213,7 +213,7 @@ class TestBackendIsReplaceable:
         assert s.maximum(x) == math.inf
         assert s.maximum(-x) == math.inf
         assert s.maximum(x + y) == math.inf
-        assert solver.cutoffs == []
+        assert solver.asked == []
 
     def test_every_constraint_reaches_the_backend(self):
         """The store states each constraint once, as it is made: a backend
@@ -227,46 +227,6 @@ class TestBackendIsReplaceable:
         s.le_max(x, [y, 4])
         assert len(solver.assumed) == 3
 
-    def test_a_backend_may_ignore_the_cutoff(self):
-        """`cutoff` lets a backend stop early; the exact maximum is an upper
-        bound whatever the caller asked for, so ignoring it stays correct."""
-        solver = _FakeSolver(3)
-        s = DigitBoundStore(solver=solver)
-        x = s.var('x')
-        s.le(x, 3)
-        assert s.reaches([(x, 3)]) is True
-        assert s.reaches([(x, 4)]) is False
-        assert solver.cutoffs == [3, 4]      # the threshold reached the backend
-
-
-class TestReachesIsADecision:
-    """`maximum` is an optimisation; where the answer is only compared
-    against a threshold, one refutation settles it instead."""
-
-    def test_it_agrees_with_the_maximum(self):
-        s = DigitBoundStore()
-        x, y = s.var('x'), s.var('y')
-        s.le(x, 3)
-        s.le(y, -2)
-        for term, k in ((x, 3), (x, 4), (y, -2), (y, -1), (x + y, 1), (x + y, 2)):
-            assert s.reaches([(term, k)]) == (s.maximum(term) >= k)
-
-    def test_any_of_them(self):
-        s = DigitBoundStore()
-        x, y = s.var('x'), s.var('y')
-        s.le(x, 3)
-        s.le(y, 9)
-        assert s.reaches([(x, 4), (y, 4)]) is True     # the second reaches
-        assert s.reaches([(x, 4), (y, 10)]) is False
-        assert s.reaches([]) is False
-
-    def test_a_free_variable_reaches_anything(self):
-        solver = _FakeSolver(0)
-        s = DigitBoundStore(solver=solver)
-        x = s.var('x')
-        assert s.reaches([(x, 10**9)]) is True
-        assert solver.cutoffs == []
-
 
 class TestBisectionMatchesOptimization:
     """Bisection is the default because it is cheaper; it has to agree with
@@ -274,8 +234,8 @@ class TestBisectionMatchesOptimization:
     stop, and where it stops must only ever loosen the answer."""
 
     CASES = (
-        # far below any plausible cutoff: reading it as unsatisfiable, or as
-        # anything below itself, would be unsound
+        # far below where the probe starts: reading it as unsatisfiable, or
+        # as anything below itself, would be unsound
         ('deeply negative', lambda s, x, y: (s.le(x, -5_000_000), x), -5_000_000),
         ('large finite', lambda s, x, y: (s.le(x, 9_000_000), x), 9_000_000),
         ('through a chain', lambda s, x, y: ((s.le(y, 7), s.le(x, y)), x), 7),
@@ -315,8 +275,6 @@ class TestAGuardedConstraint:
         s.le(x, 3, guard=(g,))
         assert s.maximum(x) == 10
         assert s.maximum(x, frozenset({g})) == 3
-        assert s.reaches([(x, 4)])
-        assert not s.reaches([(x, 4)], frozenset({g}))
 
     def test_an_instance_keeps_one_its_copy_does_not_move(self):
         """"Every element of `xs` is finite" does not vary with `xs`'s

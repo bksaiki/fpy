@@ -40,9 +40,13 @@ backend, updated where the work happens:
 |---|---|
 | `solver_time` | seconds in the backend: inside `assume`, which encodes into live solvers, and inside `maximize`, the queries |
 | `constraints` | constraints assumed |
-| `queries` | `maximize` calls |
+| `queries` | `maximize` calls, each one query of one or more objectives |
 | `calls` | backend calls (a satisfiability check, or a HiGHS solve) |
-| `degraded` | answers loosened because the backend could not decide: a timeout or unknown, or (HiGHS) a box too wide to solve |
+| `degraded` | queries with an answer loosened because the backend could not decide: a timeout or unknown, or (HiGHS) a box too wide to solve |
+
+Every solver also keeps a `trace`: a `QueryRecord` per query, of the
+constraints in the component it was asked of, its backend calls, its
+time, and how many objectives it asked.  It is always kept, a tuple per query.
 
 These are what the evaluation reads.  A first version also split the time
 (`assume`, `maximize`, building solvers) and broke the counts down (calls by
@@ -75,7 +79,6 @@ Move what does not depend on z3 from `Z3Solver` into a base class,
 
 - components (variables grouped by shared constraints) and their merging;
 - the ceiling past which the answer is `inf`;
-- the cutoff path;
 - bisection;
 - statistics.
 
@@ -88,8 +91,13 @@ A backend supplies four hooks:
 - read the objective's value in the model (`_value`).
 
 Bisection over those hooks is the default way to find a maximum
-(`_maximum`).  A backend that optimizes natively, as HiGHS does, overrides
-it, as does z3 with `bisect=False`.
+(`_maximum`), one objective of a query at a time (`_maxima`).  A backend that
+optimizes natively, as HiGHS does, overrides `_maximum`; z3 with
+`bisect=False` overrides `_maxima`, to ask every objective in one check
+(§3.5).
+
+Each backend is a module of its own: `z3_solver.py`, `cvc5_solver.py`,
+`highs_solver.py`, over `solver.py`'s interface and base.
 
 A registry, `make_solver('z3' | 'cvc5' | 'highs', **opts)`.  The cvc5 and
 HiGHS backends import their dependency lazily.  The dependencies go in an
@@ -158,9 +166,10 @@ stop short of its optimum), `time_limit` set, presolve on.
 
 **Queries.**
 
-- **Maximum:** set the objective's costs, maximize, one solve.
-- **Cutoff:** add the row `objective >= k` with no costs, solve for
-  feasibility, delete the row.  The box is first widened to reach `k`.
+- **Maximum:** set the objective's costs, maximize, one solve per
+  objective of a query.  A MIP has one objective, and HiGHS's
+  multi-objective mode is lexicographic, which is not each objective's own
+  maximum (§3.5).
 - HiGHS discards its status and solution when a bound changes, so a solve's
   result is read before the assumed literals are released.
 
@@ -208,6 +217,34 @@ It loosened four unit tests' answers to `inf`, and was dropped.
 - OR-Tools CP-SAT: exact integer arithmetic, and guards and `LE_MAX` without
   big-M (`OnlyEnforceIf`, `AddBoolOr`).
 
+### 3.5 Queries of several objectives
+
+`maximize` takes a list of objectives under one set of assumed literals, and
+returns each one's maximum.  One call is one query.  The maxima are
+independent: each may be attained by a different solution.  A format needs
+exactly that: its magnitude is the largest msb, its grid the smallest lsb,
+and its precision the largest `msb - lsb + 1`, which no one solution need
+reach together.
+
+- **The store** asks a format's three bounds as one query
+  (`DigitBoundStore.maximums`, from `DigitBoundInfer.bounds`).  A term
+  already answered, or naming a free variable, is settled without the
+  solver; the rest go together.  A lone `maximum` is a query of one.
+- **z3 with `Optimize`** answers a query in one check, with
+  `opt.priority` set to `box`: each objective's own optimum.  The default,
+  `lex`, optimizes each objective given the ones before it, which is not a
+  bound on the later ones.  `pareto` returns one front point per check; only
+  the whole front's box would bound them.
+- **Bisecting backends and HiGHS** answer the objectives one at a time, as
+  before.  A query is still one record: its calls are every check or solve
+  it took.
+
+The cutoff went with the change.  `maximize(objective, cutoff)` let a
+backend settle "can `t` reach `k`?" in one check, for `DigitBoundStore.reaches`;
+its one caller in `infer.py` was removed in #337, so the store's `reaches`,
+its cache, and the cutoff path were dropped.  Bisection's own probe
+(`_reaches`) stays.
+
 ## 4. Correctness
 
 - **Store tests under every backend.**  The store-level tests in
@@ -223,7 +260,8 @@ It loosened four unit tests' answers to `inf`, and was dropped.
 ## 5. Evaluation: `evaluation/solver_backends/`
 
 Laid out as `evaluation/analysis_precision/`: `run.py`, `report.py`, a README
-and `results/`.
+and `results/`, a new folder in it per run (`results/<date>-<time>/`): a
+run deletes nothing.
 
 ### 5.1 Running
 
@@ -250,19 +288,20 @@ compilations run at once (default 4).
 ### 5.2 Outputs
 
 Besides each design's record (`<design>.json`) and the run's settings
-(`backends-run.json`), the report replaces `results/report/` with the table
-and the figures, and prints a summary:
+(`backends-run.json`), the report writes the table and the figures into the
+run's `report/`, and prints a summary:
 
 - `backends-totals.tex`: one row per backend, over the designs every backend
-  compiled: compile and solver time, the solver's share, backend calls,
-  and calls and solver time per query.  Constraints and queries are left
-  out: they are the same under every backend, and the summary prints them.
-- `backends-scatter.{pdf,png}`: each design's solver time against its number of
-  constraints, one point per design and backend.  Designs every backend
-  answers in under 10 ms of solver time (the two FMA chains) are left out.
-- `backends-scatter-all.{pdf,png}`: the same, with every design.  Both are log-log.
-- `backends-scatter-linear.{pdf,png}`, `backends-scatter-all-linear.{pdf,png}`:
-  the same two on linear axes.
+  compiled: its solver method, compile and solver time, the solver's share,
+  and solver time per query.  Constraints and queries are left out: they
+  are the same under every backend, and the summary prints them.
+- `sensitivity-scatter.{pdf,png}`: each query's time against the constraints in
+  its component, over every design's median run, a panel per backend,
+  log-log.  It was a point per design (total solver time against total
+  constraints), but the designs span only 400 to 49k constraints, most of
+  them 10k-30k, and a backend never sees a design's total, only the
+  component a query names.  A linear-axes copy was dropped: the log-log
+  one is the one the report uses.
 
 ## 6. Status
 
