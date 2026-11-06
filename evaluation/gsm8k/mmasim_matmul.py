@@ -23,9 +23,8 @@ DESIGNS = tuple(d for d in CATALOG if d not in REFUSED)
 
 PREFIX = 'mmasim:'
 
-_ELEMS = 1 << 24
-"""Elements of `[rows, cols, span]` per call at most: bounds MMA-Sim's
-intermediates, about 50 bytes each at peak."""
+_BUDGET = 50 << 24
+"""Bytes of MMA-Sim's intermediates per call at most (:func:`_bytes`)."""
 
 _RHO = {(32, fp.RM.RTZ): 'RZ-FP32', (22, fp.RM.RTZ): 'RZ-E8M13', (32, fp.RM.RNE): 'RNE-FP32',
         (16, fp.RM.RNE): 'RNE-FP16'}
@@ -63,14 +62,17 @@ def output(design: str) -> torch.dtype:
     return {16: torch.float16, 64: torch.float64}.get(d.rho.nbits, torch.float32)
 
 
-def _span(design: str, k: int) -> int:
-    """Elements along `k` MMA-Sim's operation holds per output at once:
-    one FMA's, one instruction's, or all `k` (CDNA2's products, and TF32's
-    truncation, are taken whole)."""
+def _bytes(design: str, k: int) -> int:
+    """Bytes MMA-Sim's operation holds per output at its peak, as measured on
+    the GPU: about 50 per element of an instruction (16 for GST's), 40 per
+    FMA; CDNA2's products and TF32's truncation take all `k`, at about 20
+    and 12 per element."""
     d = CATALOG[design]
-    if d.sum == 'tree' or d.a == fp.TF32:
-        return k
-    return 1 if d.sum == 'fma' else d.L
+    if d.sum == 'fma':
+        return 40
+    if d.sum == 'tree':
+        return 20 * k
+    return (16 if d.G is not None else 50) * d.L + (12 * k if d.a == fp.TF32 else 0)
 
 
 def matmul(design: str, a: torch.Tensor, w: torch.Tensor,
@@ -79,12 +81,13 @@ def matmul(design: str, a: torch.Tensor, w: torch.Tensor,
     its :func:`output` dtype, for *a* `[m, k]` and *w* `[n, k]` in
     :data:`DTYPES`; a block-scaled design takes *scales* `[m, k / b]` and
     `[n, k / b]`, one per block `b` of its scheme.  Computed in blocks of
-    rows and columns where memory requires."""
+    rows and columns, as large as :data:`_BUDGET` allows: MMA-Sim is bound
+    by launches, so fewer blocks are faster."""
     op = operation(design)
     (m, k), n = a.shape, w.shape[0]
-    span = _span(design, k)
-    cols = min(n, max(1, _ELEMS // span))
-    rows = min(m, max(1, _ELEMS // (cols * span)))
+    per = _bytes(design, k)
+    cols = min(n, max(1, _BUDGET // per))
+    rows = min(m, max(1, _BUDGET // (cols * per)))
     sa, sw = scales or (None, None)
     if rows == m and cols == n:
         return _call(op, design, a, w, sa, sw)

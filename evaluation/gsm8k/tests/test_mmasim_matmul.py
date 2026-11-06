@@ -78,7 +78,7 @@ def test_layer_shapes(design: str, n: int, k: int, compiled: None):
 def test_blocks_change_nothing(design: str, compiled: None, monkeypatch: pytest.MonkeyPatch):
     """Blocks of rows and columns, as `lm_head` needs, give the same bits."""
     whole, _ = _both(design, 5, 96, 128, 0)
-    monkeypatch.setattr(mmasim_matmul, '_ELEMS', 2 * 32 * 128)
+    monkeypatch.setattr(mmasim_matmul, '_BUDGET', 2 * 32 * mmasim_matmul._bytes(design, 128))
     blocked, want = _both(design, 5, 96, 128, 0)
     assert bool(mmasim_matmul.same(blocked, whole).all() & mmasim_matmul.same(blocked, want).all())
 
