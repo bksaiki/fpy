@@ -2620,7 +2620,7 @@ class _FormatInferInstance(Visitor):
                 return fmt  # no `Format` materializes it
         if cur is None or isinstance(fmt, SetFormat):
             return fmt      # a set of values is exact already
-        # the store's magnitude is a binade, so a tighter `cur` need not contain it
+        # either may be tighter in any parameter, so meet them
         return _narrowed(fmt, cur, alt)
 
     def _callee_digit_bound(self, e: Call) -> 'DigitBoundAnalysis | None':
