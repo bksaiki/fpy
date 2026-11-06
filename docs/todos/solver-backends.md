@@ -321,6 +321,30 @@ evaluation in `evaluation/sensitivity/`.  The digit-bound suites
 (`test_digit_bound.py`, `test_digit_bound_oracle.py`) pass under every
 backend through `FPY_DIGIT_BOUND_SOLVER`.
 
+**Open: HiGHS is wrong on wide boxes (§3.3, "Floating point").**  Found in
+review, not yet fixed; the HiGHS numbers are not to be cited until it is.
+On random stores of 8 variables with `LE_MAX` rows and guards, whose
+constants put the box near `2^29`, HiGHS against z3:
+
+- **Loose.**  The incumbent breaks `LE_MAX` rows by 2 to 13 once rounded:
+  a selector a hair below 1 releases `lhs - r_i <= M * (1 - d_i)` by
+  `M * eps`.  Answers came back loose by up to 2e7.
+- **Below the maximum: unsound.**  One query came back `kOptimal` at
+  30000032 with an exactly feasible incumbent, where z3 attains 30000035.
+  The dual bound itself is wrong, so checking the incumbent after the solve
+  cannot catch it.
+- **Tolerances alone do not fix it.**  `mip_feasibility_tolerance` and
+  `primal_feasibility_tolerance` at `1e-9` keep one hand-built `max` exact
+  to a box of `2^31` (default: `kSolveError` from `2^30`), `1e-10` to
+  `2^35`, but random stores still differed at `1e-9`.
+
+Next: tally the disagreements by box size, under the default tolerances and
+under `1e-9` for primal, dual and MIP feasibility, to find the box below
+which HiGHS agrees with z3; then tighten the tolerances and lower
+`_MAX_BOX` to it (past it the answer is `inf`, degraded and counted), and
+add the fuzz as a test.  Check what boxes the MMA-Sim components need: the
+review estimated `2^22` to `2^25` for the large CDNA3 ones.
+
 ## 7. Order
 
 1. The counters and the factory hook (§2), and the overhead check.

@@ -11,7 +11,8 @@ means.
 
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import astuple, dataclass
 from enum import Enum, auto
 from typing import Generic, NamedTuple, Protocol, TypeVar
@@ -137,7 +138,12 @@ class Solver(Protocol):
     """What the backend has done so far."""
 
     trace: 'list[QueryRecord]'
-    """Each query the backend answered, in order."""
+    """Each query the backend answered, in order, where it was built to keep
+    them (``keep_trace``); empty otherwise."""
+
+    bisect: bool
+    """Whether a maximum is found by bisecting over satisfiability checks,
+    rather than by the backend optimizing."""
 
     def assume(self, constraint: Constraint) -> None:
         """State *constraint*.  Constraints only ever narrow."""
@@ -160,6 +166,18 @@ class Solver(Protocol):
         """
         ...
 
+    def reaches(
+        self, objective: Term, k: int, assuming: frozenset[int] = frozenset(),
+    ) -> bool:
+        """Can *objective* reach *k* under what was assumed, and the literals
+        *assuming*?  One query, and a decision rather than an optimization:
+        one satisfiability check, where a maximum is a search.
+
+        ``True`` where undecided: a ``False`` is a refutation every caller
+        may rely on.
+        """
+        ...
+
 
 @dataclass
 class SolverStats:
@@ -175,7 +193,7 @@ class SolverStats:
     constraints: int = 0
     """Constraints assumed."""
     queries: int = 0
-    """Calls to :meth:`Solver.maximize`."""
+    """Calls to :meth:`Solver.maximize` and :meth:`Solver.reaches`."""
     calls: int = 0
     """Backend calls -- a satisfiability check, or one solve."""
     degraded: int = 0
@@ -226,7 +244,16 @@ class _ComponentSolver(Generic[_S]):
 
     stats: SolverStats
 
+    keep_trace: bool
+    """Whether each query is kept in :attr:`trace`: only the sensitivity
+    evaluation reads it, so an ordinary compilation does not pay for it."""
+
     trace: list[QueryRecord]
+
+    bisect: bool = True
+    """Whether a maximum is found by bisection.  It describes, rather than
+    chooses: a backend that optimizes overrides :meth:`_maximum` or
+    :meth:`_maxima`, and says so here."""
 
     _components: Unionfind[int]
     """Variable indices grouped into components: constraints that share no
@@ -256,9 +283,10 @@ class _ComponentSolver(Generic[_S]):
     _degraded: bool
     """Whether the query being answered has met an undecided call."""
 
-    def __init__(self, timeout_ms: int = 10_000):
+    def __init__(self, timeout_ms: int = 10_000, keep_trace: bool = False):
         self.timeout_ms = timeout_ms
         self.stats = SolverStats()
+        self.keep_trace = keep_trace
         self.trace = []
         self._components = Unionfind()
         self._group = {}
@@ -375,21 +403,38 @@ class _ComponentSolver(Generic[_S]):
     def maximize(
         self, objectives: Sequence[Term], assuming: frozenset[int] = frozenset(),
     ) -> list[int | float]:
+        # every objective's variables: one solver answers the whole query
+        named = {v.index for t in objectives for v, _ in t.coeffs}
+        with self._query(named, len(objectives)):
+            solver = self._solver_for_vars(named, optimize=self._optimizes)
+            return self._maxima(solver, objectives, tuple(sorted(assuming)))
+
+    def reaches(
+        self, objective: Term, k: int, assuming: frozenset[int] = frozenset(),
+    ) -> bool:
+        named = {v.index for v, _ in objective.coeffs}
+        with self._query(named, 1):
+            # a check needs no optimizer, whichever way this backend maximizes
+            solver = self._solver_for_vars(named, optimize=False)
+            return self._reaches(solver, objective, k, tuple(sorted(assuming)))
+
+    @contextmanager
+    def _query(self, named: set[int], objectives: int) -> Iterator[None]:
+        """Count and time one query over the variables *named*, and trace it
+        where :attr:`keep_trace`."""
         start = time.perf_counter()
         calls = self.stats.calls
         self._degraded = False
-        # every objective's variables: one solver answers the whole query
-        named = {v.index for t in objectives for v, _ in t.coeffs}
         try:
-            solver = self._solver_for_vars(named, optimize=self._optimizes)
-            return self._maxima(solver, objectives, tuple(sorted(assuming)))
+            yield
         finally:
             seconds = time.perf_counter() - start
             self.stats.queries += 1
             self.stats.degraded += self._degraded
             self.stats.solver_time += seconds
-            self.trace.append(QueryRecord(
-                self._size(named), self.stats.calls - calls, seconds, len(objectives)))
+            if self.keep_trace:
+                self.trace.append(QueryRecord(
+                    self._size(named), self.stats.calls - calls, seconds, objectives))
 
     def _size(self, named: set[int]) -> int:
         """How many constraints the solver for *named* holds, once

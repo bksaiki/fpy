@@ -32,8 +32,9 @@ class Z3Solver(_ComponentSolver[_Z3Solver]):
     z3 to optimize.
 
     Refutation reuses the plain solver already built for the component,
-    where `Optimize` is a second encoding of the same constraints.  Off only
-    so `test_both_backends_agree` can check the two against each other.
+    where `Optimize` is a second encoding of the same constraints.  Off in
+    the ``z3-opt`` backend, which the sensitivity evaluation measures
+    against it.
     """
 
     _env: dict[_Var, z3.ArithRef]
@@ -45,8 +46,10 @@ class Z3Solver(_ComponentSolver[_Z3Solver]):
     _lits: dict[int, z3.BoolRef]
     """Each guard literal's z3 form."""
 
-    def __init__(self, timeout_ms: int = 10_000, bisect: bool = True):
-        super().__init__(timeout_ms)
+    def __init__(
+        self, timeout_ms: int = 10_000, bisect: bool = True, keep_trace: bool = False,
+    ):
+        super().__init__(timeout_ms, keep_trace)
         self.bisect = bisect
         self._env = {}
         self._encoded = {}

@@ -11,7 +11,7 @@ Writes into the results directory, beside the data, overwriting only these:
   and solver time, the solver's share, and solver time per query;
 - `sensitivity-scatter.{pdf,png}`: each query's time against the
   constraints in the component it was asked of, from every design's median
-  run, a panel per backend, log-log;
+  run, a panel per backend in one row, log-log;
 - `sensitivity-paper.json`: every number the evaluation cites: each
   backend's totals, per query, and against z3, and which designs' C++ or
   counts differ;
@@ -33,10 +33,10 @@ from matplotlib.ticker import FuncFormatter
 NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5', 'highs': 'HiGHS'}
 """Each backend's label."""
 
-METHODS = {'z3': 'Binary search', 'z3-opt': 'Optimize', 'cvc5': 'Binary search',
-           'highs': 'Optimize'}
-"""How each backend finds a maximum: bisecting over satisfiability queries,
-or asking the solver to optimize."""
+METHODS = {True: 'Binary search', False: 'Optimize'}
+"""How a backend finds a maximum, by whether it bisects over satisfiability
+queries (`sensitivity-run.json`'s `bisects`, from the backend itself) or asks
+the solver to optimize."""
 
 ROW_NAMES = {**NAMES, 'z3-opt': 'z3'}
 """Each backend's label in the table, whose method column tells the two z3
@@ -94,18 +94,15 @@ def queries(records: list[dict[str, Any]], b: str, log: bool) -> tuple[list[int]
 
 def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
     """Each query's time against the constraints it saw, a panel per
-    backend on shared axes, log where *log* and linear otherwise, as *path*
-    with `.pdf` and with `.png`.
+    backend in one row on shared axes, log where *log* and linear
+    otherwise, as *path* with `.pdf` and with `.png`.
 
     A panel each, not one cloud: tens of thousands of points a backend
     overlap until only the last drawn shows."""
     bs = backends_of(records)
-    cols = 2 if len(bs) > 1 else 1
-    rows = -(-len(bs) // cols)
-    fig, axes = plt.subplots(rows, cols, figsize=(3.4 * cols, 2.8 * rows),
+    cols = max(len(bs), 1)
+    fig, axes = plt.subplots(1, cols, figsize=(3.4 * cols, 2.8),
                              sharex=True, sharey=True, squeeze=False)
-    for ax in axes.flat[len(bs):]:
-        ax.set_visible(False)
     shown = 0
     for ax, b in zip(axes.flat, bs):
         xs, secs = queries(records, b, log)
@@ -138,8 +135,12 @@ def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
     plt.close(fig)
 
 
-def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """The totals the table, the summary and the paper cite."""
+def numbers(
+    records: list[dict[str, Any]], bisects: dict[str, bool] | None = None,
+) -> dict[str, Any]:
+    """The totals the table, the summary and the paper cite; *bisects* says
+    how each backend finds a maximum, where known."""
+    bisects = bisects or {}
     bs = backends_of(records)
     ref = bs[0]
     # totals only over designs every backend compiled, so they compare
@@ -152,7 +153,7 @@ def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
         queries = sum(r['stats']['queries'] for r in rs)
         calls = sum(r['stats']['calls'] for r in rs)
         totals[b] = {
-            'method': METHODS.get(b),
+            'method': METHODS[bisects[b]] if b in bisects else None,
             'compile_seconds': compile_s,
             'solver_seconds': solver_s,
             'solver_share': solver_s / compile_s if compile_s else 0.0,
@@ -172,7 +173,7 @@ def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
         for b in bs[1:]
     }
     failed = {
-        b: {rec['design']: rec['backends'][b]['outcome'] for rec in records if not _ok(rec, b)}
+        b: {rec['design']: _failure(rec['backends'][b]) for rec in records if not _ok(rec, b)}
         for b in bs
     }
     varies = {
@@ -183,6 +184,14 @@ def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
         'designs': len(records), 'compared': len(common), 'reference': ref,
         'totals': totals, 'cpp_differs': differs, 'failed': failed, 'counts_vary': varies,
     }
+
+
+def _failure(r: dict[str, Any]) -> str:
+    """How a backend failed a design: its outcome, and how many of the
+    repeats compiled where some did."""
+    if r.get('compiled'):
+        return f'{r["outcome"]}, {r["compiled"]} of {len(r["runs"])} compiled'
+    return r['outcome']
 
 
 def totals_latex(nums: dict[str, Any]) -> str:
@@ -201,7 +210,7 @@ def totals_latex(nums: dict[str, Any]) -> str:
     for b, t in nums['totals'].items():
         per_query = 1000 * t['seconds_per_query']
         lines.append(
-            f'{ROW_NAMES.get(b, b)} & {METHODS.get(b, "")} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
+            f'{ROW_NAMES.get(b, b)} & {t["method"] or ""} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
             f'{100 * t["solver_share"]:.0f}\\% & {per_query:.1f}\\,ms \\\\')
     lines += ['\\bottomrule', '\\end{tabular}', '']
     return '\n'.join(lines)
@@ -238,6 +247,16 @@ def summary(nums: dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+def _bisects(out: Path, backends: list[str]) -> dict[str, bool]:
+    """Whether each backend bisects: as the run recorded it, or, for a run
+    from before it did, as the backend says now."""
+    run = json.loads((out / 'sensitivity-run.json').read_text())
+    if 'bisects' in run:
+        return run['bisects']
+    from fpy2.analysis.digit_bound import make_solver
+    return {b: make_solver(b).bisect for b in backends}
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('results', type=Path, help="run.py's output directory")
@@ -247,7 +266,7 @@ def main(argv: list[str]) -> int:
     records = load(out)
     if not records:
         ap.error(f'no results in {out}')
-    nums = numbers(records)
+    nums = numbers(records, _bisects(out, backends_of(records)))
     (out / 'sensitivity-totals.tex').write_text(totals_latex(nums))
     figure(records, out / 'sensitivity-scatter')
     (out / 'sensitivity-paper.json').write_text(json.dumps(nums, indent=1) + '\n')

@@ -32,8 +32,8 @@ class Cvc5Solver(_ComponentSolver[cvc5.Solver]):
     _lits: dict[int, cvc5.Term]
     """Each guard literal's cvc5 form."""
 
-    def __init__(self, timeout_ms: int = 10_000):
-        super().__init__(timeout_ms)
+    def __init__(self, timeout_ms: int = 10_000, keep_trace: bool = False):
+        super().__init__(timeout_ms, keep_trace)
         self._tm = cvc5.TermManager()
         self._env = {}
         self._encoded = {}

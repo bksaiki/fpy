@@ -10,6 +10,9 @@ DIR`) with `<design>.json` per design, `sensitivity-run.json`, and
 `report.py`'s table and figure.  Each compilation runs in a fresh process,
 under a wall-clock limit; each backend call inside it under a limit of its
 own (`-c`).  Exits 1 if a backend fails a design z3 compiles.
+
+A design counts as compiled under a backend only where every repeat
+compiled.
 """
 
 import argparse
@@ -31,13 +34,11 @@ sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examp
 sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
 import config
-import report
 from compile import DESIGNS, _filename
 
-RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'sensitivity'
+from fpy2.analysis.digit_bound import BACKENDS, SolverStats, make_solver, solver_backend
 
-BACKENDS = ('z3', 'z3-opt', 'cvc5', 'highs')
-"""Every backend there is, z3 first: the others are read against it."""
+RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'sensitivity'
 
 
 def _foreign(out: Path) -> list[str]:
@@ -57,11 +58,10 @@ def compile_once(
     the C++'s hash, or the error that stopped it."""
     from compile import compile_design
 
-    from fpy2.analysis.digit_bound import SolverStats, solver_backend
-
     build = dict(DESIGNS)[name]
     start = time.perf_counter()
-    with solver_backend(backend, timeout_ms=round(1000 * call_timeout)) as solvers:
+    with solver_backend(
+            backend, timeout_ms=round(1000 * call_timeout), keep_trace=True) as solvers:
         try:
             src, _ = compile_design(build)
             outcome = {'cpp_sha256': hashlib.sha256(src.encode()).hexdigest()}
@@ -98,17 +98,24 @@ def _run_child(
 
 
 def _summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    """One backend's runs on one design: the median run by compile time, of
-    those that compiled, and their outcome.
+    """One backend's runs on one design: their outcome, and the median run by
+    compile time.
 
-    The time, the counts and the queries are that one run's.  The counts
+    The outcome is `ok` only where every run compiled: a median over the
+    runs that happened to finish would hide the others.  Otherwise it names
+    each way the rest failed (`error`, `timeout`, or `error+timeout`), and
+    `compiled` how many did not fail.
+
+    The time, the counts and the queries are the median run's.  The counts
     are the same every run unless a backend call hit its limit in some runs
     and not others; the report names the designs where they differ.  Only
     that run's queries are kept: the others' would triple the results."""
     ok = [r for r in runs if 'cpp_sha256' in r]
     kept = [{k: v for k, v in r.items() if k != 'trace'} for r in runs]
-    if not ok:
-        return {'runs': kept, 'outcome': 'timeout' if 'timeout' in runs[0] else 'error'}
+    if len(ok) < len(runs):
+        failed = sorted({'timeout' if 'timeout' in r else 'error'
+                         for r in runs if 'cpp_sha256' not in r})
+        return {'runs': kept, 'outcome': '+'.join(failed), 'compiled': len(ok)}
     # the lower median on an even count: a run that happened
     mid = sorted(ok, key=lambda r: r['seconds'])[(len(ok) - 1) // 2]
     return {
@@ -168,7 +175,7 @@ def main(argv: list[str]) -> int:
                     help='only designs whose name contains one of these')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the results directory, replaced (default %(default)s)')
-    ap.add_argument('-b', '--backends', nargs='+', choices=BACKENDS,
+    ap.add_argument('-b', '--backends', nargs='+', choices=list(BACKENDS),
                     default=list(config.SENSITIVITY_BACKENDS),
                     help='backends to compare, the first the reference (default %(default)s)')
     ap.add_argument('-r', '--repeats', type=int, default=config.SENSITIVITY_REPEATS,
@@ -195,12 +202,15 @@ def main(argv: list[str]) -> int:
     (args.out / 'sensitivity-run.json').write_text(json.dumps({
         'backends': args.backends, 'repeats': args.repeats, 'jobs': args.jobs,
         'timeout': args.timeout, 'call_timeout': args.call_timeout, 'designs': names,
+        'bisects': {b: make_solver(b).bisect for b in args.backends},
     }, indent=1))
     n, broken = measure(names, args.backends, args.repeats, args.jobs, args.timeout,
                         args.call_timeout, args.out)
     print(f'{n} designs measured; {len(broken)} failed by a backend z3 compiles'
           + (f': {", ".join(broken)}' if broken else ''))
     print('-- report')
+    # here, not at the top: every `--child` would load matplotlib for nothing
+    import report
     report.main([str(args.out)])
     return 1 if broken else 0
 

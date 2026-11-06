@@ -48,12 +48,13 @@ def _term(b, text: str):
 
 class _FakeSolver:
     """A backend answering every objective with *answer*, recording what it
-    is told and each query's objectives."""
+    is told, each query's objectives and each decision's threshold."""
 
     def __init__(self, answer):
         self.answer = answer
         self.assumed = []
         self.asked = []
+        self.thresholds = []
 
     def assume(self, constraint):
         self.assumed.append(constraint)
@@ -61,6 +62,10 @@ class _FakeSolver:
     def maximize(self, objectives, assuming=frozenset()):
         self.asked.append(list(objectives))
         return [self.answer] * len(objectives)
+
+    def reaches(self, objective, k, assuming=frozenset()):
+        self.thresholds.append(k)
+        return self.answer >= k
 
 
 class TestTerm:
@@ -227,6 +232,55 @@ class TestBackendIsReplaceable:
         s.le_max(x, [y, 4])
         assert len(solver.assumed) == 3
 
+    def test_a_decision_is_asked_as_one(self):
+        """`reaches` hands the backend its threshold, not a search for a
+        maximum."""
+        solver = _FakeSolver(3)
+        s = DigitBoundStore(solver=solver)
+        x = s.var('x')
+        s.le(x, 3)
+        assert s.reaches([(x, 3)]) is True
+        assert s.reaches([(x, 4)]) is False
+        assert solver.thresholds == [3, 4]
+        assert solver.asked == []
+
+
+class TestReachesIsADecision:
+    """`maximum` is an optimisation; where the answer is only compared
+    against a threshold, one refutation settles it instead."""
+
+    def test_it_agrees_with_the_maximum(self):
+        s = DigitBoundStore()
+        x, y = s.var('x'), s.var('y')
+        s.le(x, 3)
+        s.le(y, -2)
+        for term, k in ((x, 3), (x, 4), (y, -2), (y, -1), (x + y, 1), (x + y, 2)):
+            assert s.reaches([(term, k)]) == (s.maximum(term) >= k)
+
+    def test_any_of_them(self):
+        s = DigitBoundStore()
+        x, y = s.var('x'), s.var('y')
+        s.le(x, 3)
+        s.le(y, 9)
+        assert s.reaches([(x, 4), (y, 4)]) is True     # the second reaches
+        assert s.reaches([(x, 4), (y, 10)]) is False
+        assert s.reaches([]) is False
+
+    def test_a_free_variable_reaches_anything(self):
+        solver = _FakeSolver(0)
+        s = DigitBoundStore(solver=solver)
+        x = s.var('x')
+        assert s.reaches([(x, 10**9)]) is True
+        assert solver.thresholds == []
+
+    def test_a_new_constraint_forgets_the_answer(self):
+        s = DigitBoundStore()
+        x = s.var('x')
+        s.le(x, 9)
+        assert s.reaches([(x, 4)]) is True
+        s.le(x, 3)
+        assert s.reaches([(x, 4)]) is False
+
 
 class TestBisectionMatchesOptimization:
     """Bisection is the default because it is cheaper; it has to agree with
@@ -275,6 +329,8 @@ class TestAGuardedConstraint:
         s.le(x, 3, guard=(g,))
         assert s.maximum(x) == 10
         assert s.maximum(x, frozenset({g})) == 3
+        assert s.reaches([(x, 4)])
+        assert not s.reaches([(x, 4)], frozenset({g}))
 
     def test_an_instance_keeps_one_its_copy_does_not_move(self):
         """"Every element of `xs` is finite" does not vary with `xs`'s

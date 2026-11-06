@@ -105,6 +105,8 @@ class HighsSolver(_ComponentSolver[_Model]):
     column for one solve.  *timeout_ms* bounds each solve.
     """
 
+    bisect = False
+
     # -- the model ---------------------------------------------------------
 
     def _new(self, optimize: bool) -> _Model:
@@ -246,8 +248,9 @@ class HighsSolver(_ComponentSolver[_Model]):
         bound: tuple[Term, int] | None = None,
     ) -> Status:
         if not into.constraints:
-            # nothing is stated: only a constant bound can fail
-            ok = bound is None or (not bound[0].coeffs and bound[0].const >= bound[1])
+            # nothing is stated, so every variable is free and a bound over
+            # one is met: only a constant bound can fail
+            ok = bound is None or bool(bound[0].coeffs) or bound[0].const >= bound[1]
             return Status.SAT if ok else Status.UNSAT
         # the box must reach far enough for `t >= k` to be satisfiable
         need = 0 if bound is None else 2 * abs(bound[1] - bound[0].const)

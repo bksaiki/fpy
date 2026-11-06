@@ -31,6 +31,10 @@ class DigitBoundStore:
     """Each term's maximum under each assumption set, which :meth:`_add` and
     :meth:`imply` invalidate."""
 
+    _decisions: dict[tuple, bool]
+    """Each :meth:`reaches` question's answer, kept apart from
+    :attr:`_answers`: a decision is not a maximum."""
+
     _n_lits: int
     """How many guard literals exist."""
 
@@ -71,6 +75,7 @@ class DigitBoundStore:
         self._solver = solver if solver is not None else default_solver()
         self._constraints = []
         self._answers = {}
+        self._decisions = {}
         self._n_lits = 0
         self._own = {}
         self._owner = {}
@@ -89,6 +94,7 @@ class DigitBoundStore:
                 self._naming.setdefault(v.index, []).append(len(self._constraints) - 1)
         self._solver.assume(c)
         self._answers.clear()
+        self._decisions.clear()
 
     def var(self, name: str) -> Term:
         """A fresh variable, as a term."""
@@ -236,6 +242,7 @@ class DigitBoundStore:
             if owner is not None:
                 self._imp_naming.setdefault(owner[0], []).append(k)
         self._answers.clear()
+        self._decisions.clear()
 
     def closed(self, assuming: frozenset[int]) -> frozenset[int]:
         """*assuming* and everything it implies."""
@@ -318,10 +325,39 @@ class DigitBoundStore:
                 self._answers[(t, assuming)] = answer
         return [self._answers[(t, assuming)] for t in terms]
 
+    def reaches(
+        self, bounds: Sequence[tuple[Term, int]],
+        assuming: frozenset[int] = frozenset(),
+    ) -> bool:
+        """Can any ``term >= k`` hold?
+
+        A decision, where :meth:`maximum` is an optimisation -- the question
+        to ask where the answer is only ever compared against a threshold.
+        Each term is one satisfiability check rather than a search for a
+        maximum nothing will read, and the first `True` ends the question --
+        so a caller puts the term most likely to reach first.  An empty list
+        reaches nothing.
+        """
+        if not bounds:
+            return False
+        assuming = self.closed(assuming)
+        key = (tuple(bounds), assuming)
+        answer = self._decisions.get(key)
+        if answer is None:
+            answer = any(self._at_least(t, k, assuming) for t, k in bounds)
+            self._decisions[key] = answer
+        return answer
+
     def _free(self, term: Term) -> bool:
         """Whether *term* names a variable no constraint mentions, which runs
         to both infinities and so leaves *term* unbounded either way."""
         return any(v.index not in self._naming for v, _ in term.coeffs)
+
+    def _at_least(self, term: Term, k: int, assuming: frozenset[int]) -> bool:
+        """Can *term* reach *k*?  A free variable reaches anything."""
+        if self._free(term):
+            return True
+        return self._solver.reaches(term, k, assuming)
 
     # -- the query -------------------------------------------------------
 

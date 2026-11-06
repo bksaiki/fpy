@@ -86,6 +86,27 @@ class TestEveryBackendAgrees:
             assert s.prec(v['lp'], v['n'] + 1) == F + 2
             assert s.prec(v['lc'], v['n'] + 1) == F + 1
 
+    def test_a_decision_agrees_with_the_maximum(self, backend):
+        s = _store(backend)
+        x, y = s.var('x'), s.var('y')
+        s.le(y, 3)
+        s.le_max(x, [y, y + 5])
+        g = s.literal()
+        s.le(x, 2, guard=(g,))
+        for term, k, lits in ((x, 8, ()), (x, 9, ()), (x, 2, (g,)), (x, 3, (g,)),
+                              (x - y, 5, ()), (x - y, 6, ())):
+            assert s.reaches([(term, k)], frozenset(lits)) == (
+                s.maximum(term, frozenset(lits)) >= k), (term, k, lits)
+
+    def test_a_variable_nothing_constrains_reaches_anything(self, backend):
+        """Asked of the backend directly: the store settles a free term
+        itself, so only a caller past it meets a component with nothing in
+        it."""
+        s = _store(backend)
+        x = s.var('x')
+        assert s._solver.reaches(x, 10**6) is True
+        assert s._solver.reaches(x - x + 3, 4) is False
+
     def test_an_unrelated_large_constant_costs_nothing(self, backend):
         """A component's bounds come from its own constants: one far away
         must not widen another's search, or its box."""
@@ -137,7 +158,7 @@ class TestStatistics:
         assert st.degraded == 0
 
     def test_each_query_is_traced(self, backend):
-        solver = make_solver(backend)
+        solver = make_solver(backend, keep_trace=True)
         s = DigitBoundStore(solver=solver)
         x, y, z = s.var('x'), s.var('y'), s.var('z')
         s.le(x, 3)
@@ -150,6 +171,34 @@ class TestStatistics:
         assert [q.constraints for q in trace] == [2, 1]
         assert sum(q.calls for q in trace) == solver.stats.calls
         assert sum(q.seconds for q in trace) <= solver.stats.solver_time
+
+    def test_queries_are_traced_only_when_asked(self, backend):
+        solver = make_solver(backend)
+        s = DigitBoundStore(solver=solver)
+        x = s.var('x')
+        s.le(x, 3)
+        s.maximum(x)
+        s.reaches([(x, 9)])
+        assert solver.stats.queries == 2
+        assert solver.trace == []
+
+    def test_a_decision_is_one_query(self, backend):
+        solver = make_solver(backend, keep_trace=True)
+        s = DigitBoundStore(solver=solver)
+        x = s.var('x')
+        s.le(x, 3)
+        assert not s.reaches([(x, 4)])
+        assert [(q.calls, q.objectives) for q in solver.trace] == [(1, 1)]
+
+    def test_bisect_says_how_it_searches(self, backend):
+        """`bisect` is what the evaluation reports as the backend's method:
+        bisection makes several checks for one maximum, an optimizer one."""
+        solver = make_solver(backend)
+        s = DigitBoundStore(solver=solver)
+        x = s.var('x')
+        s.le(x, 1000)
+        assert s.maximum(x) == 1000
+        assert (solver.stats.calls > 1) == solver.bisect
 
     def test_a_cached_answer_does_not_reach_the_solver(self, backend):
         solver = make_solver(backend)
@@ -202,10 +251,11 @@ class TestChoosingABackend:
         assert len(solvers) == 1
 
     def test_options_reach_the_backend(self):
-        with solver_backend('z3', bisect=False, timeout_ms=5) as solvers:
+        with solver_backend('z3', bisect=False, timeout_ms=5, keep_trace=True) as solvers:
             DigitBoundStore()
         assert solvers[0].bisect is False
         assert solvers[0].timeout_ms == 5
+        assert solvers[0].keep_trace is True
 
     def test_an_unknown_backend_is_refused(self):
         with pytest.raises(ValueError, match='unknown solver backend'):
@@ -249,14 +299,14 @@ class TestMaximizeAll:
         assert s.maximums(terms) == [-math.inf] * 3
 
     def test_they_are_one_query(self, backend):
-        solver = make_solver(backend)
+        solver = make_solver(backend, keep_trace=True)
         s = DigitBoundStore(solver=solver)
         s.maximums(_tradeoff(s))
         assert solver.stats.queries == 1
         assert [q.objectives for q in solver.trace] == [3]
 
     def test_settled_terms_do_not_reach_the_solver(self, backend):
-        solver = make_solver(backend)
+        solver = make_solver(backend, keep_trace=True)
         s = DigitBoundStore(solver=solver)
         terms = _tradeoff(s)
         s.maximum(terms[2])
@@ -270,14 +320,14 @@ class TestZ3OptimizesTogether:
     """z3's optimizer answers several objectives in one check."""
 
     def test_one_check_answers_them_all(self):
-        solver = make_solver('z3-opt')
+        solver = make_solver('z3-opt', keep_trace=True)
         s = DigitBoundStore(solver=solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
         assert solver.stats.calls == 1
         assert [(q.calls, q.objectives) for q in solver.trace] == [(1, 3)]
 
     def test_bisection_searches_each_in_turn(self):
-        solver = make_solver('z3')
+        solver = make_solver('z3', keep_trace=True)
         s = DigitBoundStore(solver=solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
         assert [q.objectives for q in solver.trace] == [3]

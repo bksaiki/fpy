@@ -34,7 +34,9 @@ def test_one_design_under_every_backend(tmp_path):
     for r in record['backends'].values():
         assert len(r['trace']['seconds']) == r['stats']['queries']
         assert all('trace' not in run for run in r['runs'])
-    assert json.loads((out / 'sensitivity-run.json').read_text())['call_timeout'] == 30
+    settings = json.loads((out / 'sensitivity-run.json').read_text())
+    assert settings['call_timeout'] == 30
+    assert settings['bisects'] == {'z3': True, 'z3-opt': False, 'cvc5': True, 'highs': False}
     # the run's data, and beside it the report
     assert {p.name for p in out.iterdir() if p.name.startswith('sensitivity-')} == {
         'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
@@ -48,9 +50,18 @@ def test_the_time_and_the_counts_come_from_one_run():
     s = _summarize([run(58, 43, 61144), run(51, 39, 54868), run(38, 28, 48592)])
     assert (s['seconds'], s['solver_time'], s['stats']['constraints']) == (51, 39, 54868)
     assert s['trace'] == {'seconds': [39]}
-    # a run that did not compile is not a candidate
-    s = _summarize([{'timeout': 600}, run(5, 1, 10), run(7, 2, 12)])
-    assert s['seconds'] == 5
+
+
+def test_a_design_compiles_only_where_every_repeat_did():
+    ok = {'seconds': 5, 'cpp_sha256': 'x', 'trace': {}, 'stats': {'solver_time': 1}}
+    s = _summarize([{'timeout': 600}, ok, ok])
+    assert (s['outcome'], s['compiled']) == ('timeout', 2)
+    assert 'seconds' not in s and 'cpp_sha256' not in s
+    # every way they failed, whichever came first
+    for runs in ([{'timeout': 600}, {'error': 'e'}], [{'error': 'e'}, {'timeout': 600}]):
+        s = _summarize(runs)
+        assert (s['outcome'], s['compiled']) == ('error+timeout', 0)
+    assert _summarize([{'error': 'e'}, {'error': 'e'}])['outcome'] == 'error'
 
 
 def test_a_run_replaces_the_last(tmp_path):

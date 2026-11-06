@@ -28,6 +28,8 @@ RECORDS = [
                                  'highs': {'outcome': 'timeout', 'runs': []}}},
 ]
 
+BISECTS = {'z3': True, 'cvc5': True, 'highs': False}
+
 
 def test_totals_cover_only_what_every_backend_compiled():
     nums = numbers(RECORDS)
@@ -39,6 +41,22 @@ def test_totals_cover_only_what_every_backend_compiled():
     assert t['highs']['degraded'] == 1
     assert nums['cpp_differs'] == {'cvc5': [], 'highs': ['a']}
     assert nums['failed']['highs'] == {'b': 'timeout'}
+
+
+def test_a_partly_compiled_design_is_a_failure_and_says_how_much():
+    partial = {'outcome': 'timeout', 'compiled': 2, 'runs': [{}, {}, {'timeout': 600}]}
+    records = [{'design': 'a', 'backends': {'z3': _ok(10, 4, 'x'), 'highs': partial}}]
+    nums = numbers(records)
+    assert nums['compared'] == 0
+    assert nums['failed']['highs'] == {'a': 'timeout, 2 of 3 compiled'}
+    assert 'not compiled under HiGHS: a (timeout, 2 of 3 compiled)' in summary(nums)
+
+
+def test_the_method_comes_from_the_run():
+    t = numbers(RECORDS, BISECTS)['totals']
+    assert [t[b]['method'] for b in ('z3', 'cvc5', 'highs')] == [
+        'Binary search', 'Binary search', 'Optimize']
+    assert numbers(RECORDS)['totals']['z3']['method'] is None
 
 
 def test_the_summary_names_what_differs():
@@ -60,7 +78,8 @@ def test_it_names_designs_whose_repeats_did_different_work():
 
 
 def test_it_writes_every_output(tmp_path):
-    (tmp_path / 'sensitivity-run.json').write_text(json.dumps({'designs': ['a', 'b']}))
+    (tmp_path / 'sensitivity-run.json').write_text(json.dumps(
+        {'designs': ['a', 'b'], 'bisects': BISECTS}))
     for rec in RECORDS:
         (tmp_path / f'{rec["design"]}.json').write_text(json.dumps(rec))
     (tmp_path / 'notes.md').write_text('mine')   # kept: only its own files

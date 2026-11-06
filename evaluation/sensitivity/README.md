@@ -31,8 +31,13 @@ DIR`; a directory holding files a run did not write is refused) with:
   and the median run by compile time, whose time, counts and queries are
   reported together.  Each query (`trace`) is the constraints in the
   component it was asked of, its backend calls, its time, and how many
-  objectives it asked;
-- `sensitivity-run.json`: the run's settings;
+  objectives it asked.  A backend compiled a design only where every
+  repeat did; otherwise its outcome names how the rest failed (`error`,
+  `timeout`, or both), and how many compiled, and the design is left out
+  of the totals;
+- `sensitivity-run.json`: the run's settings, and whether each backend
+  bisects (`bisects`, read from the backend), which the table's method
+  column shows;
 
 and `report.py`'s table and figure beside them:
 
@@ -43,7 +48,7 @@ and `report.py`'s table and figure beside them:
   them;
 - `sensitivity-scatter.{pdf,png}`: each query's time against the
   constraints in the component it was asked of, over every design's median
-  run, a panel per backend on shared log-log axes.  The component is all a
+  run, a panel per backend in one row, on shared log-log axes.  The component is all a
   backend sees, so it is the size that matters to the solver, not the
   design's total;
 - `sensitivity-paper.json`: every number the evaluation cites: each
