@@ -10,7 +10,8 @@ out of the constraints and the store decidable.  What the variables mean is
 import math
 from collections.abc import Iterable, Sequence
 
-from .solver import Constraint, Rel, Solver, Term, Z3Solver, _Var
+from .backends import default_solver
+from .solver import Constraint, Rel, Solver, Term, _Var
 from .spaces import IndexSpaces, Key
 
 __all__ = ['DigitBoundStore']
@@ -32,8 +33,7 @@ class DigitBoundStore:
 
     _decisions: dict[tuple, bool]
     """Each :meth:`reaches` question's answer, kept apart from
-    :attr:`_answers`: a capped query returns an upper bound rather than the
-    maximum, so the two must not be mistaken for each other."""
+    :attr:`_answers`: a decision is not a maximum."""
 
     _n_lits: int
     """How many guard literals exist."""
@@ -72,7 +72,7 @@ class DigitBoundStore:
     every walk sharing them shares it."""
 
     def __init__(self, solver: Solver | None = None) -> None:
-        self._solver = solver if solver is not None else Z3Solver()
+        self._solver = solver if solver is not None else default_solver()
         self._constraints = []
         self._answers = {}
         self._decisions = {}
@@ -297,13 +297,33 @@ class DigitBoundStore:
 
         Memoized: the same term is asked many times over an unchanged store.
         """
+        return self.maximums([term], assuming)[0]
+
+    def maximums(
+        self, terms: Sequence[Term], assuming: frozenset[int] = frozenset(),
+    ) -> list[int | float]:
+        """Each of *terms*' :meth:`maximum`, those not already settled asked
+        of the solver as one query, so a backend that optimizes several
+        objectives in one search can.  Each is still the term's own maximum:
+        they need not be attained together.
+
+        A free term is unbounded above, which a set lookup settles where the
+        solver would have to search.
+        """
         assuming = self.closed(assuming)
-        key = (term, assuming)
-        answer = self._answers.get(key)
-        if answer is None:
-            answer = self._bound(term, assuming)
-            self._answers[key] = answer
-        return answer
+        asked: list[Term] = []
+        for t in terms:
+            key = (t, assuming)
+            if key in self._answers or t in asked:
+                continue
+            if self._free(t):
+                self._answers[key] = math.inf
+            else:
+                asked.append(t)
+        if asked:
+            for t, answer in zip(asked, self._solver.maximize(asked, assuming)):
+                self._answers[(t, assuming)] = answer
+        return [self._answers[(t, assuming)] for t in terms]
 
     def reaches(
         self, bounds: Sequence[tuple[Term, int]],
@@ -313,8 +333,7 @@ class DigitBoundStore:
 
         A decision, where :meth:`maximum` is an optimisation -- the question
         to ask where the answer is only ever compared against a threshold.
-        Each term is asked with its own `k` as the solver's cutoff, so the
-        backend may stop at the first refutation instead of searching for a
+        Each term is one satisfiability check rather than a search for a
         maximum nothing will read, and the first `True` ends the question --
         so a caller puts the term most likely to reach first.  An empty list
         reaches nothing.
@@ -338,18 +357,7 @@ class DigitBoundStore:
         """Can *term* reach *k*?  A free variable reaches anything."""
         if self._free(term):
             return True
-        return self._solver.maximize(term, k, assuming) >= k
-
-    def _bound(self, term: Term, assuming: frozenset[int]) -> int | float:
-        """*term*'s greatest value, asking the solver only where the answer
-        is not already settled.
-
-        A free term is unbounded above, which a set lookup settles where the
-        solver would have to search.
-        """
-        if self._free(term):
-            return math.inf
-        return self._solver.maximize(term, assuming=assuming)
+        return self._solver.reaches(term, k, assuming)
 
     # -- the query -------------------------------------------------------
 

@@ -72,9 +72,10 @@ python_classes = ["Test*", "*TestCase"]
 disable_error_code = ["import-untyped"]
 check_untyped_defs = true
 
-# optional: the Triton backend imports them only to run a kernel
+# optional: the Triton backend imports them only to run a kernel, and the
+# digit-bound solver backends only when chosen
 [[tool.mypy.overrides]]
-module = ["torch", "torch.*", "triton", "triton.*"]
+module = ["torch", "torch.*", "triton", "triton.*", "cvc5", "cvc5.*", "highspy", "highspy.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint]
