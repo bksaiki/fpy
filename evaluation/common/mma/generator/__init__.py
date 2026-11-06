@@ -162,7 +162,7 @@ def _rule(d: Design) -> str:
     return {'fused': 'nv', 'exact': 'sum'}.get(d.sum, 'ieee')
 
 
-def _e_zero(d: Design) -> int:
+def zero_exponent(d: Design) -> int:
     """*d*'s `e_zero`: given, else its model's default."""
     if d.e_zero is not None:
         return d.e_zero
@@ -231,7 +231,7 @@ class _Parts:
     def __init__(self, d: Design) -> None:
         self.d = d
         rho, F, rule = d.rho, d.F, _rule(d)
-        self.e_zero = _e_zero(d)
+        self.e_zero = zero_exponent(d)
         self.keep_in = amd.flush_subnormal if d.ftz else _keep
         self.keep_out = amd.flush_subnormal_signed if d.ftz else _keep
         self.tiny_a, self.tiny_b = 2.0 ** d.a.emin, 2.0 ** d.b.emin

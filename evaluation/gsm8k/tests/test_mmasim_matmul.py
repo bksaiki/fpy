@@ -1,5 +1,7 @@
 """
-MMA-Sim's backend agrees with FPy's kernels bit for bit.  Needs a GPU.
+MMA-Sim's backend agrees with FPy's kernels bit for bit, on every design
+both compute.  Needs a GPU; compiles every design once, cached under
+pytest's cache.
 
     pytest -n 0 -q evaluation/gsm8k/tests/test_mmasim_matmul.py
 """
@@ -7,7 +9,9 @@ MMA-Sim's backend agrees with FPy's kernels bit for bit.  Needs a GPU.
 import mmasim_matmul
 import pytest
 import torch
-from core import kernels
+from core import kernels, quant, swap
+
+import fpy2 as fp
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='needs a GPU')
 
@@ -16,36 +20,67 @@ SHAPES = [(3584, 1024), (16, 1024), (1024, 2048), (1024, 3584), (6144, 1024), (2
 """Qwen3.5-0.8B's linear layers `(n, k)` but `lm_head`'s."""
 
 
-def _bf16(*shape: int, g: torch.Generator) -> torch.Tensor:
-    """BF16 values over a wide exponent range, with zeros, held in FP32."""
+@pytest.fixture(scope='session')
+def compiled(request: pytest.FixtureRequest) -> None:
+    """Every design's kernel, compiled 8 at a time, cached across sessions."""
+    kernels.CACHE = request.config.cache.mkdir('kernels')
+    assert kernels.compile_designs(mmasim_matmul.DESIGNS, 8) == {}
+
+
+def _values(*shape: int, g: torch.Generator, top: int = 12) -> torch.Tensor:
+    """BF16 values of exponents from -12 to *top*, with zeros, held in FP32."""
     x = torch.randn(*shape, generator=g, device='cuda')
-    x *= torch.exp2(torch.randint(-20, 20, shape, generator=g, device='cuda').float())
+    x *= torch.exp2(torch.randint(-12, top, shape, generator=g, device='cuda').float())
     x[torch.rand(shape, generator=g, device='cuda') < 0.05] = 0
     return x.to(torch.bfloat16).float()
 
 
-def _same(x: torch.Tensor, y: torch.Tensor) -> bool:
-    return x.shape == y.shape and torch.equal(x.view(torch.int32), y.view(torch.int32))
+_E2M1 = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
 
 
-@pytest.mark.parametrize('design', list(mmasim_matmul.OPERATIONS))
+def _moderate(op: quant.Operand, rows: int, k: int, g: torch.Generator) -> quant.Quantized:
+    """*op*'s elements of magnitude at most 16 or so, its scales 1: an FP16
+    accumulator stays finite over `k`, where elements scaled to the format's
+    range would overflow it."""
+    fmt = op.elements
+    if fmt == fp.MX_E2M1:
+        e = _E2M1.cuda()[torch.randint(8, (rows, k), generator=g, device='cuda')]
+        e = e * torch.where(torch.rand(rows, k, generator=g, device='cuda') < 0.5, -1.0, 1.0)
+    else:
+        e = _values(rows, k, g=g, top=2).to(quant.DTYPES[fmt]).float()
+    return quant.Quantized(op, e, torch.ones(rows, 1, device='cuda'))
+
+
+def _both(design: str, m: int, n: int, k: int, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """MMA-Sim's and the kernel's accumulator on the same quantized operands."""
+    g = torch.Generator('cuda').manual_seed(seed)
+    scheme = kernels.scheme(design)
+    if mmasim_matmul.output(design) == torch.float16 and scheme.applied != 'instruction':
+        qa, qw = _moderate(scheme.x, m, k, g), _moderate(scheme.w, n, k, g)
+    else:
+        qa = quant.quantize(_values(m, k, g=g), scheme.x)
+        qw = quant.quantize(_values(n, k, g=g), scheme.w)
+    want = swap.accumulate(design, scheme, qa, qw, qw.elements.to(kernels.storage(design)[1]))
+    return mmasim_matmul.accumulate(design, scheme, qa, qw), want
+
+
+@pytest.mark.parametrize('design', mmasim_matmul.DESIGNS)
 @pytest.mark.parametrize('n, k', SHAPES)
-def test_layer_shapes(design: str, n: int, k: int):
-    g = torch.Generator('cuda').manual_seed(n * k)
-    a, w = _bf16(3, k, g=g), _bf16(n, k, g=g)
-    dtype = kernels.storage(design)
-    want = kernels.matmul(a.to(dtype[0]), w.to(dtype[1]), design)
-    got = mmasim_matmul.matmul(a.to(torch.bfloat16), w.to(torch.bfloat16), design)
-    assert _same(got, want)
+def test_layer_shapes(design: str, n: int, k: int, compiled: None):
+    got, want = _both(design, 3, n, k, n * k)
+    assert got.dtype == want.dtype == mmasim_matmul.output(design)
+    assert bool(mmasim_matmul.same(got, want).all())
+    assert got.isfinite().float().mean() > 0.9 and (got != 0).float().mean() > 0.5
 
 
-def test_row_blocks(monkeypatch: pytest.MonkeyPatch):
-    design = 'nv.hopper.bf16.f32'
-    g = torch.Generator('cuda').manual_seed(0)
-    a, w = _bf16(5, 64, g=g).to(torch.bfloat16), _bf16(8, 64, g=g).to(torch.bfloat16)
-    whole = mmasim_matmul.matmul(a, w, design)
-    monkeypatch.setattr(mmasim_matmul, '_ELEMS', 2 * 8 * 16)   # 2 rows per block
-    assert _same(mmasim_matmul.matmul(a, w, design), whole)
+@pytest.mark.parametrize('design', ['nv.hopper.bf16.f32', 'amd.cdna2.bf16', 'fp64 (fma)',
+                                    'nv.ampere.tf32.f32', 'nv.blackwell.mx.e4m3', 'nv.blackwell.nvfp4'])
+def test_blocks_change_nothing(design: str, compiled: None, monkeypatch: pytest.MonkeyPatch):
+    """Blocks of rows and columns, as `lm_head` needs, give the same bits."""
+    whole, _ = _both(design, 5, 96, 128, 0)
+    monkeypatch.setattr(mmasim_matmul, '_ELEMS', 2 * 32 * 128)
+    blocked, want = _both(design, 5, 96, 128, 0)
+    assert bool(mmasim_matmul.same(blocked, whole).all() & mmasim_matmul.same(blocked, want).all())
 
 
 def test_run_modes():
@@ -59,8 +94,8 @@ def test_run_modes():
         for mode in ('nv.hopper.bf16.f32', 'mmasim:nv.hopper.bf16.f32'):
             run.mode = mode
             out[mode] = model(x)
-    assert _same(*out.values())
-    run.mode = 'mmasim:nv.ampere.bf16.f32'
+    assert bool(mmasim_matmul.same(*out.values()).all())
+    run.mode = 'mmasim:nv.hopper.e4m3.f32'   # not under bf16
     with pytest.raises(ValueError):
         model(x)
 

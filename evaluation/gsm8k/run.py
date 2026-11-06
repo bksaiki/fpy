@@ -119,8 +119,8 @@ def _foreign(out: Path) -> list[str]:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('designs', nargs='*', default=list(config.GSM8K_DESIGNS),
-                    choices=sorted(mmasim_matmul.OPERATIONS), metavar='DESIGN',
-                    help=f'designs (default {" ".join(config.GSM8K_DESIGNS)}; of {", ".join(mmasim_matmul.OPERATIONS)})')
+                    choices=mmasim_matmul.DESIGNS, metavar='DESIGN',
+                    help=f'designs (default {" ".join(config.GSM8K_DESIGNS)}; any of `mmasim_matmul.DESIGNS`)')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the results directory, replaced (default %(default)s)')
     ap.add_argument('-n', '--problems', type=int, default=config.GSM8K_PROBLEMS,

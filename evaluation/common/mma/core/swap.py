@@ -100,19 +100,33 @@ def _per_group(q: quant.Quantized, design: str) -> torch.Tensor:
     return q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).to(kernels.storage(design)[2])
 
 
-def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
-         w: torch.Tensor) -> torch.Tensor:
-    """`qa @ qw.T` by *design* under *scheme*, FP32 (its accumulator
-    converted); *w* is *qw*'s elements
-    in *design*'s storage (`kernels.storage`).  Scales apply per `scheme.applied`: after
-    the GEMM, `acc * s_x[i] * s_w[j]`; or in the instructions, then per
-    tensor, `acc * (g_x * g_w)`."""
+def accumulate(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
+               w: torch.Tensor) -> torch.Tensor:
+    """`qa @ qw.T` by *design*'s kernel, in its accumulator: block scales
+    applied by its instructions, *scheme*'s others not yet (:func:`epilogue`).
+    *w* is *qw*'s elements in *design*'s storage (`kernels.storage`)."""
     a = qa.elements.to(kernels.storage(design)[0])
     if scheme.applied == 'instruction':
-        y = kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design))).float()
+        return kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design)))
+    return kernels.matmul(a, w, design)
+
+
+def epilogue(y: torch.Tensor, scheme: quant.Scheme, qa: quant.Quantized,
+             qw: quant.Quantized) -> torch.Tensor:
+    """A design's accumulator *y* in FP32, *scheme*'s remaining scales
+    applied: after the GEMM, `acc * s_x[i] * s_w[j]`; after block-scaled
+    instructions, per tensor, `acc * (g_x * g_w)`.  May reuse *y*."""
+    y = y.float()
+    if scheme.applied == 'instruction':
         return y if qa.tensor is None else y.mul_(qa.tensor * qw.tensor)
-    y = kernels.matmul(a, w, design).float()
     return y.mul_(qa.scales).mul_(qw.scales.T) if scheme.applied == 'epilogue' else y
+
+
+def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
+         w: torch.Tensor) -> torch.Tensor:
+    """`qa @ qw.T` by *design* under *scheme*, FP32: :func:`accumulate`, then
+    :func:`epilogue`."""
+    return epilogue(accumulate(design, scheme, qa, qw, w), scheme, qa, qw)
 
 
 _FP8 = (torch.float8_e4m3fn, torch.float8_e4m3fnuz, torch.float8_e5m2, torch.float8_e5m2fnuz)
