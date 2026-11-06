@@ -2,8 +2,8 @@
 Times GSM8K on Qwen3.5-0.8B with every linear layer computed by a design:
 by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
 
-    python evaluation/gsm8k/run.py                  # Hopper BF16, 32 problems, MMA-Sim sampled
-    python evaluation/gsm8k/run.py --mmasim full    # MMA-Sim's whole run too: about 3.6 h
+    python evaluation/gsm8k/run.py                  # every design, 32 problems: about 3 h
+    python evaluation/gsm8k/run.py --mmasim full nv.hopper.bf16.f32   # MMA-Sim measured: about 3.6 h
     python evaluation/gsm8k/run.py --smoke          # 2 problems, 8 tokens
     python evaluation/gsm8k/run.py -n 1319 --backends torch fpy
 
@@ -11,8 +11,10 @@ FPy's kernels compile first, so every timing is of the compiled model.
 
 Replaces the results directory (`evaluation/results/gsm8k/`, or `-o DIR`)
 with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.
-MMA-Sim is sampled by default, its time predicted (`sample.py`).  Exits 1
-if `fpy` and `mmasim` emit different tokens, or a sampled call differs.
+MMA-Sim's time is predicted per layer by default (`sample.py`), and also
+sampled in the model for `--sampled` designs, to check the prediction.
+Exits 1 if `fpy` and `mmasim` emit different tokens, or a call MMA-Sim ran
+differs from FPy's kernel.
 """
 
 import argparse
@@ -90,6 +92,31 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     }
 
 
+def mmasim(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
+           problems: list[gsm8k.Problem], design: str, fpy: dict[str, Any], method: str,
+           max_new: int, batch: int, sampled: bool) -> dict[str, Any]:
+    """MMA-Sim's record for *design*: measured end to end (*method* `full`),
+    or predicted per layer (`layers`); with the per-layer prediction either
+    way, and the in-model sample if *sampled*.  *fpy* is FPy's record."""
+    if method == 'full':
+        r = measure(model, run, tok, problems, 'mmasim', design, max_new, batch)
+    else:
+        r = {'backend': 'mmasim', 'design': design, 'model': model.config.name_or_path,
+             'scheme': run.scheme.name, 'problems': fpy['problems'], 'max_new': fpy['max_new'],
+             'batch': fpy['batch']}
+    p = sample.prefilled(model, run, encode(tok, problems), design, fpy)
+    lay = sample.layers(model, run, design, fpy, p)
+    r |= {'method': method, 'layers': lay, 'check': lay['check']}
+    if method == 'layers':
+        r |= {k: lay[k] for k in ('prefix', 'prefill', 'decode')}
+    print(f"  mmasim: predicted {lay['prefill'] + lay['decode']:.0f}s  check {lay['check']}", flush=True)
+    if sampled:
+        r['in_model'] = sample.in_model(model, run, design, fpy, p)
+        print(f"  mmasim: in the model {r['in_model']['prefill'] + r['in_model']['decode']:.0f}s",
+              flush=True)
+    return r
+
+
 def _git(*args: str) -> str:
     return subprocess.run(['git', *args], capture_output=True, text=True, check=False,
                           cwd=Path(__file__).parent).stdout.strip()
@@ -118,9 +145,9 @@ def _foreign(out: Path) -> list[str]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('designs', nargs='*', default=list(config.GSM8K_DESIGNS),
+    ap.add_argument('designs', nargs='*', default=list(config.GSM8K_DESIGNS or mmasim_matmul.DESIGNS),
                     choices=mmasim_matmul.DESIGNS, metavar='DESIGN',
-                    help=f'designs (default {" ".join(config.GSM8K_DESIGNS)}; any of `mmasim_matmul.DESIGNS`)')
+                    help='designs (default: every design both backends compute, `mmasim_matmul.DESIGNS`)')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the results directory, replaced (default %(default)s)')
     ap.add_argument('-n', '--problems', type=int, default=config.GSM8K_PROBLEMS,
@@ -132,9 +159,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--backends', nargs='+', choices=BACKENDS, default=list(BACKENDS),
                     help='default: all')
     ap.add_argument('--model', default=config.MODEL, help='default %(default)s')
-    ap.add_argument('--mmasim', choices=('sample', 'full'), default='sample',
-                    help="MMA-Sim's run: sampled, its time predicted from FPy's run; or "
-                         'the whole run (default %(default)s)')
+    ap.add_argument('--mmasim', choices=('layers', 'full'), default='layers',
+                    help="MMA-Sim's time: predicted per layer, or measured over the whole "
+                         'run (default %(default)s)')
+    ap.add_argument('--sampled', nargs='*', default=list(config.GSM8K_SAMPLED), metavar='DESIGN',
+                    help='designs also sampled in the model, checking the prediction '
+                         '(default %(default)s)')
     ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='processes compiling the designs; above 1, their compile times '
                          'contend (default %(default)s)')
@@ -142,8 +172,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.smoke:
         args.problems, args.max_new = 2, 8
-    if args.mmasim == 'sample' and 'mmasim' in args.backends and 'fpy' not in args.backends:
-        ap.error("a sampled MMA-Sim run predicts from FPy's: add --backends fpy")
+    if 'mmasim' in args.backends and 'fpy' not in args.backends:
+        ap.error("MMA-Sim's prediction starts from FPy's run: add --backends fpy")
     if foreign := _foreign(args.out):
         ap.error(f'{args.out} holds files a run did not write: {", ".join(foreign)}')
     shutil.rmtree(args.out, ignore_errors=True)
@@ -168,8 +198,9 @@ def main(argv: list[str]) -> int:
         start = time.perf_counter()
         if design is not None:
             swap.use(run, model, kernels.scheme(design))
-        if backend == 'mmasim' and args.mmasim == 'sample':
-            r = sample.measure(model, run, encode(tok, problems), design, records['fpy', design])
+        if backend == 'mmasim':
+            r = mmasim(model, run, tok, problems, design, records['fpy', design], args.mmasim,
+                       args.max_new, args.batch, design in args.sampled)
         else:
             r = measure(model, run, tok, problems, backend, design, args.max_new, args.batch)
         records[backend, design] = r

@@ -4,8 +4,12 @@ MMA-Sim's prediction from a sample, on hand-written samples.
     pytest -n 8 -q evaluation/gsm8k/tests/test_sample.py
 """
 
+from types import SimpleNamespace
+
+import mmasim_matmul
 import pytest
 import sample
+import torch
 
 
 def test_line():
@@ -34,3 +38,28 @@ def test_predict():
     prefix = (2 + 0.5 * 80) + (2 + 0.5 * 85)
     questions = (2 + 0.5 * 20) + (2 + 0.5 * 40) + (2 + 0.5 * 25) + (2 + 0.5 * 5)
     assert got == pytest.approx({'prefix': prefix, 'prefill': prefix + questions, 'decode': 80.0})
+
+
+def _call(m: int, n: int, k: int) -> tuple:
+    return (SimpleNamespace(elements=torch.empty(m, k)), SimpleNamespace(elements=torch.empty(n, k)),
+            torch.empty(n, k), None)
+
+
+def test_a_pass_times_each_shape_once(monkeypatch: pytest.MonkeyPatch):
+    """Each distinct `(m, n, k)` runs twice (warm-up, then timed) on its
+    first call's operands; the pass is each shape's time by its count; the
+    timed calls are checked."""
+    ran, ticks = [], iter(range(100))
+    monkeypatch.setattr(mmasim_matmul, 'accumulate', lambda d, s, qa, qw, b: ran.append(qa) or qa.elements)
+    monkeypatch.setattr(sample.batched, 'clock', lambda: float(next(ticks)) * 0.5)
+    checked = []
+    run = SimpleNamespace(scheme=None, calls=None, held=lambda w, qw: None,
+                          check=lambda: checked.append(len(run.calls)) or {'calls': len(run.calls)})
+    calls = [_call(32, 8, 16), _call(32, 8, 16), _call(32, 4, 16), _call(1, 8, 16), _call(32, 8, 16)]
+    check = sample.Counter()
+    seconds, shapes = sample._pass(run, 'd', calls, check)
+    assert [(s['m'], s['n'], s['k'], s['count'], s['seconds']) for s in shapes] == \
+        [(32, 8, 16, 3, 0.5), (32, 4, 16, 1, 0.5), (1, 8, 16, 1, 0.5)]
+    assert seconds == 2.5 and len(ran) == 6
+    assert ran[0] is ran[1] is calls[0][0]
+    assert checked == [3] and check == {'calls': 3} and run.calls is None

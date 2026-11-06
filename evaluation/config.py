@@ -126,7 +126,15 @@ ANALYSIS_INPUTS = 'mixed'
 # ---------------------------------------------------------------------------
 # `gsm8k`
 
-GSM8K_DESIGNS = ('nv.hopper.bf16.f32',)
+GSM8K_DESIGNS: tuple[str, ...] | None = None
+"""Designs run; `None`: every design both backends compute
+(`gsm8k/mmasim_matmul.DESIGNS`)."""
+
+GSM8K_SAMPLED = ('nv.hopper.bf16.f32', 'nv.hopper.tf32.f32', 'amd.cdna3.bf16', 'amd.cdna3.fp8',
+                 'amd.cdna2.bf16', 'fp32 (fma)', 'nv.blackwell.mx.e4m3', 'nv.blackwell.nvfp4')
+"""One design per kind of MMA-Sim operation (T-FDPA, its TF32, TR, GTR, FTZ,
+FMA, ST, GST), also sampled in the model to check the per-layer prediction."""
+
 GSM8K_PROBLEMS = 32
 """Test problems."""
 

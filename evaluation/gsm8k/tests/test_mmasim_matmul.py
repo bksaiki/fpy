@@ -15,9 +15,9 @@ import fpy2 as fp
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='needs a GPU')
 
-SHAPES = [(3584, 1024), (16, 1024), (1024, 2048), (1024, 3584), (6144, 1024), (2048, 1024),
-          (512, 1024), (4096, 1024)]
-"""Qwen3.5-0.8B's linear layers `(n, k)` but `lm_head`'s."""
+SHAPES = [(16, 1024), (16, 3584)]
+"""`(n, k)`: Qwen3.5-0.8B's shortest and longest `k`.  A column's result
+depends only on `k`, so few columns suffice."""
 
 
 @pytest.fixture(scope='session')
@@ -111,5 +111,17 @@ def test_check():
     assert len(run.calls) == 2
     run.calls[1][3].view(torch.int32)[0, 0] ^= 1
     run.calls[0][3][0, :2] = torch.nan
-    assert run.check() == {'calls': 2, 'outputs': 3 * 2048 + 3 * 1024, 'differing': 3}
+    assert run.check() == {'calls': 2, 'outputs': 3 * 2048 + 3 * 1024, 'differing': 3,
+                           'finite': 3 * 2048 + 3 * 1024 - 2}
     assert run.calls == [] and run.mode == 'mmasim:nv.hopper.bf16.f32'
+
+
+def test_fpy_calls_are_recorded():
+    model = torch.nn.Sequential(torch.nn.Linear(1024, 2048, bias=False)).cuda()
+    run = mmasim_matmul.patch(model)
+    run.calls = []
+    with torch.no_grad():
+        for run.mode in ('fp32', 'nv.hopper.bf16.f32'):
+            model(torch.randn(3, 1024, device='cuda'))
+    ((qa, _, w, acc),) = run.calls
+    assert qa.elements.shape == (3, 1024) and w is model[0].weight and acc is None

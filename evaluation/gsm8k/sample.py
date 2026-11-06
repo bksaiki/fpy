@@ -1,30 +1,41 @@
 """
-MMA-Sim's time on GSM8K, predicted from a sample, as a full run takes too
-long for every design.
+MMA-Sim's time on GSM8K, predicted, as a full run takes too long for every
+design (`run.py --mmasim full` measures one).
 
 MMA-Sim's run is FPy's, bit for bit, so it decodes as many steps.  It
 costs a prefill of the shared prefix, one of each question, and a decode
-step per token.  The sample times:
+step per token:
 
-- 3 questions' prefills (the shortest, median and longest), fit to a line
-  in their tokens, which predicts every prefill, the prefix's included;
-- decode steps from the batch FPy's kernel has prefilled, until their mean
-  is known to `config.GSM8K_SAMPLE_CI`.
+    T = prefill(prefix) + Σᵢ prefill(rowsᵢ) + steps × step
 
-Every sampled call is also recomputed by FPy's kernel and compared bit for
-bit.
+Both ways below start from FPy's prefill of the first batch, recording the
+linear calls of 3 questions' prefills (the shortest, median and longest)
+and of one decode step:
+
+- :func:`layers`: MMA-Sim runs each distinct layer shape of those passes
+  once, on the recorded operands; a pass's time is each shape's times its
+  count.  `step` is the decode pass; `prefill` is the line through the 3
+  questions' passes, which also predicts the prefix.
+- :func:`in_model`: MMA-Sim runs the model itself, timing the 3 questions'
+  prefills and decode steps until their mean is known to
+  `config.GSM8K_SAMPLE_CI`; it checks :func:`layers` per kind of design.
+
+Every call MMA-Sim runs is also compared, accumulator to accumulator, with
+FPy's kernel on the same operands (`mmasim_matmul.Run.check`).
 """
 
 import math
 import statistics
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import batched
 import config
 import mmasim_matmul
 import torch
+from transformers import DynamicCache
 
 _T95 = (12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179,
         2.160, 2.145, 2.131)
@@ -74,18 +85,115 @@ def picks(rows: list[int]) -> list[int]:
     return sorted({order[0], order[len(order) // 2], order[-1]})
 
 
+Call = tuple[Any, Any, torch.Tensor, Any]
+"""A recorded linear call: `qa`, `qw`, `w`, and (once run) an accumulator."""
+
+
+@dataclass
+class Prefilled:
+    """FPy's prefill of a run's first batch, its sampled questions' calls."""
+
+    prompts: list[list[int]]
+    prefix: DynamicCache
+    n: int
+    """The shared prefix's length."""
+    state: batched.State
+    rows: list[int]
+    """Each question's own tokens."""
+    sampled: list[int]
+    """The questions sampled (:func:`picks`)."""
+    passes: dict[int, list[Call]]
+    """Each sampled question's prefill's calls."""
+
+
 @torch.no_grad()
-def measure(model: torch.nn.Module, run: mmasim_matmul.Run, prompts: list[list[int]],
-            design: str, fpy: dict[str, Any]) -> dict[str, Any]:
-    """MMA-Sim's record for *design*, predicted from a sample of *prompts*'
-    first batch; *fpy* is FPy's record of the same run."""
+def prefilled(model: torch.nn.Module, run: mmasim_matmul.Run, prompts: list[list[int]],
+              design: str, fpy: dict[str, Any]) -> Prefilled:
+    """*design*'s FPy prefill of *prompts*' first batch, as *fpy* (FPy's
+    record of the run) batched it, recording the sampled questions' calls."""
     first = fpy['batches'][0]
     prompts = prompts[first['first']:first['first'] + len(first['questions'])]
     run.mode = design
     pre, n = batched.prefix(model, prompts)
-    caches, firsts = zip(*(batched.question(model, pre, n, p) for p in prompts), strict=True)
-    state = batched.batch(prompts, list(caches), list(firsts))
+    rows = [len(p) - n for p in prompts]
+    sampled = picks(rows)
+    caches, firsts, passes = [], [], {}
+    try:
+        for i, p in enumerate(prompts):
+            run.calls = [] if i in sampled else None
+            c, x = batched.question(model, pre, n, p)
+            caches.append(c)
+            firsts.append(x)
+            if i in sampled:
+                passes[i] = run.calls
+    finally:
+        run.calls = None
+    return Prefilled(prompts, pre, n, batched.batch(prompts, caches, firsts), rows, sampled, passes)
 
+
+def _shape(call: Call) -> tuple[int, int, int]:
+    qa, qw = call[0], call[1]
+    return qa.elements.shape[0], qw.elements.shape[0], qa.elements.shape[1]
+
+
+def _pass(run: mmasim_matmul.Run, design: str, calls: list[Call],
+          check: Counter[str]) -> tuple[float, list[dict[str, Any]]]:
+    """*calls*' MMA-Sim time: each distinct `(m, n, k)`'s first call, run
+    once untimed then once timed, times its count; and per shape, its count
+    and seconds.  The timed calls are checked into *check*."""
+    counts = Counter(map(_shape, calls))
+    firsts = {}
+    for c in calls:
+        firsts.setdefault(_shape(c), c)
+    shapes, timed = [], []
+    for shape, (qa, qw, w, _) in firsts.items():
+        b = run.held(w, qw)
+        mmasim_matmul.accumulate(design, run.scheme, qa, qw, b)   # the allocator's warm-up
+        t = batched.clock()
+        acc = mmasim_matmul.accumulate(design, run.scheme, qa, qw, b)
+        t = batched.clock() - t
+        timed.append((qa, qw, w, acc))
+        shapes.append({'m': shape[0], 'n': shape[1], 'k': shape[2], 'count': counts[shape], 'seconds': t})
+    run.calls = timed
+    try:
+        check.update(run.check())
+    finally:
+        run.calls = None
+    return sum(s['count'] * s['seconds'] for s in shapes), shapes
+
+
+@torch.no_grad()
+def layers(model: torch.nn.Module, run: mmasim_matmul.Run, design: str, fpy: dict[str, Any],
+           p: Prefilled) -> dict[str, Any]:
+    """MMA-Sim's time for *design*, predicted per layer from *p*'s passes and
+    one FPy decode step from *p*'s state (which it advances)."""
+    run.mode, run.calls = design, []
+    try:
+        p.state.step(model)
+        step_calls = run.calls
+    finally:
+        run.calls = None
+    run.mode = mmasim_matmul.PREFIX + design
+    check: Counter[str] = Counter()
+    step, step_shapes = _pass(run, design, step_calls, check)
+    questions = [_pass(run, design, p.passes[i], check) for i in p.sampled]
+    seconds = [t for t, _ in questions]
+    fit = line([p.rows[i] for i in p.sampled], seconds)
+    return {
+        **predict(fpy, fit, step), 'step': step, 'fit': fit,
+        'passes': {'step': step_shapes,
+                   'questions': [{'question': i, 'rows': p.rows[i], 'seconds': t, 'shapes': s}
+                                 for i, (t, s) in zip(p.sampled, questions, strict=True)]},
+        'check': dict(check),
+    }
+
+
+@torch.no_grad()
+def in_model(model: torch.nn.Module, run: mmasim_matmul.Run, design: str, fpy: dict[str, Any],
+             p: Prefilled) -> dict[str, Any]:
+    """MMA-Sim's time for *design*, predicted from its own run of the model:
+    *p*'s sampled questions' prefills, then decode steps from *p*'s state
+    (which it advances) until :func:`enough`."""
     check: Counter[str] = Counter()
 
     def timed(f: Callable[[], object]) -> float:
@@ -97,23 +205,19 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, prompts: list[list[i
 
     run.mode, run.calls = mmasim_matmul.PREFIX + design, []
     try:
-        rows = [len(p) - n for p in prompts]
-        sampled = picks(rows)
-        questions = [timed(lambda p=prompts[i]: batched.question(model, pre, n, p)) for i in sampled]
+        questions = [timed(lambda q=p.prompts[i]: batched.question(model, p.prefix, p.n, q))
+                     for i in p.sampled]
         steps: list[float] = []
         while not enough(steps):
-            steps.append(timed(lambda: state.step(model)))
+            steps.append(timed(lambda: p.state.step(model)))
     finally:
         run.calls = None
-    fit = line([rows[i] for i in sampled], questions)
+    fit = line([p.rows[i] for i in p.sampled], questions)
     step = statistics.fmean(steps)
     return {
-        'backend': 'mmasim', 'design': design, 'model': model.config.name_or_path,
-        'scheme': run.scheme.name,
-        'problems': fpy['problems'], 'max_new': fpy['max_new'], 'batch': fpy['batch'],
-        **predict(fpy, fit, step), 'sampled': True,
-        'sample': {'questions': sampled, 'rows': [rows[i] for i in sampled], 'question_seconds': questions,
-                   'fit': fit, 'steps': steps, 'step': step,
+        **predict(fpy, fit, step), 'step': step, 'fit': fit,
+        'sample': {'questions': p.sampled, 'rows': [p.rows[i] for i in p.sampled],
+                   'question_seconds': questions, 'steps': steps,
                    'half_width': half_width(steps) if len(steps) > 1 else None},
         'check': dict(check),
     }

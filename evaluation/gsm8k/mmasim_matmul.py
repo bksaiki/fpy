@@ -23,8 +23,12 @@ DESIGNS = tuple(d for d in CATALOG if d not in REFUSED)
 
 PREFIX = 'mmasim:'
 
-_BUDGET = 50 << 24
-"""Bytes of MMA-Sim's intermediates per call at most (:func:`_bytes`)."""
+_SHARE = 0.6
+"""Of the GPU's free memory, and PyTorch's cached but unused, the share one
+MMA-Sim call's intermediates may take (:func:`_bytes`)."""
+
+_BUDGET: int | None = None
+"""Bytes per call instead, if set (tests)."""
 
 _RHO = {(32, fp.RM.RTZ): 'RZ-FP32', (22, fp.RM.RTZ): 'RZ-E8M13', (32, fp.RM.RNE): 'RNE-FP32',
         (16, fp.RM.RNE): 'RNE-FP16'}
@@ -81,13 +85,33 @@ def matmul(design: str, a: torch.Tensor, w: torch.Tensor,
     its :func:`output` dtype, for *a* `[m, k]` and *w* `[n, k]` in
     :data:`DTYPES`; a block-scaled design takes *scales* `[m, k / b]` and
     `[n, k / b]`, one per block `b` of its scheme.  Computed in blocks of
-    rows and columns, as large as :data:`_BUDGET` allows: MMA-Sim is bound
-    by launches, so fewer blocks are faster."""
+    rows and columns as large as free memory allows (:data:`_SHARE`):
+    MMA-Sim is bound by launches, so fewer blocks are faster.  Out of
+    memory, it retries in blocks half as large."""
+    budget = _BUDGET or _free(a.device)
+    while True:
+        try:
+            return _blocks(design, a, w, scales, budget)
+        except torch.OutOfMemoryError:
+            if budget < 1 << 20:
+                raise
+            torch.cuda.empty_cache()
+            budget //= 2
+
+
+def _free(device: torch.device) -> int:
+    free, _ = torch.cuda.mem_get_info(device)
+    cached = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
+    return int(_SHARE * (free + cached))
+
+
+def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
+            scales: tuple[torch.Tensor, torch.Tensor] | None, budget: int) -> torch.Tensor:
     op = operation(design)
     (m, k), n = a.shape, w.shape[0]
     per = _bytes(design, k)
-    cols = min(n, max(1, _BUDGET // per))
-    rows = min(m, max(1, _BUDGET // (cols * per)))
+    cols = min(n, max(1, budget // per))
+    rows = min(m, max(1, budget // (cols * per)))
     sa, sw = scales or (None, None)
     if rows == m and cols == n:
         return _call(op, design, a, w, sa, sw)
@@ -135,21 +159,25 @@ class Run(swap.Run):
     """:class:`swap.Run` with modes `mmasim:<design>` (:data:`DESIGNS`),
     under the design's scheme."""
 
-    calls: list[tuple[quant.Quantized, quant.Quantized, torch.Tensor, torch.Tensor]] | None = None
-    """While a list, each `mmasim:` call's operands and accumulator, appended."""
+    calls: list[tuple[quant.Quantized, quant.Quantized, torch.Tensor, torch.Tensor | None]] | None = None
+    """While a list, each design's call appended: its operands, and an
+    `mmasim:` call's accumulator (`None` for FPy's kernel)."""
 
     def _matmul(self, qa, qw, w):
         if not self.mode.startswith(PREFIX):
-            return super()._matmul(qa, qw, w)
+            y = super()._matmul(qa, qw, w)
+            if self.calls is not None and kernels.known(self.mode):
+                self.calls.append((qa, qw, w, None))
+            return y
         design = self.mode.removeprefix(PREFIX)
         if design not in DESIGNS or not kernels.applicable(design, self.scheme):
             raise ValueError(f'{self.mode} does not take the {self.scheme.name} scheme')
-        acc = accumulate(design, self.scheme, qa, qw, self._held(w, qw))
+        acc = accumulate(design, self.scheme, qa, qw, self.held(w, qw))
         if self.calls is not None:
             self.calls.append((qa, qw, w, acc.clone()))
         return swap.epilogue(acc, self.scheme, qa, qw)
 
-    def _held(self, w: torch.Tensor, qw: quant.Quantized) -> torch.Tensor:
+    def held(self, w: torch.Tensor, qw: quant.Quantized) -> torch.Tensor:
         """*qw*'s elements in MMA-Sim's dtype, converted once per weight and
         kept apart from the kernel's (`_prepare`), so neither evicts the other."""
         dtype = DTYPES[self.scheme.w.elements]
@@ -160,17 +188,19 @@ class Run(swap.Run):
         return got[2]
 
     def check(self) -> dict[str, int]:
-        """:attr:`calls`, recomputed by FPy's kernel for the same design and
-        compared accumulator to accumulator, then emptied: the calls, their
-        outputs, and the outputs that differ in any bit (every NaN equal)."""
+        """:attr:`calls`' MMA-Sim accumulators, recomputed by FPy's kernel for
+        the same design and compared, then emptied: the calls, their outputs,
+        the outputs that differ in any bit (every NaN equal), and the finite
+        ones."""
         design = self.mode.removeprefix(PREFIX)
         held = kernels.storage(design)[1]
-        out = {'calls': 0, 'outputs': 0, 'differing': 0}
+        out = {'calls': 0, 'outputs': 0, 'differing': 0, 'finite': 0}
         for qa, qw, w, y in self.calls or []:
             z = swap.accumulate(design, self.scheme, qa, qw, self._prepare(w, qw, held))
             out['calls'] += 1
             out['outputs'] += y.numel()
             out['differing'] += int((~same(y, z)).sum())
+            out['finite'] += int(y.isfinite().sum())
         if self.calls:
             self.calls.clear()
         return out

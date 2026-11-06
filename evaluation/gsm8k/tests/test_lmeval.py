@@ -19,7 +19,8 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='needs a G
 
 def test_lmeval(tiny: Path, tmp_path: Path):
     ours, out = tmp_path / 'ours', tmp_path / 'lmeval'
-    assert run.main(['--smoke', '--model', str(tiny), '-o', str(ours), '--backends', 'torch', 'fpy']) == 0
+    assert run.main(['nv.hopper.bf16.f32', '--smoke', '--model', str(tiny), '-o', str(ours),
+                     '--backends', 'torch', 'fpy']) == 0
     assert lmeval.main(['--model', str(tiny), '--limit', '2', '-o', str(out),
                         '--against', str(ours)]) == 0
     for b in ('torch', 'fpy'):

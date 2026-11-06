@@ -1,7 +1,7 @@
 """
 `run.py --smoke` on a tiny random Qwen3.5: every backend writes its record,
-`fpy` and `mmasim` agree, MMA-Sim's
-sample predicts and checks, and the report is written.  Needs a GPU.
+MMA-Sim's prediction and in-model sample agree with FPy's kernel, and the
+report is written.  Needs a GPU.
 
     pytest -n 0 -q evaluation/gsm8k/tests/test_run.py
 """
@@ -13,12 +13,12 @@ import pytest
 import run
 import torch
 
-D = 'nv.hopper.bf16.f32'
+D, E = 'nv.hopper.bf16.f32', 'nv.blackwell.e4m3.f32'
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='needs a GPU')
 
 
 def _records(out: Path, names: list[str]) -> dict[str, dict]:
-    report = ['gsm8k-speed.tex', 'gsm8k-speed.json', 'gsm8k-summary.txt']
+    report = [f'gsm8k-{n}' for n in ('speed.tex', 'designs.tex', 'check.tex', 'speed.json', 'summary.txt')]
     assert sorted(p.name for p in out.iterdir()) == sorted([f'{n}.json' for n in names] + report)
     return {n: json.loads((out / f'{n}.json').read_text()) for n in names}
 
@@ -34,29 +34,39 @@ def _check_run(r: dict):
     assert r['commit'] and r['versions']['mmasim']
 
 
+def test_smoke_layers(tiny: Path, tmp_path: Path):
+    """Two designs of different schemes; MMA-Sim predicted per layer, one
+    design also sampled in the model."""
+    out = tmp_path / 'results'
+    assert run.main([D, E, '--smoke', '--backends', 'fpy', 'mmasim', '--sampled', E,
+                     '--model', str(tiny), '-o', str(out)]) == 0
+    records = _records(out, [f'{d}-{b}' for d in (D, E) for b in ('fpy', 'mmasim')])
+    for d in (D, E):
+        f, m = records[f'{d}-fpy'], records[f'{d}-mmasim']
+        _check_run(f)
+        assert m['method'] == 'layers' and 'tokens' not in m and m['scheme'] == f['scheme']
+        lay = m['layers']
+        assert (m['prefill'], m['decode']) == (lay['prefill'], lay['decode'])
+        assert lay['decode'] == pytest.approx(len(f['batches'][0]['steps']) * lay['step'])
+        assert m['prefill'] > m['prefix'] > 0
+        assert len(lay['passes']['questions']) == 2 and lay['passes']['step']
+        assert m['check']['calls'] > 0 and m['check']['differing'] == 0
+    assert records[f'{D}-fpy']['scheme'] == 'bf16' and records[f'{E}-fpy']['scheme'] == 'fp8-row'
+    assert 'in_model' not in records[f'{D}-mmasim']
+    s = records[f'{E}-mmasim']['in_model']
+    assert 4 <= len(s['sample']['steps']) <= 16 and s['check']['differing'] == 0
+
+
 def test_smoke_full(tiny: Path, tmp_path: Path):
     out = tmp_path / 'results'
-    assert run.main(['--smoke', '--mmasim', 'full', '--model', str(tiny), '-o', str(out)]) == 0
+    assert run.main(['--smoke', '--mmasim', 'full', D, '--sampled', '--model', str(tiny),
+                     '-o', str(out)]) == 0
     records = _records(out, ['torch', f'{D}-fpy', f'{D}-mmasim'])
     for r in records.values():
         _check_run(r)
-    assert records[f'{D}-fpy']['tokens'] == records[f'{D}-mmasim']['tokens']
-
-
-def test_smoke_sampled(tiny: Path, tmp_path: Path):
-    out = tmp_path / 'results'
-    assert run.main(['--smoke', '--backends', 'fpy', 'mmasim', '--model', str(tiny), '-o', str(out)]) == 0
-    records = _records(out, [f'{D}-fpy', f'{D}-mmasim'])
-    _check_run(records[f'{D}-fpy'])
     m = records[f'{D}-mmasim']
-    assert m['sampled'] and 'tokens' not in m
-    s = m['sample']
-    assert s['questions'] == [0, 1] and len(s['question_seconds']) == 2
-    assert 4 <= len(s['steps']) <= 16
-    assert m['check']['calls'] > 0 and m['check']['differing'] == 0
-    steps = len(records[f'{D}-fpy']['batches'][0]['steps'])
-    assert m['decode'] == pytest.approx(steps * s['step'])
-    assert m['prefill'] > m['prefix'] > 0
+    assert m['method'] == 'full' and records[f'{D}-fpy']['tokens'] == m['tokens']
+    assert m['layers']['decode'] > 0 and m['check']['differing'] == 0
 
 
 def test_sampling_needs_fpy(tmp_path: Path):
