@@ -17,7 +17,7 @@ def test_one_compilation_records_its_solver():
     rec = compile_once('nv.volta.f16.f32', 'z3')
     assert 'cpp_sha256' in rec, rec.get('error')
     st = rec['stats']
-    assert st['queries'] > 0 and st['constraints'] > 0 and st['calls'] >= st['queries']
+    assert st['queries'] > 0 and st['constraints'] > 0
     assert 0 < st['solver_time'] <= rec['seconds']
 
 

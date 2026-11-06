@@ -39,6 +39,14 @@ def _store(backend: str) -> DigitBoundStore:
     return DigitBoundStore(solver=make_solver(backend))
 
 
+def _checks(solver) -> list:
+    """Every satisfiability check *solver* makes from here on."""
+    made: list = []
+    check = solver._check
+    solver._check = lambda *a: made.append(a) or check(*a)
+    return made
+
+
 @pytest.mark.parametrize('backend', BACKEND_PARAMS)
 class TestEveryBackendAgrees:
     """Each backend gives the answers z3 does, on the shapes the store builds."""
@@ -153,7 +161,6 @@ class TestStatistics:
         s.maximums([x + 1, x + 2])
         st = solver.stats
         assert st.queries == 2
-        assert st.calls >= 2
         assert st.solver_time > 0
         assert st.degraded == 0
 
@@ -186,18 +193,22 @@ class TestStatistics:
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
+        checks = _checks(solver)
         assert not s.reaches([(x, 4)])
-        assert (solver.stats.queries, solver.stats.calls) == (1, 1)
+        assert solver.stats.queries == 1
+        assert len(checks) == 1
 
     def test_bisect_says_how_it_searches(self, backend):
         """`bisect` is what the evaluation reports as the backend's method:
-        bisection makes several checks for one maximum, an optimizer one."""
+        bisection finds a maximum by satisfiability checks, an optimizer
+        without any."""
         solver = make_solver(backend)
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 1000)
+        checks = _checks(solver)
         assert s.maximum(x) == 1000
-        assert (solver.stats.calls > 1) == solver.bisect
+        assert bool(checks) == solver.bisect
 
     def test_a_cached_answer_does_not_reach_the_solver(self, backend):
         solver = make_solver(backend)
@@ -212,10 +223,10 @@ class TestStatistics:
 class TestStatsSum:
 
     def test_they_add_field_by_field(self):
-        a = SolverStats(solver_time=1.0, queries=2, calls=1, constraints=3)
-        b = SolverStats(solver_time=0.5, queries=1, calls=3, degraded=1)
+        a = SolverStats(solver_time=1.0, queries=2, constraints=3)
+        b = SolverStats(solver_time=0.5, queries=1, degraded=1)
         assert sum((a, b), SolverStats()) == SolverStats(
-            solver_time=1.5, constraints=3, queries=3, calls=4, degraded=1)
+            solver_time=1.5, constraints=3, queries=3, degraded=1)
 
 
 class TestChoosingABackend:
@@ -317,18 +328,19 @@ class TestMaximizeAll:
 class TestZ3OptimizesTogether:
     """z3's optimizer answers several objectives in one check."""
 
-    def test_one_check_answers_them_all(self):
+    def test_one_query_answers_them_all(self):
         solver = make_solver('z3-opt')
         s = DigitBoundStore(solver=solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
-        assert (solver.stats.queries, solver.stats.calls) == (1, 1)
+        assert solver.stats.queries == 1
 
     def test_bisection_searches_each_in_turn(self):
         solver = make_solver('z3')
         s = DigitBoundStore(solver=solver)
+        checks = _checks(solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
         assert solver.stats.queries == 1
-        assert solver.stats.calls > 3   # several checks per objective
+        assert len(checks) > 3   # several checks per objective
 
     def test_an_unbounded_objective_is_inf(self):
         s = _store('z3-opt')

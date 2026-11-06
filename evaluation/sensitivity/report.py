@@ -52,14 +52,6 @@ def _ok(rec: dict[str, Any], b: str) -> dict[str, Any] | None:
     return r if r is not None and r['outcome'] == 'ok' else None
 
 
-def counts_vary(r: dict[str, Any]) -> bool:
-    """Whether *r*'s repeats stated different constraints or asked different
-    queries: the analysis took another path in some of them, after a backend
-    call hit its limit, so they did not time the same work."""
-    return len({(x['stats']['constraints'], x['stats']['queries'])
-                for x in r.get('runs', []) if 'cpp_sha256' in x}) > 1
-
-
 def backends_of(records: list[dict[str, Any]]) -> list[str]:
     return list(records[0]['backends']) if records else []
 
@@ -133,22 +125,15 @@ def numbers(records: list[dict[str, Any]], bisects: dict[str, bool]) -> dict[str
         compile_s = sum(r['seconds'] for r in rs)
         solver_s = sum(r['solver_time'] for r in rs)
         queries = sum(r['stats']['queries'] for r in rs)
-        calls = sum(r['stats']['calls'] for r in rs)
         totals[b] = {
             'method': METHODS[bisects[b]],
             'compile_seconds': compile_s,
             'solver_seconds': solver_s,
             'solver_share': solver_s / compile_s if compile_s else 0.0,
             'queries': queries,
-            'calls': calls,
             'seconds_per_query': solver_s / queries if queries else 0.0,
-            'calls_per_query': calls / queries if queries else 0.0,
             'degraded': sum(r['stats']['degraded'] for r in rs),
-            'constraints': sum(r['stats']['constraints'] for r in rs),
         }
-    for b in bs[1:]:
-        s = totals[b]['solver_seconds']
-        totals[b]['speedup_vs_ref'] = totals[ref]['solver_seconds'] / s if s else None
     differs = {
         b: [rec['design'] for rec in common
             if _ok(rec, b)['cpp_sha256'] != _ok(rec, ref)['cpp_sha256']]
@@ -158,13 +143,9 @@ def numbers(records: list[dict[str, Any]], bisects: dict[str, bool]) -> dict[str
         b: {rec['design']: _failure(rec['backends'][b]) for rec in records if not _ok(rec, b)}
         for b in bs
     }
-    varies = {
-        b: [rec['design'] for rec in records if (r := _ok(rec, b)) and counts_vary(r)]
-        for b in bs
-    }
     return {
         'designs': len(records), 'compared': len(common), 'reference': ref,
-        'totals': totals, 'cpp_differs': differs, 'failed': failed, 'counts_vary': varies,
+        'totals': totals, 'cpp_differs': differs, 'failed': failed,
     }
 
 
@@ -181,7 +162,7 @@ def totals_latex(nums: dict[str, Any]) -> str:
 
     No constraint or query counts: they are the same in every row while the
     backends agree, since the store poses the same problem, and asks the
-    same questions of it, whichever answers.  The summary prints them once.
+    same questions of it, whichever answers.
     """
     lines = [
         '\\begin{tabular}{llrrrr}',
@@ -202,26 +183,14 @@ def summary(nums: dict[str, Any]) -> str:
     ref = nums['reference']
     lines = [(f'{nums["designs"]} designs; {nums["compared"]} compiled by every backend, '
               f'compared below (reference {NAMES.get(ref, ref)})')]
-    t = nums['totals'][ref]
-    lines.append(f'{t["constraints"]} constraints, {t["queries"]} queries '
-                 '(the same under every backend that agrees)')
     for b, t in nums['totals'].items():
-        line = (f'{NAMES.get(b, b):>13}: compile {t["compile_seconds"]:8.1f}s  '
-                f'solver {t["solver_seconds"]:8.1f}s ({100 * t["solver_share"]:.0f}% of compile)  '
-                f'{t["queries"]} queries, {t["calls"]} backend calls '
-                f'({t["calls_per_query"]:.2f}/query), {t["degraded"]} degraded')
-        if t.get('speedup_vs_ref'):
-            line += f'  solver x{t["speedup_vs_ref"]:.2f} vs {NAMES.get(ref, ref)}'
-        lines.append(line)
+        lines.append(
+            f'{NAMES.get(b, b):>13}: compile {t["compile_seconds"]:8.1f}s  '
+            f'solver {t["solver_seconds"]:8.1f}s ({100 * t["solver_share"]:.0f}% of compile)  '
+            f'{t["queries"]} queries, {t["degraded"]} degraded')
     for b, ds in nums['cpp_differs'].items():
         lines.append(f'C++ differs from {NAMES.get(ref, ref)} under {NAMES.get(b, b)}: '
                      + (', '.join(ds) if ds else 'none'))
-    if not any(nums['counts_vary'].values()):
-        lines.append('counts the same across every backend\'s repeats')
-    for b, ds in nums['counts_vary'].items():
-        if ds:
-            lines.append(f'counts vary across repeats under {NAMES.get(b, b)} '
-                         f'(a call hit its limit): {", ".join(ds)}')
     for b, fs in nums['failed'].items():
         if fs:
             lines.append(f'not compiled under {NAMES.get(b, b)}: '

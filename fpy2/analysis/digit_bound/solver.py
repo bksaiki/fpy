@@ -194,8 +194,6 @@ class SolverStats:
     """Constraints assumed."""
     queries: int = 0
     """Calls to :meth:`Solver.maximize` and :meth:`Solver.reaches`."""
-    calls: int = 0
-    """Backend calls -- a satisfiability check, or one solve."""
     degraded: int = 0
     """Queries with an answer loosened because the backend could not decide: a timeout, an
     unknown, or a box too wide to solve."""
@@ -437,9 +435,8 @@ class _ComponentSolver(Generic[_S]):
         return len(self._group.get(self._components.add(min(named)), ()))
 
     def _record(self, status: Status) -> Status:
-        """Count a backend call: an undecided one degrades the query it
-        serves."""
-        self.stats.calls += 1
+        """Note a backend call's result: an undecided one degrades the query
+        it serves."""
         if status is Status.UNKNOWN:
             self._degraded = True
         return status
