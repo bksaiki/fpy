@@ -16,8 +16,7 @@ def _ok(seconds, solver, sha, queries=10, degraded=0):
         'solver_time': solver,
         'stats': {'solver_time': solver, 'constraints': 6, 'queries': queries,
                   'calls': 5, 'degraded': degraded},
-        'trace': {'constraints': [0, 4, 6], 'calls': [1, 2, 2],
-                  'seconds': [solver / 4, solver / 4, solver / 2]},
+        'trace': {'constraints': [0, 4, 6], 'seconds': [solver / 4, solver / 4, solver / 2]},
     }
 
 
@@ -32,7 +31,7 @@ BISECTS = {'z3': True, 'cvc5': True, 'highs': False}
 
 
 def test_totals_cover_only_what_every_backend_compiled():
-    nums = numbers(RECORDS)
+    nums = numbers(RECORDS, BISECTS)
     assert nums['compared'] == 1
     t = nums['totals']
     assert t['z3']['solver_seconds'] == 4
@@ -46,7 +45,7 @@ def test_totals_cover_only_what_every_backend_compiled():
 def test_a_partly_compiled_design_is_a_failure_and_says_how_much():
     partial = {'outcome': 'timeout', 'compiled': 2, 'runs': [{}, {}, {'timeout': 600}]}
     records = [{'design': 'a', 'backends': {'z3': _ok(10, 4, 'x'), 'highs': partial}}]
-    nums = numbers(records)
+    nums = numbers(records, BISECTS)
     assert nums['compared'] == 0
     assert nums['failed']['highs'] == {'a': 'timeout, 2 of 3 compiled'}
     assert 'not compiled under HiGHS: a (timeout, 2 of 3 compiled)' in summary(nums)
@@ -56,23 +55,22 @@ def test_the_method_comes_from_the_run():
     t = numbers(RECORDS, BISECTS)['totals']
     assert [t[b]['method'] for b in ('z3', 'cvc5', 'highs')] == [
         'Binary search', 'Binary search', 'Optimize']
-    assert numbers(RECORDS)['totals']['z3']['method'] is None
 
 
 def test_the_summary_names_what_differs():
-    text = summary(numbers(RECORDS))
+    text = summary(numbers(RECORDS, BISECTS))
     assert 'C++ differs from z3 under HiGHS: a' in text
     assert 'not compiled under HiGHS: b (timeout)' in text
     assert '6 constraints, 10 queries' in text
 
 
 def test_it_names_designs_whose_repeats_did_different_work():
-    assert 'counts the same across every backend' in summary(numbers(RECORDS))
+    assert 'counts the same across every backend' in summary(numbers(RECORDS, BISECTS))
     varied = _ok(9, 3, 'x')
     varied['runs'] = [_ok(9, 3, 'x'), {**_ok(9, 3, 'x'), 'stats': {
         **_ok(9, 3, 'x')['stats'], 'constraints': 7}}]
     records = [{'design': 'a', 'backends': {'z3': _ok(10, 4, 'x'), 'highs': varied}}]
-    nums = numbers(records)
+    nums = numbers(records, BISECTS)
     assert nums['counts_vary'] == {'z3': [], 'highs': ['a']}
     assert 'counts vary across repeats under HiGHS (a call hit its limit): a' in summary(nums)
 
@@ -101,6 +99,5 @@ def test_it_writes_every_output(tmp_path):
 
 def test_the_figure_plots_every_query_log_axes_can_show():
     # design `a`'s and `b`'s queries under z3; HiGHS has none from `b`, a timeout
-    assert queries(RECORDS, 'z3', log=False) == ([0, 4, 6, 0, 4, 6], [1, 1, 2, 0.25, 0.25, 0.5])
-    assert queries(RECORDS, 'z3', log=True) == ([4, 6, 4, 6], [1, 2, 0.25, 0.5])
-    assert queries(RECORDS, 'highs', log=True) == ([4, 6], [0.5, 1])
+    assert queries(RECORDS, 'z3') == ([4, 6, 4, 6], [1, 2, 0.25, 0.5])
+    assert queries(RECORDS, 'highs') == ([4, 6], [0.5, 1])

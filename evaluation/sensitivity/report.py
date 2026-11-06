@@ -4,18 +4,9 @@ The sensitivity evaluation's table and figure, from `run.py`'s results;
 
     python evaluation/sensitivity/report.py evaluation/results/sensitivity
 
-Writes into the results directory, beside the data, overwriting only these:
-
-- `sensitivity-totals.tex`: one row per backend, over the designs every backend
-  compiled: how it finds a maximum (binary search or optimize), compile
-  and solver time, the solver's share, and solver time per query;
-- `sensitivity-scatter.{pdf,png}`: each query's time against the
-  constraints in the component it was asked of, from every design's median
-  run, a panel per backend in one row, log-log;
-- `sensitivity-paper.json`: every number the evaluation cites: each
-  backend's totals, per query, and against z3, and which designs' C++ or
-  counts differ;
-- `sensitivity-summary.txt`: the same, as text, which is also printed.
+Writes `sensitivity-totals.tex`, `sensitivity-scatter.{pdf,png}`,
+`sensitivity-paper.json` and `sensitivity-summary.txt` beside the data,
+overwriting only those; the README says what each holds.
 """
 
 import argparse
@@ -34,17 +25,14 @@ NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5', 'highs': 'HiGHS'
 """Each backend's label."""
 
 METHODS = {True: 'Binary search', False: 'Optimize'}
-"""How a backend finds a maximum, by whether it bisects over satisfiability
-queries (`sensitivity-run.json`'s `bisects`, from the backend itself) or asks
-the solver to optimize."""
+"""How a backend finds a maximum, by `sensitivity-run.json`'s `bisects`."""
 
 ROW_NAMES = {**NAMES, 'z3-opt': 'z3'}
 """Each backend's label in the table, whose method column tells the two z3
 rows apart."""
 
 COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6', 'highs': '#d6772a'}
-MARKERS = {'z3': 'o', 'z3-opt': 's', 'cvc5': '^', 'highs': 'D'}
-INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
+INK, GRID = '#1f1f1e', '#e4e3dc'
 
 
 def load(out: Path) -> list[dict[str, Any]]:
@@ -76,26 +64,26 @@ def backends_of(records: list[dict[str, Any]]) -> list[str]:
     return list(records[0]['backends']) if records else []
 
 
-def queries(records: list[dict[str, Any]], b: str, log: bool) -> tuple[list[int], list[float]]:
+def queries(records: list[dict[str, Any]], b: str) -> tuple[list[int], list[float]]:
     """Every query backend *b* answered in *records*' median runs: the
-    constraints it saw, and its time.  On log axes, only those with both
-    above zero: a constant objective sees no constraint."""
+    constraints it saw, and its time.  Only those with both above zero,
+    which log axes can show: a constant objective sees no constraint."""
     xs: list[int] = []
     ys: list[float] = []
     for rec in records:
-        if (r := _ok(rec, b)) is None or 'trace' not in r:
+        if (r := _ok(rec, b)) is None:
             continue
         for c, s in zip(r['trace']['constraints'], r['trace']['seconds']):
-            if not log or (c > 0 and s > 0):
+            if c > 0 and s > 0:
                 xs.append(c)
                 ys.append(s)
     return xs, ys
 
 
-def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
+def figure(records: list[dict[str, Any]], path: Path) -> None:
     """Each query's time against the constraints it saw, a panel per
-    backend in one row on shared axes, log where *log* and linear
-    otherwise, as *path* with `.pdf` and with `.png`.
+    backend in one row on shared log-log axes, as *path* with `.pdf` and
+    with `.png`.
 
     A panel each, not one cloud: tens of thousands of points a backend
     overlap until only the last drawn shows."""
@@ -105,7 +93,7 @@ def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
                              sharex=True, sharey=True, squeeze=False)
     shown = 0
     for ax, b in zip(axes.flat, bs):
-        xs, secs = queries(records, b, log)
+        xs, secs = queries(records, b)
         shown += len(xs)
         ys = [1000 * s for s in secs]
         # rasterized: a vector PDF of this many points is slow to open
@@ -117,16 +105,13 @@ def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
         for side in ('top', 'right'):
             ax.spines[side].set_visible(False)
     ax0 = axes.flat[0]
-    if log and shown:   # a log axis over no point is an error
+    if shown:   # a log axis over no point is an error
         ax0.set_xscale('log')
         ax0.set_yscale('log')
         # 10, 100, 1,000 rather than powers of ten
         plain = FuncFormatter(lambda v, _: f'{v:,.10g}')
         ax0.xaxis.set_major_formatter(plain)
         ax0.yaxis.set_major_formatter(plain)
-    elif not log:
-        ax0.set_xlim(left=0)
-        ax0.set_ylim(bottom=0)
     fig.supxlabel('Constraints in the queried component', color=INK, fontsize=10)
     fig.supylabel('Query time (ms)', color=INK, fontsize=10)
     fig.tight_layout()
@@ -135,12 +120,9 @@ def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
     plt.close(fig)
 
 
-def numbers(
-    records: list[dict[str, Any]], bisects: dict[str, bool] | None = None,
-) -> dict[str, Any]:
+def numbers(records: list[dict[str, Any]], bisects: dict[str, bool]) -> dict[str, Any]:
     """The totals the table, the summary and the paper cite; *bisects* says
-    how each backend finds a maximum, where known."""
-    bisects = bisects or {}
+    how each backend finds a maximum."""
     bs = backends_of(records)
     ref = bs[0]
     # totals only over designs every backend compiled, so they compare
@@ -153,7 +135,7 @@ def numbers(
         queries = sum(r['stats']['queries'] for r in rs)
         calls = sum(r['stats']['calls'] for r in rs)
         totals[b] = {
-            'method': METHODS[bisects[b]] if b in bisects else None,
+            'method': METHODS[bisects[b]],
             'compile_seconds': compile_s,
             'solver_seconds': solver_s,
             'solver_share': solver_s / compile_s if compile_s else 0.0,
@@ -210,7 +192,7 @@ def totals_latex(nums: dict[str, Any]) -> str:
     for b, t in nums['totals'].items():
         per_query = 1000 * t['seconds_per_query']
         lines.append(
-            f'{ROW_NAMES.get(b, b)} & {t["method"] or ""} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
+            f'{ROW_NAMES.get(b, b)} & {t["method"]} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
             f'{100 * t["solver_share"]:.0f}\\% & {per_query:.1f}\\,ms \\\\')
     lines += ['\\bottomrule', '\\end{tabular}', '']
     return '\n'.join(lines)
@@ -247,16 +229,6 @@ def summary(nums: dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
-def _bisects(out: Path, backends: list[str]) -> dict[str, bool]:
-    """Whether each backend bisects: as the run recorded it, or, for a run
-    from before it did, as the backend says now."""
-    run = json.loads((out / 'sensitivity-run.json').read_text())
-    if 'bisects' in run:
-        return run['bisects']
-    from fpy2.analysis.digit_bound import make_solver
-    return {b: make_solver(b).bisect for b in backends}
-
-
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('results', type=Path, help="run.py's output directory")
@@ -266,7 +238,7 @@ def main(argv: list[str]) -> int:
     records = load(out)
     if not records:
         ap.error(f'no results in {out}')
-    nums = numbers(records, _bisects(out, backends_of(records)))
+    nums = numbers(records, json.loads((out / 'sensitivity-run.json').read_text())['bisects'])
     (out / 'sensitivity-totals.tex').write_text(totals_latex(nums))
     figure(records, out / 'sensitivity-scatter')
     (out / 'sensitivity-paper.json').write_text(json.dumps(nums, indent=1) + '\n')

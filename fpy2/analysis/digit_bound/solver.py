@@ -209,12 +209,8 @@ class QueryRecord(NamedTuple):
 
     constraints: int
     """Constraints in the component it was asked of: all the backend saw."""
-    calls: int
-    """Backend calls it took."""
     seconds: float
     """Time in the backend answering it."""
-    objectives: int
-    """Objectives it asked."""
 
 
 class Status(Enum):
@@ -227,7 +223,6 @@ class Status(Enum):
 
 _S = TypeVar('_S')
 """A backend's solver for one component."""
-
 
 
 class _ComponentSolver(Generic[_S]):
@@ -405,7 +400,7 @@ class _ComponentSolver(Generic[_S]):
     ) -> list[int | float]:
         # every objective's variables: one solver answers the whole query
         named = {v.index for t in objectives for v, _ in t.coeffs}
-        with self._query(named, len(objectives)):
+        with self._query(named):
             solver = self._solver_for_vars(named, optimize=self._optimizes)
             return self._maxima(solver, objectives, tuple(sorted(assuming)))
 
@@ -413,17 +408,16 @@ class _ComponentSolver(Generic[_S]):
         self, objective: Term, k: int, assuming: frozenset[int] = frozenset(),
     ) -> bool:
         named = {v.index for v, _ in objective.coeffs}
-        with self._query(named, 1):
+        with self._query(named):
             # a check needs no optimizer, whichever way this backend maximizes
             solver = self._solver_for_vars(named, optimize=False)
             return self._reaches(solver, objective, k, tuple(sorted(assuming)))
 
     @contextmanager
-    def _query(self, named: set[int], objectives: int) -> Iterator[None]:
+    def _query(self, named: set[int]) -> Iterator[None]:
         """Count and time one query over the variables *named*, and trace it
         where :attr:`keep_trace`."""
         start = time.perf_counter()
-        calls = self.stats.calls
         self._degraded = False
         try:
             yield
@@ -433,8 +427,7 @@ class _ComponentSolver(Generic[_S]):
             self.stats.degraded += self._degraded
             self.stats.solver_time += seconds
             if self.keep_trace:
-                self.trace.append(QueryRecord(
-                    self._size(named), self.stats.calls - calls, seconds, objectives))
+                self.trace.append(QueryRecord(self._size(named), seconds))
 
     def _size(self, named: set[int]) -> int:
         """How many constraints the solver for *named* holds, once

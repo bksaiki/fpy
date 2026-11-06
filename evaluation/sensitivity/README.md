@@ -30,8 +30,7 @@ DIR`; a directory holding files a run did not write is refused) with:
   statistics summed over every store, C++ hash, or the error or timeout),
   and the median run by compile time, whose time, counts and queries are
   reported together.  Each query (`trace`) is the constraints in the
-  component it was asked of, its backend calls, its time, and how many
-  objectives it asked.  A backend compiled a design only where every
+  component it was asked of, and its time.  A backend compiled a design only where every
   repeat did; otherwise its outcome names how the rest failed (`error`,
   `timeout`, or both), and how many compiled, and the design is left out
   of the totals;

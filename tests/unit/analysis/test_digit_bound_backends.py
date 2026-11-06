@@ -169,7 +169,6 @@ class TestStatistics:
         trace = solver.trace
         # each query sees only its own component: {x, y}, then {z}
         assert [q.constraints for q in trace] == [2, 1]
-        assert sum(q.calls for q in trace) == solver.stats.calls
         assert sum(q.seconds for q in trace) <= solver.stats.solver_time
 
     def test_queries_are_traced_only_when_asked(self, backend):
@@ -183,12 +182,12 @@ class TestStatistics:
         assert solver.trace == []
 
     def test_a_decision_is_one_query(self, backend):
-        solver = make_solver(backend, keep_trace=True)
+        solver = make_solver(backend)
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
         assert not s.reaches([(x, 4)])
-        assert [(q.calls, q.objectives) for q in solver.trace] == [(1, 1)]
+        assert (solver.stats.queries, solver.stats.calls) == (1, 1)
 
     def test_bisect_says_how_it_searches(self, backend):
         """`bisect` is what the evaluation reports as the backend's method:
@@ -299,38 +298,36 @@ class TestMaximizeAll:
         assert s.maximums(terms) == [-math.inf] * 3
 
     def test_they_are_one_query(self, backend):
-        solver = make_solver(backend, keep_trace=True)
+        solver = make_solver(backend)
         s = DigitBoundStore(solver=solver)
         s.maximums(_tradeoff(s))
         assert solver.stats.queries == 1
-        assert [q.objectives for q in solver.trace] == [3]
 
     def test_settled_terms_do_not_reach_the_solver(self, backend):
-        solver = make_solver(backend, keep_trace=True)
+        solver = make_solver(backend)
         s = DigitBoundStore(solver=solver)
         terms = _tradeoff(s)
         s.maximum(terms[2])
         free = s.var('free')
         assert s.maximums([*terms, free, terms[0]]) == [9, 5, 10, math.inf, 9]
         # `msb` alone, then the other two together
-        assert [q.objectives for q in solver.trace] == [1, 2]
+        assert solver.stats.queries == 2
 
 
 class TestZ3OptimizesTogether:
     """z3's optimizer answers several objectives in one check."""
 
     def test_one_check_answers_them_all(self):
-        solver = make_solver('z3-opt', keep_trace=True)
+        solver = make_solver('z3-opt')
         s = DigitBoundStore(solver=solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
-        assert solver.stats.calls == 1
-        assert [(q.calls, q.objectives) for q in solver.trace] == [(1, 3)]
+        assert (solver.stats.queries, solver.stats.calls) == (1, 1)
 
     def test_bisection_searches_each_in_turn(self):
-        solver = make_solver('z3', keep_trace=True)
+        solver = make_solver('z3')
         s = DigitBoundStore(solver=solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
-        assert [q.objectives for q in solver.trace] == [3]
+        assert solver.stats.queries == 1
         assert solver.stats.calls > 3   # several checks per objective
 
     def test_an_unbounded_objective_is_inf(self):

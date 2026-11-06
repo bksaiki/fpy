@@ -72,9 +72,7 @@ def compile_once(
     queries = [q for s in solvers for q in s.trace]
     trace = {
         'constraints': [q.constraints for q in queries],
-        'calls': [q.calls for q in queries],
         'seconds': [round(q.seconds, 7) for q in queries],
-        'objectives': [q.objectives for q in queries],
     }
     return {'seconds': seconds, 'stats': dataclasses.asdict(stats), 'trace': trace, **outcome}
 
