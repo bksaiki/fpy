@@ -63,3 +63,18 @@ def test_run_modes():
     run.mode = 'mmasim:nv.ampere.bf16.f32'
     with pytest.raises(ValueError):
         model(x)
+
+
+def test_check():
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(torch.nn.Linear(1024, 2048, bias=False),
+                                torch.nn.Linear(2048, 1024, bias=False)).cuda()
+    run = mmasim_matmul.patch(model)
+    run.mode, run.calls = 'mmasim:nv.hopper.bf16.f32', []
+    with torch.no_grad():
+        model(torch.randn(3, 1024, device='cuda'))
+    assert len(run.calls) == 2
+    run.calls[1][3].view(torch.int32)[0, 0] ^= 1
+    run.calls[0][3][0, :2] = torch.nan
+    assert run.check() == {'calls': 2, 'outputs': 3 * 2048 + 3 * 1024, 'differing': 3}
+    assert run.calls == [] and run.mode == 'mmasim:nv.hopper.bf16.f32'

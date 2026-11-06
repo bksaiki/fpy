@@ -135,3 +135,10 @@ GSM8K_MAX_NEW = 256
 
 GSM8K_BATCH = 32
 """Problems per batch."""
+
+GSM8K_SAMPLE_STEPS = (4, 16)
+"""Decode steps MMA-Sim's sample times: at least, at most."""
+
+GSM8K_SAMPLE_CI = 0.01
+"""The sample stops adding decode steps once their mean's 95% confidence
+interval is within this fraction of it."""

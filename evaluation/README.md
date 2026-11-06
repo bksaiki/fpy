@@ -7,7 +7,7 @@ part measures by default.
 |---|---|---|---|
 | `analysis` | how precise format inference is, with and without digit bounds, on the MMA-Sim designs | CPU | ~7 min |
 | `blas` | each grid design's GEMM backward error on Grading-the-BLAS matrices | CPU, C++ compiler | not yet timed |
-| `gsm8k` | GSM8K speed and accuracy: FPy's kernels against MMA-Sim and FP32 | CUDA GPU | ~3.5 h |
+| `gsm8k` | GSM8K speed: FPy's kernels against MMA-Sim (sampled, `gsm8k/sample.py`) and FP32 | CUDA GPU | ~10 min |
 | `llm` | how far each grid design moves Qwen3.5-0.8B's next-token predictions | CUDA GPU | ~13 h (TITAN V) |
 
 ## Setup

@@ -2,7 +2,8 @@
 Times GSM8K on Qwen3.5-0.8B with every linear layer computed by a design:
 by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
 
-    python evaluation/gsm8k/run.py                  # Hopper BF16, 32 problems, about 3.5 h
+    python evaluation/gsm8k/run.py                  # Hopper BF16, 32 problems, MMA-Sim sampled
+    python evaluation/gsm8k/run.py --mmasim full    # MMA-Sim's whole run too: about 3.6 h
     python evaluation/gsm8k/run.py --smoke          # 2 problems, 8 tokens
     python evaluation/gsm8k/run.py -n 1319 --backends torch fpy
 
@@ -10,7 +11,8 @@ FPy's kernels compile first, so every timing is of the compiled model.
 
 Replaces the results directory (`evaluation/results/gsm8k/`, or `-o DIR`)
 with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.
-Exits 1 if `fpy` and `mmasim` emit different tokens.
+MMA-Sim is sampled by default, its time predicted (`sample.py`).  Exits 1
+if `fpy` and `mmasim` emit different tokens, or a sampled call differs.
 """
 
 import argparse
@@ -34,6 +36,7 @@ import config
 import gsm8k
 import mmasim_matmul
 import report
+import sample
 import torch
 from core import generate, kernels, swap
 
@@ -46,13 +49,18 @@ def mode(backend: str, design: str | None) -> str:
     return {'torch': 'fp32', 'fpy': design, 'mmasim': mmasim_matmul.PREFIX + str(design)}[backend]
 
 
+def encode(tok: Any, problems: list[gsm8k.Problem]) -> list[list[int]]:
+    """*problems*' prompts' tokens."""
+    return [generate.encode(tok, gsm8k.messages(p.question))[0].tolist() for p in problems]
+
+
 def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
             problems: list[gsm8k.Problem], backend: str, design: str | None,
             max_new: int, batch: int) -> dict[str, Any]:
     """*backend*'s record on *problems*, in batches of *batch*."""
     run.mode = mode(backend, design)
     eos = generate.stop_tokens(model, tok)
-    prompts = [generate.encode(tok, gsm8k.messages(p.question))[0].tolist() for p in problems]
+    prompts = encode(tok, problems)
     warmup = time.perf_counter()
     if backend != 'mmasim':   # Triton's JIT and CUDA's start-up, outside the timing
         batched.generate(model, prompts[:batch], 2, eos)
@@ -123,6 +131,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--backends', nargs='+', choices=BACKENDS, default=list(BACKENDS),
                     help='default: all')
     ap.add_argument('--model', default=config.MODEL, help='default %(default)s')
+    ap.add_argument('--mmasim', choices=('sample', 'full'), default='sample',
+                    help="MMA-Sim's run: sampled, its time predicted from FPy's run; or "
+                         'the whole run (default %(default)s)')
     ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='processes compiling the designs; above 1, their compile times '
                          'contend (default %(default)s)')
@@ -130,6 +141,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.smoke:
         args.problems, args.max_new = 2, 8
+    if args.mmasim == 'sample' and 'mmasim' in args.backends and 'fpy' not in args.backends:
+        ap.error("a sampled MMA-Sim run predicts from FPy's: add --backends fpy")
     if foreign := _foreign(args.out):
         ap.error(f'{args.out} holds files a run did not write: {", ".join(foreign)}')
     shutil.rmtree(args.out, ignore_errors=True)
@@ -152,15 +165,18 @@ def main(argv: list[str]) -> int:
         name = backend if design is None else f'{design}-{backend}'
         print(f'-- {name}', flush=True)
         start = time.perf_counter()
-        records[backend, design] = r = measure(model, run, tok, problems, backend, design,
-                                               args.max_new, args.batch)
+        if backend == 'mmasim' and args.mmasim == 'sample':
+            r = sample.measure(model, run, encode(tok, problems), design, records['fpy', design])
+        else:
+            r = measure(model, run, tok, problems, backend, design, args.max_new, args.batch)
+        records[backend, design] = r
         r |= {'seconds': time.perf_counter() - start, **env}
         (args.out / f'{name}.json').write_text(json.dumps(r, indent=1))
 
     print('-- report')
     report.main([str(args.out)])
     rs = report.rows(list(records.values()))
-    return 1 if any(r.same is not None and r.same < r.problems for r in rs) else 0
+    return 1 if any(r.disagrees for r in rs) else 0
 
 
 if __name__ == '__main__':

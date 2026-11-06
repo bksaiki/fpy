@@ -50,3 +50,19 @@ def test_main(tmp_path: Path):
     assert r'\texttt{nv.hopper.bf16.f32} & FPy & 2 & 5 & 1 & 3 & 1.25 & 50.0 & 50.0 & 2/2 & 300 \\' in tex
     assert len(json.loads((tmp_path / 'gsm8k-speed.json').read_text())) == 3
     assert report.main([str(tmp_path)]) == 0   # ignores its own outputs
+
+
+SAMPLED = {'backend': 'mmasim', 'design': D, 'problems': 2, 'prefill': 30.0, 'decode': 90.0,
+           'sampled': True, 'check': {'calls': 10, 'outputs': 100, 'differing': 0}}
+
+
+def test_sampled():
+    rs = report.rows([RECORDS[2], SAMPLED])
+    fpy, mmasim = rs
+    assert (fpy.same, fpy.check, fpy.speedup) == (None, SAMPLED['check'], 30.0)
+    assert not fpy.disagrees
+    assert mmasim.predicted and mmasim.tokens is None and mmasim.rate is None
+    assert '*' in report.text(rs) and 'bit-exact' in report.text(rs)
+    assert r'MMA-Sim (predicted) & 2 &  & 30 & 90 &  &  &  &  &  \\' in report.latex(rs)
+    bad = SAMPLED | {'check': {'calls': 10, 'outputs': 100, 'differing': 3}}
+    assert report.rows([RECORDS[2], bad])[0].disagrees

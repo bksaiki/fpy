@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
-from core import swap
+from core import quant, swap
 from mmasim import MMAOperation
 from mmasim.arithmetic import fdpa
 
@@ -48,13 +48,39 @@ class Run(swap.Run):
     """:class:`swap.Run` with modes `mmasim:<design>` (:data:`OPERATIONS`)
     under the `bf16` scheme."""
 
+    calls: list[tuple[quant.Quantized, quant.Quantized, torch.Tensor, torch.Tensor]] | None = None
+    """While a list, each `mmasim:` call's operands and output, appended."""
+
     def _matmul(self, qa, qw, w):
         if not self.mode.startswith(PREFIX):
             return super()._matmul(qa, qw, w)
         if self.scheme.name != swap.BF16.name:
             raise ValueError(f'{self.mode} takes the bf16 scheme, not {self.scheme.name}')
-        return matmul(qa.elements.to(torch.bfloat16), self._prepare(w, qw, torch.bfloat16),
-                      self.mode.removeprefix(PREFIX))
+        y = matmul(qa.elements.to(torch.bfloat16), self._prepare(w, qw, torch.bfloat16),
+                   self.mode.removeprefix(PREFIX))
+        if self.calls is not None:
+            self.calls.append((qa, qw, w, y.clone()))
+        return y
+
+    def check(self) -> dict[str, int]:
+        """:attr:`calls`, recomputed by FPy's kernel for the same design, then
+        emptied: the calls, their outputs, and the outputs that differ in any
+        bit (every NaN equal)."""
+        mode = self.mode
+        self.mode = mode.removeprefix(PREFIX)
+        out = {'calls': 0, 'outputs': 0, 'differing': 0}
+        try:
+            for qa, qw, w, y in self.calls or []:
+                z = super()._matmul(qa, qw, w)
+                same = (y.view(torch.int32) == z.view(torch.int32)) | (y.isnan() & z.isnan())
+                out['calls'] += 1
+                out['outputs'] += y.numel()
+                out['differing'] += int((~same).sum())
+        finally:
+            self.mode = mode
+        if self.calls:
+            self.calls.clear()
+        return out
 
 
 def _extend(run: swap.Run) -> Run:
