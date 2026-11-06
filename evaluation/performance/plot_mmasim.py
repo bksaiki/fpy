@@ -140,6 +140,50 @@ def input_format(design: str) -> str:
     ]
 
 
+# Hardware families for the paper figure, in legend order, with their bar
+# colors. Each NVIDIA generation takes its own hue, oldest first, with Volta
+# and Turing sharing one, as do datacenter and RTX Blackwell; the AMD and FMA
+# chain families, which are not compared across generations, take grays.
+FAMILIES = {
+    "Volta / Turing": "#2a78d6",
+    "Ampere": "#eb6834",
+    "Ada": "#1baf7a",
+    "Hopper": "#eda100",
+    "Blackwell": "#e87ba4",
+    "AMD CDNA3": "#b5b3ab",
+    "AMD CDNA2": "#7d7b75",
+    "FMA chain": "#3d3c3a",
+}
+
+
+def family(design: str) -> str:
+    """The hardware family of a design, as `FAMILIES` names it."""
+    group, _ = architecture(design)
+    if group == "fma":
+        return "FMA chain"
+    if group in ("cdna2", "cdna3"):
+        return f"AMD {ARCHITECTURES[group]}"
+    if group in ("volta", "turing"):
+        return "Volta / Turing"
+    if group == "rtx_blackwell":
+        return "Blackwell"
+    return ARCHITECTURES[group]
+
+
+# Block-scaled formats (MX, NVFP4) are marked by a hatch over their family color.
+BLOCK_SCALED_HATCH = "//////"
+
+
+def block_scaled(design: str) -> bool:
+    return input_format(design) == "MX / NVFP4"
+
+
+def darken(color: Any, factor: float = 0.6) -> tuple[float, ...]:
+    """*color* with its RGB channels scaled toward black, alpha kept."""
+    red, green, blue, alpha = color
+    return (red * factor, green * factor, blue * factor, alpha)
+
+
 def plot_points(
     rows: list[dict[str, Any]], kind: str
 ) -> dict[str, list[tuple[int, float]]]:
@@ -623,10 +667,17 @@ def plot_speedup_variants(
 
 
 def plot_speedup_row(
-    rows: list[dict[str, Any]], designs: list[str], output: Path, batch: int
+    rows: list[dict[str, Any]],
+    designs: list[str],
+    output: Path,
+    batch: int,
+    length: int | None = None,
 ) -> None:
-    """`speedup-batch-<batch>`: FPy's speedup over eager MMA-Sim at one batch
-    size, one panel per dot length side by side, designs sorted ascending.
+    """`perf-cpu-speedup`: a compact figure of FPy's speedup over eager
+    MMA-Sim at one batch size and dot length (the longest by default), designs
+    sorted ascending and colored by their hardware family. Speedup
+    barely varies with dot length, so one length stands for all of them.
+    Designs are not named; the legend identifies their families.
     """
     import matplotlib
 
@@ -634,38 +685,82 @@ def plot_speedup_row(
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
 
-    lengths = sorted(
-        {row["dot_length"] for row in rows if row["batch_size"] == batch}
+    if length is None:
+        lengths = {row["dot_length"] for row in rows if row["batch_size"] == batch}
+        if not lengths:
+            return
+        length = max(lengths)
+    values = speedups(rows, designs, length)
+    order = sorted(
+        (design for design in designs if batch in values[design]),
+        key=lambda design: values[design][batch],
     )
-    if not lengths:
+    if not order:
         return
-    fig, axes = plt.subplots(
-        1,
-        len(lengths),
-        figsize=(max(6.0, 0.15 * len(designs)) * len(lengths), 5.5),
-        squeeze=False,
+    heights = [values[design][batch] for design in order]
+    fig, axis = plt.subplots(figsize=(7.0, 2.3))
+    bars = axis.bar(
+        range(len(order)),
+        heights,
+        0.9,
+        color=[FAMILIES[family(design)] for design in order],
     )
-    for axis, length in zip(axes[0], lengths):
-        values = speedups(rows, designs, length)
-        order = sorted(
-            (design for design in designs if batch in values[design]),
-            key=lambda design: values[design][batch],
+    # Block-scaled formats keep their family's color under a darker hatch.
+    for bar, design in zip(bars, order):
+        if block_scaled(design):
+            bar.set_hatch(BLOCK_SCALED_HATCH)
+            bar.set_hatchcolor(darken(bar.get_facecolor()))
+            bar.set_linewidth(0)
+    mark_geomean(axis, heights)
+    axis.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
+    axis.set_xlim(-0.6, len(order) - 0.4)
+    axis.set_xticks([])
+    axis.set_xlabel("Designs", fontsize=8)
+    axis.set_ylim(bottom=0)
+    axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}×"))
+    axis.tick_params(axis="y", labelsize=7)
+    axis.set_ylabel("Speedup", fontsize=8)
+    axis.grid(True, axis="y", alpha=0.25)
+    axis.set_axisbelow(True)
+    axis.spines[["top", "right"]].set_visible(False)
+    # Only families with a plotted design appear in the legend.
+    present = {family(design) for design in order}
+    shown = [label for label in FAMILIES if label in present]
+    style = dict(frameon=False, fontsize=7, handlelength=1.4, handleheight=1.0)
+    # Families fill a grid of two rows, column by column.
+    families = axis.legend(
+        [plt.Rectangle((0, 0), 1, 1, color=FAMILIES[label]) for label in shown],
+        shown,
+        loc="upper left",
+        ncol=math.ceil(len(shown) / 2),
+        columnspacing=1.0,
+        **style,
+    )
+    fig.tight_layout(pad=0.2)
+    if any(block_scaled(design) for design in order):
+        # The hatch key sits to the right of the family grid as outlined white
+        # swatches, so it never reads as another family's color.
+        axis.add_artist(families)
+        fig.canvas.draw()
+        right = families.get_window_extent().transformed(axis.transAxes.inverted()).x1
+        ink = "#52514e"
+        axis.legend(
+            [
+                plt.Rectangle(
+                    (0, 0), 1, 1, facecolor="white", edgecolor=ink, linewidth=0.6
+                ),
+                plt.Rectangle(
+                    (0, 0), 1, 1, facecolor="white", edgecolor=ink, linewidth=0.6,
+                    hatch=BLOCK_SCALED_HATCH, hatchcolor=ink,
+                ),
+            ],
+            ["not block-scaled", "block-scaled (MX / NVFP4)"],
+            loc="upper left",
+            bbox_to_anchor=(right, 1),
+            **style,
         )
-        heights = [values[design][batch] for design in order]
-        axis.bar(range(len(order)), heights, 0.85, color=COLORS["mmasim"])
-        mark_geomean(axis, heights, COLORS["mmasim"])
-        axis.axhline(1.0, color="black", linewidth=0.8, linestyle="--")
-        axis.set_title(f"length {length}, batch {batch}", fontsize=10)
-        axis.set_xticks(range(len(order)), order, rotation=90, fontsize=6)
-        axis.set_xlim(-0.6, len(order) - 0.4)
-        axis.set_ylim(bottom=0)
-        axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}×"))
-        axis.set_ylabel(PLOTS["speedup"][0])
-        axis.grid(True, axis="y", alpha=0.25)
-        axis.set_axisbelow(True)
-    fig.tight_layout()
     for suffix in ("png", "pdf"):
-        fig.savefig(output / f"speedup-batch-{batch}.{suffix}", dpi=180)
+        fig.savefig(output / f"perf-cpu-speedup.{suffix}", dpi=300)
     plt.close(fig)
 
 
