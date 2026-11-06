@@ -153,12 +153,14 @@ from ...number import (
     INTEGER,
     REAL,
     Context,
+    FixedContext,
     Float,
     MPBFixedContext,
     MPFixedContext,
     MPFloatContext,
     OverflowMode,
     RealFloat,
+    SizedContext,
 )
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
@@ -866,6 +868,28 @@ def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> '
         return met.format()
     except (ValueError, OverflowError):
         return fmt
+
+
+def _may_overflow(ctx: 'Context | PartialContext | None', exact: AbstractFormat) -> bool:
+    """Can rounding a value of *exact* under *ctx* overflow?  Rounding in range
+    never raises precision or makes the grid finer, but an overflow lands on
+    whatever value *ctx* picks."""
+    if ctx is None:
+        return True
+    if isinstance(ctx, PartialContext):
+        return issubclass(ctx.cls, SizedContext)
+    if not isinstance(ctx, SizedContext):
+        return False
+    scope = to_abstract(ctx.format())
+    return scope is None or exact.pos_bound > scope.pos_bound or exact.neg_bound < scope.neg_bound
+
+
+def _wraps_signed(ctx: 'Context | PartialContext | None') -> bool:
+    """Does *ctx* wrap two's complement?  That subtracts a multiple of
+    `2^nbits` quanta, which keeps the grid and adds no digits, but may land
+    anywhere in range."""
+    return isinstance(ctx, FixedContext) and ctx.signed and ctx.overflow is OverflowMode.WRAP
+
 
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
@@ -2466,35 +2490,36 @@ class _FormatInferInstance(Visitor):
         scope_af = AbstractFormat.from_format(scope_fmt)
         if scope_af <= exact:
             return scope_fmt
+        overflows = _may_overflow(resolved, exact)
+        if overflows and not _wraps_signed(resolved):
+            return scope_fmt
 
-        # Mixed-overlap branch.  prec/exp tighten unconditionally -- both are
-        # sound under any rounding mode.  Bounds are the pitfall:
+        # Mixed-overlap branch.  prec/exp tighten under any rounding that stays
+        # in range or wraps two's complement.  Bounds are the pitfall:
         # ``round_C(F.pos_bound)`` lands *above* F.pos_bound whenever C does
         # not hold it exactly, so a bare ``min`` under-claims the image.  Off
         # C's grid, ``round_bound_out`` carries the bound to the next point on
         # it; past C's precision nothing says where the round lands, so
-        # ``F.prec > C.prec`` keeps C's bounds instead.  Under that gate the
-        # grid-rounded bound has at most C.prec significant bits and sits on
-        # C's grid, so C holds it exactly.  ``int | float`` comparison works
-        # directly with the ``float('inf')`` unbounded-prec sentinel.
+        # ``F.prec > C.prec`` keeps C's bounds instead, as does a wrap.  Under
+        # that gate the grid-rounded bound has at most C.prec significant bits
+        # and sits on C's grid, so C holds it exactly.  ``int | float``
+        # comparison works directly with the ``float('inf')`` unbounded-prec
+        # sentinel.
         prec = min(exact.prec, scope_af.prec)
         exp = max(exact.exp, scope_af.exp)
-        if exact.prec > scope_af.prec:
+        if exact.prec > scope_af.prec or overflows:
             pos_bound = scope_af.pos_bound
             neg_bound = scope_af.neg_bound
         else:
             pos_bound = min(round_bound_out(exact.pos_bound, exp), scope_af.pos_bound)
             neg_bound = max(round_bound_out(exact.neg_bound, exp), scope_af.neg_bound)
         # Specials the image can hold.  It lies inside C, so C gates each one:
-        # a magnitude past C's bound lands on C's infinity, and a negative
-        # value rounding to zero keeps C's ``-0``.  Dropping them (the
-        # constructor's default) excludes values the program computes.
+        # a negative value rounding to zero keeps C's ``-0``.  Dropping them
+        # (the constructor's default) excludes values the program computes.
         overlap = AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
-            has_pos_inf=scope_af.has_pos_inf and (
-                exact.has_pos_inf or exact.pos_bound > scope_af.pos_bound),
-            has_neg_inf=scope_af.has_neg_inf and (
-                exact.has_neg_inf or exact.neg_bound < scope_af.neg_bound),
+            has_pos_inf=scope_af.has_pos_inf and exact.has_pos_inf,
+            has_neg_inf=scope_af.has_neg_inf and exact.has_neg_inf,
             has_nan=scope_af.has_nan and exact.has_nan,
             has_neg_zero=scope_af.has_neg_zero and (
                 exact.has_neg_zero or exact.neg_bound < 0),
@@ -2558,7 +2583,7 @@ class _FormatInferInstance(Visitor):
     # -- consuming digit-bound inference --------------------------------------
 
     def _tighter(
-        self, e: Expr, fmt: FormatBound, arg_fmt: FormatBound = None,
+        self, e: ContextUseSite, fmt: FormatBound, arg_fmt: FormatBound = None,
     ) -> FormatBound:
         """*fmt* met with what digit-bound inference says: both are sound, so
         their meet is too, and no wider than either -- whichever states the
@@ -2576,7 +2601,8 @@ class _FormatInferInstance(Visitor):
             return fmt
         prec: int | float = bounds.prec
         arg_af = to_abstract(arg_fmt) if arg_fmt is not None else None
-        if arg_af is not None:
+        ctx = self._resolve_scope_ctx(e)
+        if arg_af is not None and (not _may_overflow(ctx, arg_af) or _wraps_signed(ctx)):
             prec = min(prec, arg_af.prec)
         if prec <= 0:
             # The quantum is at least as coarse as the value's own reach, so
@@ -2748,13 +2774,9 @@ class _FormatInferInstance(Visitor):
                 # Digit-bound inference may beat the scope even when the scope
                 # resolves: a fixed-point context is unbounded above, so what
                 # limits the result is the operand's own reach relative to the
-                # position, clipped by the precision rounding can never raise --
-                # unless it wraps, which takes `-1` to the top of the range.
-                active = self._resolve_active_ctx(e)
-                wraps = getattr(active, 'overflow', None) is OverflowMode.WRAP
+                # position, clipped by the precision rounding can never raise.
                 return self._tighter(
-                    e, fitted if fitted is not None else self._op_bound(e),
-                    None if wraps else arg_fmt,
+                    e, fitted if fitted is not None else self._op_bound(e), arg_fmt,
                 )
             case Abs():
                 # abs: precision-preserving.  Use the unrounded result
