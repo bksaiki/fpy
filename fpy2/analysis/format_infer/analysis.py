@@ -2595,10 +2595,19 @@ class _FormatInferInstance(Visitor):
         # rather than clearing them.
         specials = cur if cur is not None else _to_abstract(REAL_FORMAT)
         assert specials is not None, 'REAL_FORMAT is abstractable'
+        # The largest value sets every digit from `mag` down to `lo`, the higher
+        # of the grid and the `prec`-th digit: `2^(mag+1) - 2^lo`.  With neither,
+        # there is no largest value, and `2^(mag+1)` bounds it.
+        bound: RealFloat | float = math.inf
+        if not math.isinf(bounds.mag):
+            lo = max(bounds.exp, bounds.mag - prec + 1)
+            if math.isinf(lo):
+                bound = RealFloat(exp=int(bounds.mag) + 1, c=1)
+            else:
+                bound = RealFloat(exp=int(lo), c=(1 << int(bounds.mag - lo + 1)) - 1)
         # a parameter the store leaves open stays trivial
         alt = AbstractFormat(
-            prec, bounds.exp,
-            math.inf if math.isinf(bounds.mag) else RealFloat(exp=int(bounds.mag) + 1, c=1),
+            prec, bounds.exp, bound,
             has_pos_inf=specials.has_pos_inf,
             has_neg_inf=specials.has_neg_inf,
             has_nan=specials.has_nan,
@@ -2611,7 +2620,7 @@ class _FormatInferInstance(Visitor):
                 return fmt  # no `Format` materializes it
         if cur is None or isinstance(fmt, SetFormat):
             return fmt      # a set of values is exact already
-        # the store's magnitude is a binade, so a tighter `cur` need not contain it
+        # either may be tighter in any parameter, so meet them
         return _narrowed(fmt, cur, alt)
 
     def _callee_digit_bound(self, e: Call) -> 'DigitBoundAnalysis | None':

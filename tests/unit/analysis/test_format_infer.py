@@ -2788,7 +2788,7 @@ class TestRescaledRounding:
 
     @pytest.mark.parametrize('k', [12, 23])
     def test_the_precision_survives_the_rescale(self, k):
-        assert self._round_bound(k).pmax == k
+        assert AbstractFormat.from_format(self._round_bound(k)).effective_prec() == k
 
     def test_the_interpreter_agrees(self):
         """The counterweight: the rescaled program really does reach `k`."""
@@ -4083,7 +4083,7 @@ class TestAZeroGuardDischargesABranch:
 
         g = monomorphize(f, args=[RealType(small), RealType(wide)])
         fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(z)')
-        assert fmt.pmax == 40
+        assert AbstractFormat.from_format(fmt).effective_prec() == 40
 
 
 class TestAZeroGuardNoPathNames:
