@@ -2595,8 +2595,9 @@ class _FormatInferInstance(Visitor):
         # rather than clearing them.
         specials = cur if cur is not None else _to_abstract(REAL_FORMAT)
         assert specials is not None, 'REAL_FORMAT is abstractable'
-        # The largest value is every digit set from `mag` down to the lowest
-        # one allowed; with none, only the excluded supremum `2^(mag+1)` bounds it.
+        # The largest value sets every digit from `mag` down to `lo`, the higher
+        # of the grid and the `prec`-th digit: `2^(mag+1) - 2^lo`.  With neither,
+        # there is no largest value, and `2^(mag+1)` bounds it.
         bound: RealFloat | float = math.inf
         if not math.isinf(bounds.mag):
             lo = max(bounds.exp, bounds.mag - prec + 1)
