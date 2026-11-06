@@ -6,8 +6,10 @@ compilation and the solver queries inside it.
     python evaluation/solver_backends/run.py volta -r 1    # matching designs, once each
 
 Replaces the results directory (`results/` beside this file, or `-o DIR`)
-with `<design>.json` per design, and `report.py`'s table and figure.  Each compilation runs in a fresh process, under a
-wall-clock limit.  Exits 1 if a backend fails a design z3 compiles.
+with `<design>.json` per design, `backends-run.json`, and `report.py`'s
+table and figures in `report/`.  Each compilation runs in a fresh process,
+under a wall-clock limit; each backend call inside it under a limit of its
+own (`-c`).  Exits 1 if a backend fails a design z3 compiles.
 """
 
 import argparse
@@ -16,7 +18,6 @@ import hashlib
 import json
 import os
 import shutil
-import statistics
 import subprocess
 import sys
 import time
@@ -36,17 +37,26 @@ BACKENDS = ('z3', 'z3-opt', 'cvc5', 'highs')
 """The backends compared, z3 first: the others are read against it."""
 
 
-def compile_once(name: str, backend: str) -> dict[str, Any]:
-    """Compile design *name* under *backend*, in this process: the wall time,
-    the solver statistics summed over every store, and the C++'s hash, or
-    the error that stopped it."""
+CALL_TIMEOUT = 60.0
+"""Seconds one backend call may take in the evaluation.  The solvers' own
+default, 10 s, is a guard for the compiler; the large CDNA3 designs have calls
+near it, and one that crosses it answers loosely (`degraded`) and sends the
+analysis down a different path, so the backends would no longer be compared
+on the same work."""
+
+
+def compile_once(name: str, backend: str, call_timeout: float = CALL_TIMEOUT) -> dict[str, Any]:
+    """Compile design *name* under *backend*, in this process, each backend
+    call limited to *call_timeout* seconds: the wall time, the solver
+    statistics summed over every store, and the C++'s hash, or the error that
+    stopped it."""
     from compile import compile_design
 
     from fpy2.analysis.digit_bound import SolverStats, solver_backend
 
     build = dict(DESIGNS)[name]
     start = time.perf_counter()
-    with solver_backend(backend) as solvers:
+    with solver_backend(backend, timeout_ms=round(1000 * call_timeout)) as solvers:
         try:
             src, _ = compile_design(build)
             outcome = {'cpp_sha256': hashlib.sha256(src.encode()).hexdigest()}
@@ -57,12 +67,14 @@ def compile_once(name: str, backend: str) -> dict[str, Any]:
     return {'seconds': seconds, 'stats': dataclasses.asdict(stats), **outcome}
 
 
-def _run_child(name: str, backend: str, timeout: float) -> dict[str, Any]:
+def _run_child(
+    name: str, backend: str, timeout: float, call_timeout: float,
+) -> dict[str, Any]:
     """:func:`compile_once` in a fresh process, killed past *timeout*
     seconds."""
     # one thread: the backends are compared as single-threaded solvers
     env = {**os.environ, 'OMP_NUM_THREADS': '1'}
-    cmd = [sys.executable, __file__, '--child', name, backend]
+    cmd = [sys.executable, __file__, '--child', name, backend, str(call_timeout)]
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, env=env, check=False)
@@ -74,31 +86,36 @@ def _run_child(name: str, backend: str, timeout: float) -> dict[str, Any]:
 
 
 def _summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    """One backend's runs on one design: medians over the runs that
-    compiled, and their outcome."""
+    """One backend's runs on one design: the median run by compile time, of
+    those that compiled, and their outcome.
+
+    The time and the counts are that one run's.  The counts are the same
+    every run unless a backend call hit its limit in some runs and not
+    others; the report names the designs where they differ."""
     ok = [r for r in runs if 'cpp_sha256' in r]
     if not ok:
         return {'runs': runs, 'outcome': 'timeout' if 'timeout' in runs[0] else 'error'}
+    # the lower median on an even count: a run that happened
+    mid = sorted(ok, key=lambda r: r['seconds'])[(len(ok) - 1) // 2]
     return {
-        'runs': runs, 'outcome': 'ok', 'cpp_sha256': ok[0]['cpp_sha256'],
-        'seconds': statistics.median(r['seconds'] for r in ok),
-        'solver_time': statistics.median(r['stats']['solver_time'] for r in ok),
-        # the counts are the same every run; only the times vary
-        'stats': ok[0]['stats'],
+        'runs': runs, 'outcome': 'ok', 'cpp_sha256': mid['cpp_sha256'],
+        'seconds': mid['seconds'], 'solver_time': mid['stats']['solver_time'],
+        'stats': mid['stats'],
     }
 
 
 def measure(
     names: list[str], backends: list[str], repeats: int, jobs: int, timeout: float,
-    out: Path,
+    call_timeout: float, out: Path,
 ) -> tuple[int, list[str]]:
     """Every design in *names* under every backend, *repeats* times, into
     *out*: how many records were written, and the designs some backend
     failed where z3 compiled."""
     tasks = [(n, b, r) for n in names for b in backends for r in range(repeats)]
-    results: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    results: dict[tuple[str, str], dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = {t: pool.submit(_run_child, t[0], t[1], timeout) for t in tasks}
+        futures = {t: pool.submit(_run_child, t[0], t[1], timeout, call_timeout)
+                   for t in tasks}
         width = max(map(len, names))
         for name in names:
             record: dict[str, Any] = {'design': name, 'repeats': repeats, 'backends': {}}
@@ -131,13 +148,13 @@ def _foreign(out: Path) -> list[str]:
     if not out.exists():
         return []
     return sorted(p.name for p in out.iterdir()
-                  if not (p.suffix == '.json' or p.name.startswith('backends-')))
+                  if not (p.suffix == '.json' or p.name == report.REPORT_DIR))
 
 
 def main(argv: list[str]) -> int:
     if argv[:1] == ['--child']:
-        name, backend = argv[1:3]
-        print(json.dumps(compile_once(name, backend)))
+        name, backend, call_timeout = argv[1:4]
+        print(json.dumps(compile_once(name, backend, float(call_timeout))))
         return 0
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
@@ -153,6 +170,9 @@ def main(argv: list[str]) -> int:
                     help='compilations at once (default 4); 1 for the least noise')
     ap.add_argument('-t', '--timeout', type=float, default=600,
                     help='seconds one compilation may take (default 600)')
+    ap.add_argument('-c', '--call-timeout', type=float, default=CALL_TIMEOUT,
+                    help=f'seconds one backend call may take (default {CALL_TIMEOUT:.0f}; '
+                         'the solvers alone default to 10)')
     args = ap.parse_args(argv)
 
     names = [name for name, _ in DESIGNS
@@ -166,9 +186,10 @@ def main(argv: list[str]) -> int:
 
     (args.out / 'backends-run.json').write_text(json.dumps({
         'backends': args.backends, 'repeats': args.repeats, 'jobs': args.jobs,
-        'timeout': args.timeout, 'designs': names,
+        'timeout': args.timeout, 'call_timeout': args.call_timeout, 'designs': names,
     }, indent=1))
-    n, broken = measure(names, args.backends, args.repeats, args.jobs, args.timeout, args.out)
+    n, broken = measure(names, args.backends, args.repeats, args.jobs, args.timeout,
+                        args.call_timeout, args.out)
     print(f'{n} designs measured; {len(broken)} failed by a backend z3 compiles'
           + (f': {", ".join(broken)}' if broken else ''))
     print('-- report')

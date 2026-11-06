@@ -4,7 +4,7 @@ The solver-backend evaluation's table and figures, from `run.py`'s results;
 
     python evaluation/solver_backends/report.py evaluation/solver_backends/results
 
-Writes into the results directory:
+Replaces `report/` in the results directory with:
 
 - `backends-totals.tex`: one row per backend, over the designs every backend
   compiled: compile and solver time, the solver's share, backend calls,
@@ -17,11 +17,13 @@ Writes into the results directory:
 Both are log-log; `backends-scatter-linear.{pdf,png}` and
 `backends-scatter-all-linear.{pdf,png}` are the same on linear axes.
 
-The summary, with the designs whose C++ differs between backends, is printed.
+The summary, with the designs whose C++ differs between backends, and those
+whose counts differ between one backend's repeats, is printed.
 """
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,6 +39,9 @@ NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5', 'highs': 'HiGHS'
 COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6', 'highs': '#d6772a'}
 MARKERS = {'z3': 'o', 'z3-opt': 's', 'cvc5': '^', 'highs': 'D'}
 INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
+
+REPORT_DIR = 'report'
+"""Where in the results directory the report goes, apart from the run's data."""
 
 MIN_SOLVER_SECONDS = 0.01
 """A design every backend answers in less solver time than this is left out
@@ -59,6 +64,14 @@ def load(out: Path) -> list[dict[str, Any]]:
 def _ok(rec: dict[str, Any], b: str) -> dict[str, Any] | None:
     r = rec['backends'].get(b)
     return r if r is not None and r['outcome'] == 'ok' else None
+
+
+def counts_vary(r: dict[str, Any]) -> bool:
+    """Whether *r*'s repeats stated different constraints or asked different
+    queries: the analysis took another path in some of them, after a backend
+    call hit its limit, so they did not time the same work."""
+    return len({(x['stats']['constraints'], x['stats']['queries'])
+                for x in r.get('runs', []) if 'cpp_sha256' in x}) > 1
 
 
 def backends_of(records: list[dict[str, Any]]) -> list[str]:
@@ -137,9 +150,13 @@ def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
         b: {rec['design']: rec['backends'][b]['outcome'] for rec in records if not _ok(rec, b)}
         for b in bs
     }
+    varies = {
+        b: [rec['design'] for rec in records if (r := _ok(rec, b)) and counts_vary(r)]
+        for b in bs
+    }
     return {
         'designs': len(records), 'compared': len(common), 'reference': ref,
-        'totals': totals, 'cpp_differs': differs, 'failed': failed,
+        'totals': totals, 'cpp_differs': differs, 'failed': failed, 'counts_vary': varies,
     }
 
 
@@ -191,6 +208,12 @@ def summary(nums: dict[str, Any]) -> str:
     for b, ds in nums['cpp_differs'].items():
         lines.append(f'C++ differs from {NAMES.get(ref, ref)} under {NAMES.get(b, b)}: '
                      + (', '.join(ds) if ds else 'none'))
+    if not any(nums['counts_vary'].values()):
+        lines.append('counts the same across every backend\'s repeats')
+    for b, ds in nums['counts_vary'].items():
+        if ds:
+            lines.append(f'counts vary across repeats under {NAMES.get(b, b)} '
+                         f'(a call hit its limit): {", ".join(ds)}')
     for b, fs in nums['failed'].items():
         if fs:
             lines.append(f'not compiled under {NAMES.get(b, b)}: '
@@ -208,10 +231,13 @@ def main(argv: list[str]) -> int:
     if not records:
         ap.error(f'no results in {out}')
     nums = numbers(records)
-    (out / 'backends-totals.tex').write_text(totals_latex(nums))
+    dest = out / REPORT_DIR
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir()
+    (dest / 'backends-totals.tex').write_text(totals_latex(nums))
     for log, suffix in ((True, ''), (False, '-linear')):
-        figure(plotted(records), out / f'backends-scatter{suffix}', log)
-        figure(records, out / f'backends-scatter-all{suffix}', log)
+        figure(plotted(records), dest / f'backends-scatter{suffix}', log)
+        figure(records, dest / f'backends-scatter-all{suffix}', log)
     print(summary(nums))
     return 0
 

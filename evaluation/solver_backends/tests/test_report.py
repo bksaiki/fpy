@@ -46,15 +46,28 @@ def test_the_summary_names_what_differs():
     assert '6 constraints, 10 queries' in text
 
 
+def test_it_names_designs_whose_repeats_did_different_work():
+    assert 'counts the same across every backend' in summary(numbers(RECORDS))
+    varied = _ok(9, 3, 'x')
+    varied['runs'] = [_ok(9, 3, 'x'), {**_ok(9, 3, 'x'), 'stats': {
+        **_ok(9, 3, 'x')['stats'], 'constraints': 7}}]
+    records = [{'design': 'a', 'backends': {'z3': _ok(10, 4, 'x'), 'highs': varied}}]
+    nums = numbers(records)
+    assert nums['counts_vary'] == {'z3': [], 'highs': ['a']}
+    assert 'counts vary across repeats under HiGHS (a call hit its limit): a' in summary(nums)
+
+
 def test_it_writes_every_output(tmp_path):
     (tmp_path / 'backends-run.json').write_text(json.dumps({'designs': ['a', 'b']}))
     for rec in RECORDS:
         (tmp_path / f'{rec["design"]}.json').write_text(json.dumps(rec))
+    (tmp_path / 'report').mkdir()
+    (tmp_path / 'report' / 'stale.png').write_text('')   # replaced, not merged
     assert main([str(tmp_path)]) == 0
-    made = {p.name for p in tmp_path.iterdir() if not p.name.endswith('.json')}
+    made = {p.name for p in (tmp_path / 'report').iterdir()}
     assert made == {f'backends-scatter{v}.{e}' for v in ('', '-all', '-linear', '-all-linear')
                     for e in ('pdf', 'png')} | {'backends-totals.tex'}
-    totals = (tmp_path / 'backends-totals.tex').read_text()
+    totals = (tmp_path / 'report' / 'backends-totals.tex').read_text()
     # design `a` alone: every backend compiled it
     assert 'HiGHS & 8\\,s & 2\\,s & 25\\% & 5 & 0.50 & 200.0\\,ms' in totals
     assert 'Constraints' not in totals and 'Queries' not in totals
