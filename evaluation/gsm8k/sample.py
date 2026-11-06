@@ -109,6 +109,7 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, prompts: list[list[i
     step = statistics.fmean(steps)
     return {
         'backend': 'mmasim', 'design': design, 'model': model.config.name_or_path,
+        'scheme': run.scheme.name,
         'problems': fpy['problems'], 'max_new': fpy['max_new'], 'batch': fpy['batch'],
         **predict(fpy, fit, step), 'sampled': True,
         'sample': {'questions': sampled, 'rows': [rows[i] for i in sampled], 'question_seconds': questions,

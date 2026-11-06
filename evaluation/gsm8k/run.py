@@ -78,6 +78,7 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     replies = [tok.decode(t, skip_special_tokens=True) for t in tokens]
     return {
         'backend': backend, 'design': design, 'model': model.config.name_or_path,
+        'scheme': None if design is None else run.scheme.name,
         'problems': len(problems), 'max_new': max_new, 'batch': batch,
         'prefill': sum(b['prefill'] for b in batches), 'decode': sum(b['decode'] for b in batches),
         'warmup': warmup,
@@ -165,6 +166,8 @@ def main(argv: list[str]) -> int:
         name = backend if design is None else f'{design}-{backend}'
         print(f'-- {name}', flush=True)
         start = time.perf_counter()
+        if design is not None:
+            swap.use(run, model, kernels.scheme(design))
         if backend == 'mmasim' and args.mmasim == 'sample':
             r = sample.measure(model, run, encode(tok, problems), design, records['fpy', design])
         else:

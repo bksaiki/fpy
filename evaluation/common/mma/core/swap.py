@@ -102,15 +102,16 @@ def _per_group(q: quant.Quantized, design: str) -> torch.Tensor:
 
 def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
          w: torch.Tensor) -> torch.Tensor:
-    """`qa @ qw.T` by *design* under *scheme*, FP32; *w* is *qw*'s elements
+    """`qa @ qw.T` by *design* under *scheme*, FP32 (its accumulator
+    converted); *w* is *qw*'s elements
     in *design*'s storage (`kernels.storage`).  Scales apply per `scheme.applied`: after
     the GEMM, `acc * s_x[i] * s_w[j]`; or in the instructions, then per
     tensor, `acc * (g_x * g_w)`."""
     a = qa.elements.to(kernels.storage(design)[0])
     if scheme.applied == 'instruction':
-        y = kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design)))
+        y = kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design))).float()
         return y if qa.tensor is None else y.mul_(qa.tensor * qw.tensor)
-    y = kernels.matmul(a, w, design)
+    y = kernels.matmul(a, w, design).float()
     return y.mul_(qa.scales).mul_(qw.scales.T) if scheme.applied == 'epilogue' else y
 
 
@@ -247,7 +248,7 @@ class Run:
     def _matmul(self, qa: quant.Quantized, qw: quant.Quantized, w: torch.Tensor) -> torch.Tensor:
         if (r := _exact_run(self.mode, self.scheme)) is not None:
             return exact(qa, qw, self.signs, r)
-        if self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
+        if kernels.known(self.mode) and kernels.applicable(self.mode, self.scheme):
             held = kernels.storage(self.mode)[1]
             return gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held))
         raise ValueError(f'{self.mode!r} is not one of {modes(self.scheme)}')
@@ -269,9 +270,9 @@ def patch(model: torch.nn.Module) -> Run:
 
 
 def use(run: Run, model: torch.nn.Module, scheme: quant.Scheme) -> None:
-    """Set *run*'s scheme; under a quantizing one, `lm_head` computes as R0."""
+    """Set *run*'s scheme; under a scaled one, `lm_head` computes as R0."""
     run.scheme = scheme
-    run.ignore = set() if scheme.name == BF16.name else {id(dict(model.named_modules())['lm_head'].weight)}
+    run.ignore = set() if scheme.applied == 'none' else {id(dict(model.named_modules())['lm_head'].weight)}
 
 
 def load(name: str, scheme: quant.Scheme = BF16) -> tuple[torch.nn.Module, Run]:

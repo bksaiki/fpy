@@ -27,6 +27,7 @@ import compile_triton as ct
 import generator
 from compile import DESIGNS, in_processes
 from compile import _length as _arg_length
+from generator.catalog import CATALOG
 
 import fpy2
 from fpy2.backend.triton import KernelSource, launch
@@ -50,7 +51,7 @@ TILES: dict[str, tuple[int, int]] = {
     'nv.blackwell.nvfp4': (16, 1),
 }
 """Each design and its fixed tile `(block, block_m)`, the fastest per
-`bench/speed.py --best`."""
+`bench/speed.py --best`; another MMA-Sim design's is :func:`tile`'s."""
 
 
 _BUILDS: dict[str, Callable] = dict(DESIGNS)
@@ -117,11 +118,21 @@ def register_design(d: generator.Design, name: str | None = None) -> str:
     return name
 
 
+def known(design: str) -> bool:
+    """Whether *design* is MMA-Sim's or :func:`register`ed."""
+    return design in _BUILDS
+
+
+def tile_of(design: str) -> tuple[int, int]:
+    """*design*'s tile: :data:`TILES`', else its catalog design's :func:`tile`."""
+    return TILES[design] if design in TILES else tile(CATALOG[design])
+
+
 @cache
 def _args(design: str) -> list[Any]:
     """*design*'s argument types."""
-    if design not in TILES:
-        raise ValueError(f'{design!r} is not one of {sorted(TILES)}')
+    if not known(design):
+        raise ValueError(f'{design!r} is not a design')
     return _BUILDS[design]()[1]
 
 
@@ -141,6 +152,18 @@ def group(design: str) -> int:
     covers in a call."""
     k0, scale = _arg_length(_args(design)[0]), _args(design)[3]
     return k0 // scale.length if hasattr(scale, 'length') else k0
+
+
+@cache
+def scheme(design: str) -> quant.Scheme:
+    """The scheme *design* runs under (:func:`quant.derive`): its elements,
+    and a block-scaled one's scales."""
+    x, w, _ = formats(design)
+    block = None
+    if block_scaled(design):
+        arg = _args(design)[3]
+        block = getattr(arg, 'elt', arg).fmt
+    return quant.derive(quant.context(x), quant.context(w), block)
 
 
 def applicable(design: str, scheme: quant.Scheme) -> bool:
@@ -270,12 +293,18 @@ def storage(design: str) -> tuple[torch.dtype, ...]:
     return tuple(_torch_dtype(held[i]) for i in ((0, 1, 3) if block_scaled(design) else (0, 1)))
 
 
+@cache
+def accumulator(design: str) -> torch.dtype:
+    """The torch dtype *design*'s kernel holds `C` and its result in."""
+    return _torch_dtype(dict(compiled(design)[0].dtypes)[2])
+
+
 def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
             *scales: torch.Tensor) -> None:
     """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*) onto *y*
     `[m, n]`, which is both `C` and the output.  `block_m` is capped at the
     power of two `>= m`."""
-    block, block_m = TILES[design]
+    block, block_m = tile_of(design)
     m = a.shape[0]
     _LAUNCHED.add(design)
     launch(compiled(design)[0], [a, b, y, *scales, y],
@@ -286,8 +315,9 @@ def matmul(
     a: torch.Tensor, w: torch.Tensor, design: str,
     scales: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> torch.Tensor:
-    """`a @ w.T` by *design*, FP32 `[m, n]`, for `a` `[m, k]` and `w` `[n, k]`
-    holding its input values in its :func:`storage`.  A block-scaled design
+    """`a @ w.T` by *design*, `[m, n]` in its :func:`accumulator`, for `a`
+    `[m, k]` and `w` `[n, k]` holding its input values in its
+    :func:`storage`.  A block-scaled design
     takes *scales* `[m, k / g]` and `[n, k / g]`, one per group `g`
     (:func:`group`) of its instructions in order along `k`."""
     (m, k), n = a.shape, w.shape[0]
@@ -299,7 +329,7 @@ def matmul(
         if (scales[0].shape, scales[1].shape) != ((m, s), (n, s)):
             raise ValueError(f'{design} takes scales [{m}, {s}] and [{n}, {s}], '
                              f'not {list(scales[0].shape)} and {list(scales[1].shape)}')
-    y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
+    y = torch.zeros(m, n, dtype=accumulator(design), device=a.device)
     rows = min(max(1, _ELEMS // n), _ROWS)
     for i in range(0, m, rows):
         if scales is None:
