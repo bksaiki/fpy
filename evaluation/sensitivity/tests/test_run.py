@@ -1,7 +1,7 @@
 """
 The driver on one small design, under every backend, through to the report.
 
-    pytest -n 8 evaluation/solver_backends/tests
+    pytest -n 8 evaluation/sensitivity/tests
 """
 
 import importlib.util
@@ -34,12 +34,11 @@ def test_one_design_under_every_backend(tmp_path):
     for r in record['backends'].values():
         assert len(r['trace']['seconds']) == r['stats']['queries']
         assert all('trace' not in run for run in r['runs'])
-    assert json.loads((out / 'backends-run.json').read_text())['call_timeout'] == 30
-    # the run's data at the top, the report apart in `report/`
-    assert {p.name for p in out.iterdir() if not p.name.endswith('.json')} == {'report'}
-    made = {p.name for p in (out / 'report').iterdir()}
-    assert made == {'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
-                    'backends-totals.tex'}
+    assert json.loads((out / 'sensitivity-run.json').read_text())['call_timeout'] == 30
+    # the run's data, and beside it the report
+    assert {p.name for p in out.iterdir() if p.name.startswith('sensitivity-')} == {
+        'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
+        'sensitivity-totals.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
 
 
 def test_the_time_and_the_counts_come_from_one_run():
@@ -54,18 +53,15 @@ def test_the_time_and_the_counts_come_from_one_run():
     assert s['seconds'] == 5
 
 
-def test_each_run_gets_a_new_folder(tmp_path, monkeypatch):
-    import run
-    monkeypatch.setattr(run, 'RESULTS', tmp_path)
-    (tmp_path / 'earlier').mkdir()
-    (tmp_path / 'earlier' / 'a.json').write_text('{}')
-    assert main(['-b', 'z3', '-r', '1', 'fp32 (fma)']) == 0
-    new = [p for p in tmp_path.iterdir() if p.name != 'earlier']
-    assert len(new) == 1 and (new[0] / 'fp32_fma.json').exists()
-    assert (tmp_path / 'earlier' / 'a.json').exists()   # nothing deleted
+def test_a_run_replaces_the_last(tmp_path):
+    (tmp_path / 'stale.json').write_text('{}')
+    (tmp_path / 'sensitivity-totals.tex').write_text('')
+    assert main(['-o', str(tmp_path), '-b', 'z3', '-r', '1', 'fp32 (fma)']) == 0
+    assert not (tmp_path / 'stale.json').exists()
+    assert (tmp_path / 'fp32_fma.json').exists()
 
 
-def test_a_folder_with_files_is_not_written_into(tmp_path):
+def test_files_a_run_did_not_write_are_kept(tmp_path):
     (tmp_path / 'notes.md').write_text('mine')
     with pytest.raises(SystemExit):
         main(['-o', str(tmp_path), '-r', '1', 'fp32 (fma)'])

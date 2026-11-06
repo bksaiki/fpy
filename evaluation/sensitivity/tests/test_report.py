@@ -2,7 +2,7 @@
 The report on hand-built records: totals only over what every backend
 compiled, differing C++ named, and only the table and the figure written.
 
-    pytest -n 8 evaluation/solver_backends/tests
+    pytest -n 8 evaluation/sensitivity/tests
 """
 
 import json
@@ -60,17 +60,20 @@ def test_it_names_designs_whose_repeats_did_different_work():
 
 
 def test_it_writes_every_output(tmp_path):
-    (tmp_path / 'backends-run.json').write_text(json.dumps({'designs': ['a', 'b']}))
+    (tmp_path / 'sensitivity-run.json').write_text(json.dumps({'designs': ['a', 'b']}))
     for rec in RECORDS:
         (tmp_path / f'{rec["design"]}.json').write_text(json.dumps(rec))
-    (tmp_path / 'report').mkdir()
-    (tmp_path / 'report' / 'notes.md').write_text('mine')   # kept: only its own files
+    (tmp_path / 'notes.md').write_text('mine')   # kept: only its own files
     assert main([str(tmp_path)]) == 0
-    assert (tmp_path / 'report' / 'notes.md').read_text() == 'mine'
-    made = {p.name for p in (tmp_path / 'report').iterdir()} - {'notes.md'}
-    assert made == {'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
-                    'backends-totals.tex'}
-    totals = (tmp_path / 'report' / 'backends-totals.tex').read_text()
+    assert (tmp_path / 'notes.md').read_text() == 'mine'
+    made = {p.name for p in tmp_path.iterdir() if p.name.startswith('sensitivity-')}
+    assert made == {'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
+                    'sensitivity-totals.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
+    paper = json.loads((tmp_path / 'sensitivity-paper.json').read_text())
+    assert paper['totals']['highs']['calls_per_query'] == 0.5
+    assert paper['totals']['highs']['method'] == 'Optimize'
+    assert '1 compiled by every backend' in (tmp_path / 'sensitivity-summary.txt').read_text()
+    totals = (tmp_path / 'sensitivity-totals.tex').read_text()
     # design `a` alone: every backend compiled it
     assert 'HiGHS & Optimize & 8\\,s & 2\\,s & 25\\% & 200.0\\,ms' in totals
     assert 'Constraints' not in totals and 'Queries' not in totals

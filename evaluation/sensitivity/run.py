@@ -2,13 +2,12 @@
 Compiles the MMA-Sim designs under each digit-bound solver backend, timing the
 compilation and the solver queries inside it.
 
-    python evaluation/solver_backends/run.py               # everything
-    python evaluation/solver_backends/run.py volta -r 1    # matching designs, once each
+    python evaluation/sensitivity/run.py               # everything, about 30 min
+    python evaluation/sensitivity/run.py volta -r 1    # matching designs, once each
 
-Each run writes into a folder of its own, `results/<date>-<time>/` beside
-this file (or `-o DIR`, new or empty), and deletes nothing: `<design>.json`
-per design, `backends-run.json`, and `report.py`'s table and figures in
-`report/`.  Each compilation runs in a fresh process,
+Replaces the results directory (`evaluation/results/sensitivity/`, or `-o
+DIR`) with `<design>.json` per design, `sensitivity-run.json`, and
+`report.py`'s table and figure.  Each compilation runs in a fresh process,
 under a wall-clock limit; each backend call inside it under a limit of its
 own (`-c`).  Exits 1 if a backend fails a design z3 compiles.
 """
@@ -18,6 +17,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -26,27 +26,31 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'examples' / 'mmasim'))
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examples' / 'mmasim')]
+sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
+import config
 import report
 from compile import DESIGNS, _filename
 
-RESULTS = Path(__file__).resolve().parent / 'results'
-"""Where each run's folder goes, by default."""
+RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'sensitivity'
 
 BACKENDS = ('z3', 'z3-opt', 'cvc5', 'highs')
-"""The backends compared, z3 first: the others are read against it."""
+"""Every backend there is, z3 first: the others are read against it."""
 
 
-CALL_TIMEOUT = 60.0
-"""Seconds one backend call may take in the evaluation.  The solvers' own
-default, 10 s, is a guard for the compiler; the large CDNA3 designs have calls
-near it, and one that crosses it answers loosely (`degraded`) and sends the
-analysis down a different path, so the backends would no longer be compared
-on the same work."""
+def _foreign(out: Path) -> list[str]:
+    """What in *out* a run did not write, and so must not be deleted."""
+    if not out.exists():
+        return []
+    return sorted(p.name for p in out.iterdir()
+                  if not (p.suffix == '.json' or p.name.startswith('sensitivity-')))
 
 
-def compile_once(name: str, backend: str, call_timeout: float = CALL_TIMEOUT) -> dict[str, Any]:
+def compile_once(
+    name: str, backend: str, call_timeout: float = config.SENSITIVITY_CALL_TIMEOUT,
+) -> dict[str, Any]:
     """Compile design *name* under *backend*, in this process, each backend
     call limited to *call_timeout* seconds: the wall time, the solver
     statistics summed over every store, each query (`trace`, as columns), and
@@ -162,18 +166,20 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('filter', nargs='*', metavar='SUBSTRING',
                     help='only designs whose name contains one of these')
-    ap.add_argument('-o', '--out', metavar='DIR', type=Path,
-                    help='the folder to write, new or empty (default results/<date>-<time>/ here)')
-    ap.add_argument('-b', '--backends', nargs='+', choices=BACKENDS, default=list(BACKENDS),
-                    help='backends to compare, the first the reference (default all, z3 first)')
-    ap.add_argument('-r', '--repeats', type=int, default=3,
-                    help='compilations per design and backend; the median is reported (default 3)')
+    ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
+                    help='the results directory, replaced (default %(default)s)')
+    ap.add_argument('-b', '--backends', nargs='+', choices=BACKENDS,
+                    default=list(config.SENSITIVITY_BACKENDS),
+                    help='backends to compare, the first the reference (default %(default)s)')
+    ap.add_argument('-r', '--repeats', type=int, default=config.SENSITIVITY_REPEATS,
+                    help='compilations per design and backend; the median is reported '
+                         '(default %(default)s)')
     ap.add_argument('-j', '--jobs', type=int, default=4,
                     help='compilations at once (default 4); 1 for the least noise')
-    ap.add_argument('-t', '--timeout', type=float, default=600,
-                    help='seconds one compilation may take (default 600)')
-    ap.add_argument('-c', '--call-timeout', type=float, default=CALL_TIMEOUT,
-                    help=f'seconds one backend call may take (default {CALL_TIMEOUT:.0f}; '
+    ap.add_argument('-t', '--timeout', type=float, default=config.SENSITIVITY_TIMEOUT,
+                    help='seconds one compilation may take (default %(default)s)')
+    ap.add_argument('-c', '--call-timeout', type=float, default=config.SENSITIVITY_CALL_TIMEOUT,
+                    help='seconds one backend call may take (default %(default)s; '
                          'the solvers alone default to 10)')
     args = ap.parse_args(argv)
 
@@ -181,14 +187,12 @@ def main(argv: list[str]) -> int:
              if not args.filter or any(f in name for f in args.filter)]
     if not names:
         ap.error(f'no design matches {args.filter}')
-    if args.out is None:
-        args.out = RESULTS / time.strftime('%Y-%m-%d-%H%M%S')
-    if args.out.exists() and any(args.out.iterdir()):
-        ap.error(f'{args.out} already holds files; a run writes only into a new folder')
-    args.out.mkdir(parents=True, exist_ok=True)
-    print(f'-- writing {args.out}', flush=True)
+    if foreign := _foreign(args.out):
+        ap.error(f'{args.out} holds files a run did not write: {", ".join(foreign)}')
+    shutil.rmtree(args.out, ignore_errors=True)
+    args.out.mkdir(parents=True)
 
-    (args.out / 'backends-run.json').write_text(json.dumps({
+    (args.out / 'sensitivity-run.json').write_text(json.dumps({
         'backends': args.backends, 'repeats': args.repeats, 'jobs': args.jobs,
         'timeout': args.timeout, 'call_timeout': args.call_timeout, 'designs': names,
     }, indent=1))

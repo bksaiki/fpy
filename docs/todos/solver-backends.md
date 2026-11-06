@@ -100,8 +100,10 @@ Each backend is a module of its own: `z3_solver.py`, `cvc5_solver.py`,
 `highs_solver.py`, over `solver.py`'s interface and base.
 
 A registry, `make_solver('z3' | 'cvc5' | 'highs', **opts)`.  The cvc5 and
-HiGHS backends import their dependency lazily.  The dependencies go in an
-optional extra, `solvers = ["cvc5", "highspy"]`, in `pyproject.toml`.
+HiGHS backends import their dependency lazily.  The dependencies were first
+an optional extra of FPy's, `solvers`; they are now only in the
+evaluation's environment (`evaluation/pyproject.toml`), with its other
+dependencies.
 
 Moving `Z3Solver` onto the base must leave its answers unchanged, so the
 C++ for every design is identical before and after.  It is, for all 62
@@ -249,7 +251,8 @@ its cache, and the cutoff path were dropped.  Bisection's own probe
 
 - **Store tests under every backend.**  The store-level tests in
   `tests/unit/analysis/test_digit_bound.py` take a backend parameter.  A test
-  skips a backend that is not installed.
+  skips a backend that is not installed: cvc5 and HiGHS run from
+  `evaluation/`'s environment.
 - **Soundness oracle.**  `tests/unit/analysis/test_digit_bound_oracle.py` runs
   under each backend through `FPY_DIGIT_BOUND_SOLVER`.
 - **Same C++.**  The evaluation compares each design's generated C++ across
@@ -257,11 +260,13 @@ its cache, and the cutoff path were dropped.  Bisection's own probe
   somewhere.  That is reported, not fatal: it may be a degraded answer
   rather than a bug.
 
-## 5. Evaluation: `evaluation/solver_backends/`
+## 5. Evaluation: `evaluation/sensitivity/`
 
-Laid out as `evaluation/analysis_precision/`: `run.py`, `report.py`, a README
-and `results/`, a new folder in it per run (`results/<date>-<time>/`): a
-run deletes nothing.
+One of `evaluation/run.py`'s evaluations, `sensitivity`, laid out as
+`evaluation/analysis/`: `run.py`, `report.py` and a README, its defaults
+`config.py`'s `SENSITIVITY_*`, and its results `evaluation/results/sensitivity/`,
+replaced by each run.  It began apart, as `evaluation/solver_backends/`, a new
+folder per run; it moved when the evaluations were unified (#348).
 
 ### 5.1 Running
 
@@ -288,10 +293,10 @@ compilations run at once (default 4).
 ### 5.2 Outputs
 
 Besides each design's record (`<design>.json`) and the run's settings
-(`backends-run.json`), the report writes the table and the figures into the
-run's `report/`, and prints a summary:
+(`sensitivity-run.json`), the report writes the table and the figure beside
+them, and prints a summary:
 
-- `backends-totals.tex`: one row per backend, over the designs every backend
+- `sensitivity-totals.tex`: one row per backend, over the designs every backend
   compiled: its solver method, compile and solver time, the solver's share,
   and solver time per query.  Constraints and queries are left out: they
   are the same under every backend, and the summary prints them.
@@ -302,15 +307,19 @@ run's `report/`, and prints a summary:
   them 10k-30k, and a backend never sees a design's total, only the
   component a query names.  A linear-axes copy was dropped: the log-log
   one is the one the report uses.
+- `sensitivity-paper.json` and `sensitivity-summary.txt`: every number the
+  evaluation cites, as `analysis` keeps `precision-paper.json`; the JSON is
+  the evaluation's mark of completion for `evaluation/run.py`.
 
 ## 6. Status
 
 All six steps are done.  The backends are in `fpy2/analysis/digit_bound/`
-(`solver.py`, `backends.py`, `cvc5_solver.py`, `highs_solver.py`), their
+(`solver.py`, `backends.py`, `z3_solver.py`, `cvc5_solver.py`,
+`highs_solver.py`), their
 tests in `tests/unit/analysis/test_digit_bound_backends.py`, and the
-evaluation in `evaluation/solver_backends/`.  The digit-bound suites
-(`test_digit_bound.py`, `test_digit_bound_oracle.py`) pass under all three
-backends through `FPY_DIGIT_BOUND_SOLVER`.
+evaluation in `evaluation/sensitivity/`.  The digit-bound suites
+(`test_digit_bound.py`, `test_digit_bound_oracle.py`) pass under every
+backend through `FPY_DIGIT_BOUND_SOLVER`.
 
 ## 7. Order
 

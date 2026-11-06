@@ -1,20 +1,21 @@
 """
-The solver-backend evaluation's table and figures, from `run.py`'s results;
+The sensitivity evaluation's table and figure, from `run.py`'s results;
 `run.py` calls it last.
 
-    python evaluation/solver_backends/report.py evaluation/solver_backends/results
+    python evaluation/sensitivity/report.py evaluation/results/sensitivity
 
-Writes into `report/` in the results directory, overwriting only these:
+Writes into the results directory, beside the data, overwriting only these:
 
-- `backends-totals.tex`: one row per backend, over the designs every backend
+- `sensitivity-totals.tex`: one row per backend, over the designs every backend
   compiled: how it finds a maximum (binary search or optimize), compile
   and solver time, the solver's share, and solver time per query;
 - `sensitivity-scatter.{pdf,png}`: each query's time against the
   constraints in the component it was asked of, from every design's median
-  run, a panel per backend, log-log.
-
-The summary, with the designs whose C++ differs between backends, and those
-whose counts differ between one backend's repeats, is printed.
+  run, a panel per backend, log-log;
+- `sensitivity-paper.json`: every number the evaluation cites: each
+  backend's totals, per query, and against z3, and which designs' C++ or
+  counts differ;
+- `sensitivity-summary.txt`: the same, as text, which is also printed.
 """
 
 import argparse
@@ -45,15 +46,13 @@ COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6', 'highs': '#d6
 MARKERS = {'z3': 'o', 'z3-opt': 's', 'cvc5': '^', 'highs': 'D'}
 INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e4e3dc'
 
-REPORT_DIR = 'report'
-"""Where in the results directory the report goes, apart from the run's data."""
 
 def load(out: Path) -> list[dict[str, Any]]:
     """Every design record in *out*, in the order the run measured them."""
-    run = json.loads((out / 'backends-run.json').read_text())
+    run = json.loads((out / 'sensitivity-run.json').read_text())
     by_name = {}
     for p in out.glob('*.json'):
-        if p.name.startswith('backends-'):
+        if p.name.startswith('sensitivity-'):
             continue
         rec = json.loads(p.read_text())
         by_name[rec['design']] = rec
@@ -140,7 +139,7 @@ def figure(records: list[dict[str, Any]], path: Path, log: bool = True) -> None:
 
 
 def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """The totals the table and summary cite."""
+    """The totals the table, the summary and the paper cite."""
     bs = backends_of(records)
     ref = bs[0]
     # totals only over designs every backend compiled, so they compare
@@ -150,12 +149,17 @@ def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
         rs = [_ok(rec, b) for rec in common]
         compile_s = sum(r['seconds'] for r in rs)
         solver_s = sum(r['solver_time'] for r in rs)
+        queries = sum(r['stats']['queries'] for r in rs)
+        calls = sum(r['stats']['calls'] for r in rs)
         totals[b] = {
+            'method': METHODS.get(b),
             'compile_seconds': compile_s,
             'solver_seconds': solver_s,
             'solver_share': solver_s / compile_s if compile_s else 0.0,
-            'queries': sum(r['stats']['queries'] for r in rs),
-            'calls': sum(r['stats']['calls'] for r in rs),
+            'queries': queries,
+            'calls': calls,
+            'seconds_per_query': solver_s / queries if queries else 0.0,
+            'calls_per_query': calls / queries if queries else 0.0,
             'degraded': sum(r['stats']['degraded'] for r in rs),
             'constraints': sum(r['stats']['constraints'] for r in rs),
         }
@@ -195,8 +199,7 @@ def totals_latex(nums: dict[str, Any]) -> str:
         '\\midrule',
     ]
     for b, t in nums['totals'].items():
-        q = t['queries']
-        per_query = 1000 * t['solver_seconds'] / q if q else 0.0
+        per_query = 1000 * t['seconds_per_query']
         lines.append(
             f'{ROW_NAMES.get(b, b)} & {METHODS.get(b, "")} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
             f'{100 * t["solver_share"]:.0f}\\% & {per_query:.1f}\\,ms \\\\')
@@ -214,7 +217,8 @@ def summary(nums: dict[str, Any]) -> str:
     for b, t in nums['totals'].items():
         line = (f'{NAMES.get(b, b):>13}: compile {t["compile_seconds"]:8.1f}s  '
                 f'solver {t["solver_seconds"]:8.1f}s ({100 * t["solver_share"]:.0f}% of compile)  '
-                f'{t["queries"]} queries, {t["calls"]} backend calls, {t["degraded"]} degraded')
+                f'{t["queries"]} queries, {t["calls"]} backend calls '
+                f'({t["calls_per_query"]:.2f}/query), {t["degraded"]} degraded')
         if t.get('speedup_vs_ref'):
             line += f'  solver x{t["speedup_vs_ref"]:.2f} vs {NAMES.get(ref, ref)}'
         lines.append(line)
@@ -244,11 +248,12 @@ def main(argv: list[str]) -> int:
     if not records:
         ap.error(f'no results in {out}')
     nums = numbers(records)
-    dest = out / REPORT_DIR
-    dest.mkdir(exist_ok=True)
-    (dest / 'backends-totals.tex').write_text(totals_latex(nums))
-    figure(records, dest / 'sensitivity-scatter')
-    print(summary(nums))
+    (out / 'sensitivity-totals.tex').write_text(totals_latex(nums))
+    figure(records, out / 'sensitivity-scatter')
+    (out / 'sensitivity-paper.json').write_text(json.dumps(nums, indent=1) + '\n')
+    text = summary(nums)
+    (out / 'sensitivity-summary.txt').write_text(text + '\n')
+    print(text)
     return 0
 
 

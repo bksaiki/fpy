@@ -40,11 +40,6 @@ dev = [
   "sphinx-rtd-theme",
   "sphinx-pyproject"
 ]
-# optional: digit-bound solver backends other than z3, for comparison
-solvers = [
-  "cvc5",
-  "highspy",
-]
 
 [dependency-groups]
 dev = [

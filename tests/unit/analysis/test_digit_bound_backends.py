@@ -2,8 +2,9 @@
 Unit tests for the digit-bound solver backends: that each answers as z3 does,
 that each keeps its statistics, and how a store is given one.
 
-A backend whose package is not installed (the optional ``solvers`` extra) is
-skipped.
+A backend whose package is not installed is skipped: cvc5 and HiGHS are only
+in the evaluation's environment, so from `evaluation/`, `uv run pytest
+../tests/unit/analysis/test_digit_bound_backends.py` runs every backend.
 """
 
 import importlib.util
