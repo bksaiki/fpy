@@ -870,7 +870,7 @@ def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> '
         return fmt
 
 
-def _may_overflow(ctx: 'Context | PartialContext | None', exact: AbstractFormat) -> bool:
+def _may_overflow(ctx: Context | PartialContext | None, exact: AbstractFormat) -> bool:
     """Can rounding a value of *exact* under *ctx* overflow?  Rounding in range
     never raises precision or makes the grid finer, but an overflow lands on
     whatever value *ctx* picks."""
@@ -884,7 +884,7 @@ def _may_overflow(ctx: 'Context | PartialContext | None', exact: AbstractFormat)
     return scope is None or exact.pos_bound > scope.pos_bound or exact.neg_bound < scope.neg_bound
 
 
-def _wraps_signed(ctx: 'Context | PartialContext | None') -> bool:
+def _wraps_signed(ctx: Context | PartialContext | None) -> bool:
     """Does *ctx* wrap two's complement?  That subtracts a multiple of
     `2^nbits` quanta, which keeps the grid and adds no digits, but may land
     anywhere in range."""
@@ -2495,16 +2495,9 @@ class _FormatInferInstance(Visitor):
             return scope_fmt
 
         # Mixed-overlap branch.  prec/exp tighten under any rounding that stays
-        # in range or wraps two's complement.  Bounds are the pitfall:
-        # ``round_C(F.pos_bound)`` lands *above* F.pos_bound whenever C does
-        # not hold it exactly, so a bare ``min`` under-claims the image.  Off
-        # C's grid, ``round_bound_out`` carries the bound to the next point on
-        # it; past C's precision nothing says where the round lands, so
-        # ``F.prec > C.prec`` keeps C's bounds instead, as does a wrap.  Under
-        # that gate the grid-rounded bound has at most C.prec significant bits
-        # and sits on C's grid, so C holds it exactly.  ``int | float``
-        # comparison works directly with the ``float('inf')`` unbounded-prec
-        # sentinel.
+        # in range or wraps two's complement.  ``round_C(F.pos_bound)`` may land
+        # above F.pos_bound, so ``round_bound_out`` carries it to C's grid; past
+        # C's precision, or under a wrap, the bounds are C's.
         prec = min(exact.prec, scope_af.prec)
         exp = max(exact.exp, scope_af.exp)
         if exact.prec > scope_af.prec or overflows:
@@ -2589,9 +2582,9 @@ class _FormatInferInstance(Visitor):
         their meet is too, and no wider than either -- whichever states the
         precision, the magnitude or the grid more tightly.
 
-        *arg_fmt*, where given, is a rounding's operand.  Rounding never
-        raises precision, so the answer saturates rather than growing with
-        the position.
+        *arg_fmt*, where given, is a rounding's operand.  Rounding in range
+        never raises precision, so unless it may overflow, the answer
+        saturates rather than growing with the position.
         """
         if self._digit_bound is None:
             return fmt
@@ -2783,7 +2776,7 @@ class _FormatInferInstance(Visitor):
                 # Digit-bound inference may beat the scope even when the scope
                 # resolves: a fixed-point context is unbounded above, so what
                 # limits the result is the operand's own reach relative to the
-                # position, clipped by the precision rounding can never raise.
+                # position.
                 return self._tighter(
                     e, fitted if fitted is not None else self._op_bound(e), arg_fmt,
                 )
