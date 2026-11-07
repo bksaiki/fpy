@@ -85,18 +85,6 @@ def sum_special_values(ts, c):
         return fp.nan()
     return -fp.inf() if neg else fp.inf()
 
-@fp.fpy(ctx=fp.REAL)
-def dpa_special_values(A, B, c):
-    """
-    Result of a dot-product-accumulate whose inputs contain a NaN or an
-    infinity (Sec. 4.2): `NaN + x = NaN`, `+/-inf + y = +/-inf`,
-    `inf - inf = NaN`, and `inf * 0 = NaN`.
-
-    The products are exact, so the special values of their sum are the
-    answer.
-    """
-    return sum_special_values([a * b for a, b in zip(A, B)], c)
-
 def make_fma_dpa(ctx: fp.Context):
     """
     Builds a Phi_FMA dot-product-accumulate (Algorithm 4): a chain of

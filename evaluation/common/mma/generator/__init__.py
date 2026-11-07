@@ -277,15 +277,32 @@ class _Parts:
                       (True, True): overflowed_rounded}[rule == 'tr', rounded])
         self.pre_c = drop_c if rule == 'gtr' else _same_c
         self.finish = finish = _finish(self, _terms(d))
-        CHECK, special, pre_c = self.check, self.special, self.pre_c
+        CHECK, special = self.check, self.special
+        ex, e_zero = self.ex, self.e_zero
+        emin_a, emin_b = exp_floor(d.a), exp_floor(d.b)
 
         @fp.fpy(ctx=fp.REAL)
-        def tail(ps, terms, es, c):
-            c2 = pre_c(c, es)
-            if CHECK:
+        def exps(terms, A, B, e_s):
+            return [e_zero if t == 0 else ex(a, emin_a) + ex(b, emin_b) + e_s
+                    for t, a, b in zip(terms, A, B)]
+
+        if rule == 'gtr':
+            # GTR-FDPA's `c` reads the exponents before the check
+            @fp.fpy(ctx=fp.REAL)
+            def tail(ps, terms, A, B, e_s, c):
+                es = exps(terms, A, B, e_s)
+                c2 = drop_c(c, es)
                 if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c2):
                     return special(ps, terms, c2)
-            return finish(terms, es, c2)
+                return finish(terms, es, c2)
+        else:
+            # the exponents after the check, of finite inputs
+            @fp.fpy(ctx=fp.REAL)
+            def tail(ps, terms, A, B, e_s, c):
+                if CHECK:
+                    if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c):
+                        return special(ps, terms, c)
+                return finish(terms, exps(terms, A, B, e_s), c)
         self.tail = tail
 
 
@@ -534,8 +551,7 @@ def _flat(p: _Parts) -> fp.Function:
     def flat(A, B, c):
         ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
         terms = [term(x) for x in ps]
-        es = [e_zero if t == 0 else ex(a, emin_a) + ex(b, emin_b) for t, a, b in zip(terms, A, B)]
-        return tail(ps, terms, es, c)
+        return tail(ps, terms, A, B, 0, c)
     return flat
 
 
@@ -553,11 +569,10 @@ def _scaled(p: _Parts) -> fp.Function:
         if fp.isnan(alpha) or fp.isnan(beta):
             return fp.nan()
         ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
-        terms = [term(x * alpha * beta) for x in ps]
-        es = [e_zero if t == 0 else
-              ex(a, emin_a) + ex(b, emin_b) + exponent(alpha, emin_s) + exponent(beta, emin_s)
-              for t, a, b in zip(terms, A, B)]
-        return tail(ps, terms, es, keep_in(c, tiny_c))
+        scale = alpha * beta
+        terms = [term(x * scale) for x in ps]
+        e_s = exponent(alpha, emin_s) + exponent(beta, emin_s)
+        return tail(ps, terms, A, B, e_s, keep_in(c, tiny_c))
     return scaled
 
 
