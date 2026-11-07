@@ -873,7 +873,7 @@ def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> '
 def _may_overflow(ctx: Context | PartialContext | None, exact: AbstractFormat) -> bool:
     """Can rounding a value of *exact* under *ctx* overflow?  Rounding in range
     never raises precision or makes the grid finer, but an overflow lands on
-    whatever value *ctx* picks."""
+    whatever value *ctx* picks.  So does an infinity *ctx* cannot hold."""
     if ctx is None:
         return True
     if isinstance(ctx, PartialContext):
@@ -881,7 +881,12 @@ def _may_overflow(ctx: Context | PartialContext | None, exact: AbstractFormat) -
     if not isinstance(ctx, SizedContext):
         return False
     scope = to_abstract(ctx.format())
-    return scope is None or exact.pos_bound > scope.pos_bound or exact.neg_bound < scope.neg_bound
+    return (
+        scope is None
+        or exact.pos_bound > scope.pos_bound or exact.neg_bound < scope.neg_bound
+        or (exact.has_pos_inf and not scope.has_pos_inf)
+        or (exact.has_neg_inf and not scope.has_neg_inf)
+    )
 
 
 def _wraps_signed(ctx: Context | PartialContext | None) -> bool:
