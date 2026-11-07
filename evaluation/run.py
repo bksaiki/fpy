@@ -69,6 +69,11 @@ EVALS = {
         plot=lambda d: [[PY, str(HERE / 'dse' / 'blas' / 'plots.py'), '--results', str(d.parent)]],
         done='blas-grid.csv', needs=('torch', 'matplotlib'),
         tools=(os.environ.get('CXX', 'c++'),)),  # as `torch.utils.cpp_extension` picks it
+    'cpu_performance': Eval(
+        run=lambda d, j: [[PY, str(HERE / 'cpu_performance' / 'run.py'), '-o', str(d), *j]],
+        plot=lambda d: [[PY, str(HERE / 'cpu_performance' / 'report.py'), str(d)]],
+        done='summary.csv', needs=('torch', 'torchao', 'mmasim', 'matplotlib'),
+        tools=(os.environ.get('CXX', 'c++'),)),
     'gsm8k': Eval(
         run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d), *j]],
         plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)],

@@ -242,11 +242,6 @@ def compile_design(build: Build) -> tuple[str, dict]:
            'result': _cpp_type(result)}
     return src, sig
 
-def _namespace(name: str) -> str:
-    """Return a unique C++ namespace for a design name."""
-    chars = [c if c.isalnum() else "_" for c in name]
-    words = filter(None, "".join(chars).split("_"))
-    return "model_" + "_".join(words)
 
 def _cpp_type(t) -> dict:
     """*t* as `{type}` for a scalar, or `{type, size}` for a list of them."""

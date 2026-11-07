@@ -11,13 +11,13 @@ dependencies = [
   "transformers==5.17.0",     # Qwen3.5
   "datasets==5.1.0",          # WikiText-2, GSM8K
   "matplotlib==3.11.2",
-  # the reference the GSM8K evaluation runs against
+  "torchao==0.18.0",          # the block-scaled formats' quantizers (cpu_performance)
+  # the reference the GSM8K and CPU performance evaluations run against
   "mmasim @ git+https://github.com/microsoft/MMA-Sim@2e57de2bb8e120409b00bfc2fd7bc59227631712#subdirectory=src/mmasim",
 ]
 
 [dependency-groups]
 dev = [
-  "torchao==0.18.0",          # the quantizers' reference
   "pytest",
   "pytest-xdist",
 ]
