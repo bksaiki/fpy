@@ -1790,6 +1790,8 @@ class FuncMeta:
     """free variables used in the function body"""
     ctx: Context | FPCoreContext | None
     """overriding global context (if any)"""
+    pre: Any
+    """function precondition (if any)"""
     spec: Any
     """function specification (if any)"""
     props: dict[str, Any]

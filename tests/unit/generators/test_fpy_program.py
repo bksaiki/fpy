@@ -43,7 +43,7 @@ from .number import real_floats
 
 def _wrap_as_funcdef(body_expr: Expr) -> FuncDef:
     body = StmtBlock([ReturnStmt(body_expr, None)])
-    meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
+    meta = FuncMeta(set(), None, None, None, {}, ForeignEnv.default())
     return FuncDef('f', [], body, meta)
 
 
@@ -181,7 +181,7 @@ class TestCompoundLocals:
             {}, RealType(), depth=2, max_assigns=3, local_types=st.just(local_t),
         ))
         fd = FuncDef('f', [], block,
-                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
+                     FuncMeta(set(), None, None, None, {}, ForeignEnv.default()))
         analysis = TypeInfer.check(fd)
         names = [s.target for s in block.stmts if isinstance(s, Assign)]
         assert [t for d, t in analysis.by_def.items() if d.name in names] == [local_t] * len(names)
@@ -254,7 +254,7 @@ class TestZipEnumerate:
         from fpy2.env import ForeignEnv
         body = StmtBlock([ReturnStmt(e, None)])
         fd = FuncDef('f', [], body,
-                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
+                     FuncMeta(set(), None, None, None, {}, ForeignEnv.default()))
         analysis = TypeInfer.check(fd)
         rt = analysis.return_type
         assert isinstance(rt, ListType)

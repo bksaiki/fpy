@@ -2,6 +2,7 @@
 FPy parsing from FPCore.
 """
 
+from itertools import combinations
 from typing import Any, TypeAlias
 
 import titanfp.fpbench.fpcast as fpc
@@ -229,14 +230,15 @@ class _FPCore2FPy:
                 return cls(left, right, None)
         else:
             match e.name:
-                case 'fmin':
-                    left = self._visit(e.children[0], ctx)
-                    right = self._visit(e.children[1], ctx)
-                    return Min(None, (left, right), None)
-                case 'fmax':
-                    left = self._visit(e.children[0], ctx)
-                    right = self._visit(e.children[1], ctx)
-                    return Max(None, (left, right), None)
+                case 'fmin' | 'fmax':
+                    # FPCore's `fmin` and `fmax` ignore a NaN argument, while FPy's
+                    # `min` and `max` propagate it, so `(fmax a b)` becomes
+                    # `b if isnan(a) else (a if isnan(b) else max(a, b))`
+                    a, b = e.children
+                    cls = Min if e.name == 'fmin' else Max
+                    e_max = cls(None, (self._visit(a, ctx), self._visit(b, ctx)), None)
+                    e_inner = IfExpr(IsNan(None, self._visit(b, ctx), None), self._visit(a, ctx), e_max, None)
+                    return IfExpr(IsNan(None, self._visit(a, ctx), None), self._visit(b, ctx), e_inner, None)
                 case _:
                     raise NotImplementedError(f'unsupported binary operation {e.name}')
 
@@ -288,11 +290,12 @@ class _FPCore2FPy:
                 exprs = [self._visit(e, ctx) for e in e.children]
                 return Compare(ops, exprs, None)
             case fpc.NEQ():
-                # TODO: need to check if semantics are the same
                 assert len(e.children) >= 2, "not enough children"
-                ops = [CompareOp.NE for _ in e.children[1:]]
-                exprs = [self._visit(e, ctx) for e in e.children]
-                return Compare(ops, exprs, None)
+                cmps: list[Expr] = [
+                    Compare([CompareOp.NE], [self._visit(a, ctx), self._visit(b, ctx)], None)
+                    for a, b in combinations(e.children, 2)
+                ]
+                return cmps[0] if len(cmps) == 1 else And(cmps, None)
             case fpc.Size():
                 # BUG: titanfp package says `fpc.Size` is n-ary
                 if len(e.children) != 2:
@@ -648,22 +651,31 @@ class _FPCore2FPy:
         val_ctx = ctx.without_stmts()
         val = self._visit(e.body, val_ctx)
 
-        # compile properties to a context
-        props = self._visit_props(e.props, ctx)
-        fpc_ctx = FPCoreContext(**props)
-
-        # try to convert to a native FPy context
-        try:
-            ctx_val = ForeignVal(fpc_ctx.to_context(), None)
-        except NoSuchContextError:
-            ctx_val = ForeignVal(fpc_ctx, None)
-
         # bind value to temporary
         t = self.gensym.fresh('t')
         block = StmtBlock(val_ctx.stmts + [Assign(t, None, val, None)])
-        stmt = ContextStmt(UnderscoreId(), ctx_val, block, None)
+        stmt = ContextStmt(UnderscoreId(), self._visit_context(e.props, ctx), block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
+
+    def _visit_context(self, props: dict[str, fpc.Data], ctx: _Ctx) -> ForeignVal:
+        """Compiles properties to a rounding context."""
+        fpc_ctx = FPCoreContext(**self._visit_props(props, ctx))
+        # try to convert to a native FPy context
+        try:
+            return ForeignVal(fpc_ctx.to_context(), None)
+        except NoSuchContextError:
+            return ForeignVal(fpc_ctx, None)
+
+    def _round_args(self, f: fpc.FPCore, ctx: _Ctx) -> list[Stmt]:
+        """Rounds each argument with properties under them."""
+        stmts: list[Stmt] = []
+        for name, props, _ in f.inputs:
+            if props:
+                t = ctx.env[name]
+                block = StmtBlock([Assign(t, None, _round(Var(t, None)), None)])
+                stmts.append(ContextStmt(UnderscoreId(), self._visit_context(props, ctx), block, None))
+        return stmts
 
     def _visit(self, e: fpc.Expr, ctx: _Ctx) -> Expr:
         match e:
@@ -727,12 +739,26 @@ class _FPCore2FPy:
         new_props = dict(ctx.props)
         for k, v in props.items():
             match k:
-                case 'pre' | 'spec' | 'alt':
-                    e = data_as_expr(v, strict=True)
-                    new_props[k] = self._visit(e, _Ctx(env=ctx.env))
+                case 'pre' | 'spec':
+                    # an expression, unless it needs statements (see `_visit_function`)
+                    body = self._visit_prop_body(v, ctx)
+                    match body.stmts:
+                        case [ReturnStmt() as ret]:
+                            new_props[k] = ret.expr
+                        case _:
+                            new_props[k] = body
+                case 'alt':
+                    # alternative implementations are not translated
+                    pass
                 case _:
-                    new_props[pythonize_id(k)] = self._visit_data(v.value)
+                    new_props[k] = self._visit_data(v.value)
         return new_props
+
+    def _visit_prop_body(self, v: fpc.Data, ctx: _Ctx) -> StmtBlock:
+        """Compiles a property over the arguments as a function body."""
+        prop_ctx = _Ctx(env=ctx.env)
+        e = self._visit(data_as_expr(v, strict=True), prop_ctx)
+        return StmtBlock(prop_ctx.stmts + [ReturnStmt(e, None)])
 
     def _visit_function(self, f: fpc.FPCore):
         # setup context
@@ -797,17 +823,38 @@ class _FPCore2FPy:
                 ctx_val: None | Context | FPCoreContext = FPCoreContext(**props).to_context()
             except NoSuchContextError:
                 ctx_val = FPCoreContext(**props)
-            del props['precision']
         else:
             ctx_val = None
 
+        name = self.default_name if f.ident is None else pythonize_id(f.ident)
+        env = ForeignEnv.default() if self.env is None else self.env
+
+        # arguments with properties are rounded under them on entry,
+        # to the body and to the properties over the arguments
+        def prop_func(prop: str, body: StmtBlock) -> FuncDef:
+            block = StmtBlock(self._round_args(f, ctx) + body.stmts)
+            return FuncDef(f'_{name}_{prop}', args, block, FuncMeta(set(), ctx_val, None, None, {}, env))
+
+        # `:pre` and `:spec` are the function's own;
+        # when they need statements, they are separate functions
+        rounds_args = any(arg_props for _, arg_props, _ in f.inputs)
+        def prop_value(prop: str) -> Expr | FuncDef | None:
+            v = props.pop(prop, None)
+            if rounds_args and isinstance(v, Expr):
+                v = StmtBlock([ReturnStmt(v, None)])
+            return prop_func(prop, v) if isinstance(v, StmtBlock) else v
+
+        pre = prop_value('pre')
+        spec = prop_value('spec')
+
         # compile function body
+        ctx.stmts += self._round_args(f, ctx)
         e = self._visit(f.e, ctx)
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
-        name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        env = ForeignEnv.default() if self.env is None else self.env
-        meta = FuncMeta(set(), ctx_val, None, props, env)
+        # the precision is the function's context
+        props.pop('precision', None)
+        meta = FuncMeta(set(), ctx_val, pre, spec, props, env)
         return FuncDef(name, args, block, meta)
 
     def convert(self) -> FuncDef:

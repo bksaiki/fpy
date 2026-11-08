@@ -1341,7 +1341,7 @@ def _make_funcdef(
         Argument(n, _type_to_typeann(t), None)
         for n, t in zip(arg_names, arg_types)
     ]
-    meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
+    meta = FuncMeta(set(), None, None, None, {}, ForeignEnv.default())
     return FuncDef(name, args, body, meta)
 
 

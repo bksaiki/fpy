@@ -32,6 +32,7 @@ def fpy(func: Callable[P, R]) -> Function[P, R]:
 def fpy(
     *,
     ctx: Context | None = None,
+    pre: Any = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Function[P, R]]:
@@ -41,6 +42,7 @@ def fpy(
     func: Callable[P, R] | None = None,
     *,
     ctx: Context | None = None,
+    pre: Any = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
 ):
@@ -53,15 +55,16 @@ def fpy(
     
     Args:
         func: The function to decorate (when used without parentheses)
+        pre: Optional precondition for the function
         spec: Optional specification for the function
         meta: Optional metadata dictionary for the function
     """
 
     if func is None:
         # create a new decorator to be applied directly
-        return lambda func: _apply_fpy_decorator(func, ctx=ctx, spec=spec, meta=meta)
+        return lambda func: _apply_fpy_decorator(func, ctx=ctx, pre=pre, spec=spec, meta=meta)
     else:
-        return _apply_fpy_decorator(func, ctx=ctx, spec=spec, meta=meta)
+        return _apply_fpy_decorator(func, ctx=ctx, pre=pre, spec=spec, meta=meta)
 
 
 ###########################################################
@@ -201,6 +204,7 @@ def _apply_fpy_decorator(
     func: Callable[P, R],
     *,
     ctx: Context | None = None,
+    pre: Any = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
     decorator: Callable = fpy,
@@ -217,7 +221,13 @@ def _apply_fpy_decorator(
 
     # parse the source as an FPy function
     parser = Parser(src_name, lines, env, start_line=start_line, col_offset=col_offset)
-    ast, _ = parser.parse_function(env)
+    ast, lambdas = parser.parse_function(env)
+
+    # inline `lambda`s for `pre` and `spec` are parsed as FPy expressions
+    pre = lambdas.get('pre', pre)
+    spec = lambdas.get('spec', spec)
+    if inspect.isfunction(pre) or inspect.isfunction(spec):
+        raise TypeError(f'`pre` and `spec` of `{func.__name__}` must be inline `lambda`s or FPy functions')
 
     if decorator == pattern:
         # syntax checking
@@ -228,12 +238,12 @@ def _apply_fpy_decorator(
             allow_wildcard=True
         )
         # add metadata
-        ast._meta = FuncMeta(free_vars, ctx, spec, meta or {}, env)
+        ast._meta = FuncMeta(free_vars, ctx, pre, spec, meta or {}, env)
     else:
         # syntax checking
         free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
         # add metadata
-        ast._meta = FuncMeta(free_vars, ctx, spec, meta or {}, env)
+        ast._meta = FuncMeta(free_vars, ctx, pre, spec, meta or {}, env)
         # reachability analysis
         # Multiple return statements are allowed: they're well-defined
         # for the interpreter and the cpp backend, and the fpc backend

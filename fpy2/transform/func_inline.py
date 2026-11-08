@@ -255,7 +255,7 @@ class _FuncInline(SiteRewriter):
     def _visit_function(self, func: FuncDef, ctx: None):
         self._begin(func)
         body, _ = self._visit_block(func.body, None)
-        meta = FuncMeta(self.free_vars, func.meta.ctx, func.meta.spec, func.meta.props, self.env)
+        meta = FuncMeta(self.free_vars, func.meta.ctx, func.meta.pre, func.meta.spec, func.meta.props, self.env)
         return FuncDef(func.name, func.args, body, meta, loc=func.loc)
 
     def apply(self) -> FuncDef:
@@ -425,6 +425,6 @@ class FuncInline:
 
         meta = FuncMeta(
             result.free_vars - unused, result.meta.ctx,
-            result.meta.spec, result.meta.props, result.env,
+            result.meta.pre, result.meta.spec, result.meta.props, result.env,
         )
         return FuncDef(result.name, result.args, result.body, meta, loc=result.loc)
