@@ -221,11 +221,11 @@ def case(test: str, n: int, s: int, fmt) -> Case:
     return Case(test, n, s, A, B.T.contiguous(), I, J, exact, size)
 
 
-def error(model: dict, c: Case, threads: int) -> float:
+def error(model: dict, c: Case) -> float:
     """model's worst componentwise backward error on c; an entry whose
     products are all 0 must come out exactly 0."""
     gemm = getattr(torch.ops.fpy2_models, f'{op(model)}_gemm')
-    got = gemm(c.A, c.Bt, c.I, c.J, *unit_scales(model, c.n), threads).double()
+    got = gemm(c.A, c.Bt, c.I, c.J, *unit_scales(model, c.n)).double()
     err = (got - c.exact).abs()
     return torch.where(c.size > 0, err / c.size, torch.where(err == 0, 0.0, math.inf)).max().item()
 
@@ -238,6 +238,8 @@ def main(argv: list[str]) -> int:
                     help='processes compiling the designs, and threads grading them '
                     '(default: every CPU)')
     args = ap.parse_args(argv)
+    # the threads `<op>_gemm` grades on
+    torch.set_num_threads(args.jobs)
 
     pts = sweep.grid()
     designs = [FMA, *(p.design for p in pts)]
@@ -255,7 +257,7 @@ def main(argv: list[str]) -> int:
     rows = []
     for f, (fmt, ss) in FORMATS.items():
         cases = [case(test, N, s, fmt) for test in ('1c', '2c') for s in ss]
-        fma = [error(models[FMA], c, args.jobs) for c in cases]
+        fma = [error(models[FMA], c) for c in cases]
         mine = [p for p in pts if p.design.a == fmt]
         for p in mine:
             cpp = compiled[p.design]
@@ -268,7 +270,7 @@ def main(argv: list[str]) -> int:
                 continue
             point['cxx_seconds'] = cxx[op(cpp['model'])]
             t1 = time.perf_counter()
-            errs = [error(models[p.design], c, args.jobs) for c in cases]
+            errs = [error(models[p.design], c) for c in cases]
             point['seconds'] = time.perf_counter() - t1
             rows += [point | {'test': c.test, 'n': c.n, 's': c.s, 'error': e, 'fma_error': b}
                      for c, e, b in zip(cases, errs, fma)]

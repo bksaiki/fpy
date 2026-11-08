@@ -25,12 +25,16 @@ sys.path.insert(0, str(ROOT / 'examples' / 'mmasim' / 'serve'))
 # line, its colours and its text styles
 from plot_grid import BASES, GRID, INK, JOINS, LARGE, MUTED, SMALL, _look
 
-U = 2.0 ** -24
 N = 1024
 # each panel's input formats; the FP32 FMA loop drawn is the first's
 PANELS = {'BF16': ('BF16',), 'FP8': ('E4M3', 'E4M3FNUZ')}
 # where each panel's legend has room, and its columns: above FP8's plateaus, two
 LEGENDS = {'BF16': ('upper right', 1), 'FP8': ('upper right', 2)}
+# the figure: `plot_grid.py`'s height, and wide enough for the key in one row
+SIZE = (8.4, 4.2)
+# the panels' width: one of `plot_grid.py`'s subfigures, two panels of about
+# 3.3 by 2.9 inches
+PANELS_WIDTH = 8.2
 
 
 def load(results: Path) -> tuple[list[dict], dict[str, dict]]:
@@ -58,12 +62,14 @@ def worst(d: dict, n: int = N) -> float:
 
 def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
     """The worst error at n = N against k, a panel per input format: a line per
-    generation and join, each generation's own design ringed; the FP32 FMA
-    loop's worst error on the same matrices, measured, and an FP32 dot
-    product's worst case `n u`."""
-    # 4 inches a panel, as `plot_grid.py`'s figure, so the two print at one scale
-    fig, axes = plt.subplots(1, len(PANELS), figsize=(4 * len(PANELS), 4.2), layout='constrained')
+    generation and join, each generation's own design ringed; and the FP32
+    FMA loop's worst error on the same matrices."""
+    # laid out as `plot_grid.py`'s figure, so the two print at one scale at one
+    # height: its panels' size, centred, and the key above them in one row
+    fig = plt.figure(figsize=SIZE, layout='constrained')
     fig.get_layout_engine().set(h_pad=0.06)
+    side = (SIZE[0] - PANELS_WIDTH) / 2
+    axes = fig.subfigures(1, 3, width_ratios=[side, PANELS_WIDTH, side])[1].subplots(1, len(PANELS))
     for (f, fmts), ax in zip(PANELS.items(), axes):
         mine = [d for d in points if d['format'] in fmts]
         anchors = [a for a in BASES if any(d['anchor'] == a for d in mine)]
@@ -76,12 +82,11 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
                         linewidth=2, marker=marker, markersize=6, markeredgecolor='white')
                 ax.scatter([p[0] for p in pts if p[2]], [p[1] for p in pts if p[2]], s=200,
                            facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
-        ax.axhline(math.log2(worst(fma[fmts[0]])), color=MUTED, linewidth=1.5, zorder=1)
-        ax.axhline(math.log2(N * U), color=INK, linestyle=':', linewidth=2, zorder=1)
+        ax.axhline(math.log2(worst(fma[fmts[0]])), color=INK, linestyle=':', linewidth=2, zorder=1)
         ax.legend(handles=[plt.Line2D([], [], color=c, marker=m, linewidth=2, markeredgecolor='white',
                                       label=BASES[a][1]) for a in anchors for c, m in [_look(a)]],
-                  loc=LEGENDS[f][0], ncol=LEGENDS[f][1], fontsize=SMALL['fontsize'], labelcolor=SMALL['color'],
-                  frameon=False, columnspacing=0.8)
+                  loc=LEGENDS[f][0], ncol=LEGENDS[f][1], fontsize=SMALL['fontsize'],
+                  labelcolor=SMALL['color'], frameon=False, columnspacing=0.8)
         ax.set_title(f'{f}, n = {N}', loc='left', **LARGE)
         ax.set_xlabel('k (bits)', **LARGE)
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))
@@ -94,19 +99,14 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
         ticks = ax.yaxis.get_major_locator().tick_values(lo, hi)
         ax.set_ylim(max(t for t in ticks if t <= lo), min(t for t in ticks if t >= hi))
     axes[0].set_ylabel(r'log$_2$ worst $|\hat C - C| \,/\, (|A|\,|B|)$', **LARGE)
-    (_, with_), (_, after) = JOINS.values()
-    # two rows, `c added` over `FP32 FMA worst case`: a legend fills column by column
     handles = [plt.Line2D([], [], linestyle='None', label='c added'),
-               plt.Line2D([], [], linestyle='None', label='FP32 FMA worst case'),
-               plt.Line2D([], [], color=MUTED, ls=JOINS['inside'][0], linewidth=2, label=with_),
-               plt.Line2D([], [], color=MUTED, linewidth=1.5, label='measured'),
-               plt.Line2D([], [], color=MUTED, ls=JOINS['separate'][0], linewidth=2, label=after),
-               plt.Line2D([], [], color=INK, linestyle=':', linewidth=2, label='theoretical')]
-    leg = fig.legend(handles=handles, loc='outside upper center', ncol=3,
+               *(plt.Line2D([], [], color=MUTED, ls=s, linewidth=2, label=lab) for s, lab in JOINS.values()),
+               plt.Line2D([], [], linestyle='None', label=' '),
+               plt.Line2D([], [], color=INK, linestyle=':', linewidth=2, label='FMA')]
+    leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles),
                      fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False,
                      handlelength=2.4, columnspacing=1.2)
-    for header in (0, 1):
-        leg.get_texts()[header].set(fontweight='bold', **LARGE)
+    leg.get_texts()[0].set(fontweight='bold', **LARGE)
     return fig
 
 

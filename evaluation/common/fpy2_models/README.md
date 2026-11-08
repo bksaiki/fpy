@@ -6,12 +6,13 @@ MMA-Sim's `dpa`: operands of shape `(..., K)`, one accumulator per row in `c`,
 and, for block-scaled designs, scales of shape `(..., S)`.
 
 Each design also becomes
-`torch.ops.fpy2_models.<op>_gemm(A, Bt, I, J[, alphas, betas], threads)`, the
+`torch.ops.fpy2_models.<op>_gemm(A, Bt, I, J[, alphas, betas])`, the
 design chained `K` elements at a time, from 0, along the rows of `A` and `Bt`
 (of any multiple of `K`): entry `p` is row `I[p]` of `A` dotted with row `J[p]`
 of `Bt`, with `S` scales per `K` elements of each row. Every `(i, j)` gives
 `A @ Bt.T`; `I = J = arange(P)` gives `P` paired dot products. The entries
-split over `threads` threads (`runners.h`).
+split over Torch's intra-op threads, as many as `torch.set_num_threads` sets
+(`runners.h`).
 
 ## Build
 
