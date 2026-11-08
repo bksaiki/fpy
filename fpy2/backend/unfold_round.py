@@ -21,6 +21,7 @@ from ..analysis import (
     DefineUse,
     DefineUseAnalysis,
     FormatInfer,
+    PartialContext,
 )
 from ..analysis.format_infer import FormatBound
 from ..ast.fpyast import Cast, Expr, FuncDef, Round
@@ -91,7 +92,7 @@ class UnfoldKind(Enum):
 
     FIXED_ROUND = auto()
     """A rounding to a fixed-point context the emitter cannot lower as it
-    stands."""
+    stands, its position perhaps known only at run time."""
 
 
 @dataclass(frozen=True)
@@ -100,8 +101,9 @@ class UnfoldSite:
 
     cursor: ExprCursor
     kind: UnfoldKind
-    ctx: Context
-    """The active context that made it a site."""
+    ctx: Context | PartialContext
+    """The active context that made it a site: partial where its position is
+    known only at run time."""
 
 
 @dataclass(frozen=True)
@@ -159,17 +161,27 @@ class _Scopes:
 
     def __call__(self, e: Expr) -> Context | None:
         """*e*'s active context, or `None` where the scope stays symbolic."""
-        scope = self.ctx_use.find_scope_from_use(e)
-        return scope.ctx if isinstance(scope.ctx, Context) else None
+        ctx = self.partial(e)
+        return ctx if isinstance(ctx, Context) else None
+
+    def partial(self, e: Expr) -> Context | PartialContext | None:
+        """*e*'s active context, partial where its constructor is known."""
+        ctx = self.ctx_use.find_scope_from_use(e).ctx
+        return ctx if isinstance(ctx, Context | PartialContext) else None
 
 
 def _classify(
     e: Expr, active_of: _Scopes, target: UnfoldTarget,
-) -> tuple[UnfoldKind, Context] | None:
+) -> tuple[UnfoldKind, Context | PartialContext] | None:
     """*e*'s kind and the context that gives it one, or `None` where the
     emitter needs no help."""
     if isinstance(e, Round | Cast):
-        active = active_of(e)
+        active = active_of.partial(e)
+        if isinstance(active, PartialContext):
+            # a fixed-point position known only at run time: `RescaleFixed`'s
+            if issubclass(active.cls, MPFixedContext | MPBFixedContext):
+                return UnfoldKind.FIXED_ROUND, active
+            return None
         if active is None or target.rounds(active):
             return None
         if active.is_stochastic():

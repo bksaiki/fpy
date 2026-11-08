@@ -38,9 +38,11 @@ import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.backend.cpp.types import CppList
 from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
+from fpy2.backend.triton.normalize import normalize_module
 from fpy2.number.context import SizedFormat
 from fpy2.strategies import TransformDeclined
-from fpy2.transform import CompToLoop, RescaleFixed, Simplify, ZipElim
+from fpy2.transform import CompToLoop, FreeVarElim, RescaleFixed, Simplify, ZipElim
+from fpy2.transform.const_fold import ConstFold
 from fpy2.types import Type
 
 _L = fp.types.ListType
@@ -202,6 +204,17 @@ DESIGNS = [
 ]
 
 
+def _declinable(step: Callable) -> Callable:
+    """*step* over a module's functions, where declining (nothing to do) is not
+    a failure."""
+    def apply(_module, func):
+        try:
+            return step(func)
+        except TransformDeclined:
+            return func
+    return apply
+
+
 def _prepare(_module, func):
     """Put one function in the shape the backend needs.
 
@@ -224,9 +237,8 @@ def compile_design(build: Build) -> tuple[str, dict]:
     """The C++ for one design, and its entry's signature; raises whatever
     refused it.
 
-    Every function is prepared, not just the entry: a model's rounding at a
-    run-time position usually sits in a helper, and a transform applied to
-    the caller alone never reaches it.
+    Free variables removed and `zip`s eliminated, then inlined, as the Triton
+    backend does (inlining lowers a `zip` to tuples), then folded and prepared.
 
     The signature gives the entry's name, and the C++ element type of each
     parameter and the result, with a `size` for a fixed-size array.
@@ -234,7 +246,8 @@ def compile_design(build: Build) -> tuple[str, dict]:
     func, arg_types = build()
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
-    return compile_module(mod.map(_prepare))
+    mod = normalize_module(mod.map(_declinable(FreeVarElim.apply)).map(_declinable(ZipElim.apply)))
+    return compile_module(mod.map(_declinable(ConstFold.apply)).map(_prepare))
 
 
 def compile_module(mod: fp.Module) -> tuple[str, dict]:
