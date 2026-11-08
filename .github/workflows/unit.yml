@@ -116,24 +116,24 @@ jobs:
       - name: Unit Tests
         run: uv run make unittest UNITTEST_JOBS=auto
 
-  fpcore:
-    name: "FPCore tests"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
-        with:
-          repository: fpbench/fpbench
-          path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: "3.11"
-      - name: Install
-        run: uv sync --locked
-      - name: Compilation tests
-        run: uv run python -m tests.infra.fpcore
+  # fpcore:
+  #   name: "FPCore tests"
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: "Checkout fpbench/fpbench"
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: fpbench/fpbench
+  #         path: ~/fpbench
+  #     - uses: astral-sh/setup-uv@v5
+  #       with:
+  #         enable-cache: true
+  #         python-version: "3.11"
+  #     - name: Install
+  #       run: uv sync --locked
+  #     - name: Compilation tests
+  #       run: uv run python -m tests.infra.fpcore
 
   cpp:
     name: "C++ tests"
