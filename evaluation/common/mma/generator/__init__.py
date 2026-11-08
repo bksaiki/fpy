@@ -376,7 +376,13 @@ def _finish_even_odd(p: _Parts, n: int) -> fp.Function:
             t_odd = s_odd([xs[i] for i in range(1, N, 2)], [es[i] for i in range(1, N, 2)])
             e_c = e_zero if c == 0 else exponent(c, emin_c)
             e_max = max(max(e_even, e_odd), e_c)
-            s = fused_sum([t_even, t_odd, c], e_max - F - 1, fp.RM.RTZ)
+            # `fused_sum` of the three, unrolled: a list literal of the
+            # halves loses their digit bounds to the backend
+            with fp.MPFixedContext(e_max - F - 1, fp.RM.RTZ, enable_neg_zero=False):
+                u_even = fp.round(t_even)
+                u_odd = fp.round(t_odd)
+                u_c = fp.round(c)
+            s = u_even + u_odd + u_c
             return keep_out(nv.fdpa_round(s, rho), tiny_o)
         return fused_inside
     comb, jn = (_exact_add if d.sum == 'exact' else p.add), _join(p)
