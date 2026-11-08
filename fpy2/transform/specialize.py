@@ -55,7 +55,7 @@ from ..number.context import MPBFixedFormat, MPBFloatFormat
 from ..number.context.format import Format
 from ..number.context.real import REAL_FORMAT
 from ..types import ListType, RealType, TupleType, Type
-from ..utils import NamedId
+from ..utils import Gensym, NamedId
 from .monomorphize import Monomorphize
 from .path import walk_exprs
 from .subst_var import SubstVar
@@ -840,12 +840,15 @@ class Specialize:
         for entry_name, k in public_keys:
             spec_to_public_name.setdefault(k, entry_name)
 
+        # fresh, since distinct functions can share a name (closures of one
+        # `def`) and an instantiation
+        gensym = Gensym([NamedId(n) for n in spec_to_public_name.values()])
         names: dict[_SpecKey, str] = {}
         for k in monos:
             if k in spec_to_public_name:
                 names[k] = spec_to_public_name[k]
             else:
-                names[k] = _mangle_private(k.fdef.name, k.inst)
+                names[k] = str(gensym.fresh(_mangle_private(k.fdef.name, k.inst)))
 
         # --- 4. Build leaves-first, rewiring each body per call site.
         new_funcs: dict[_SpecKey, Function] = {}

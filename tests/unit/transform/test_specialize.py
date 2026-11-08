@@ -463,6 +463,36 @@ class TestAUserNameIsNotUnmangled:
         assert len(defs) == 2 and len(set(defs)) == 2, defs
 
 
+class TestClosuresOfOneDefKeepTheirOwnSymbols:
+    """Two closures of one `def` are two functions with one name; reached at
+    one instantiation, each still needs its own symbol."""
+
+    def test_two_closures_are_two_symbols(self):
+        def leaf(i):
+            @fp.fpy(ctx=fp.FP64)
+            def at(xs):
+                return xs[i]
+            return at
+
+        def node(f, g):
+            @fp.fpy(ctx=fp.FP64)
+            def pair(xs):
+                return f(xs) + g(xs)
+            return pair
+
+        low, high = node(leaf(0), leaf(1)), node(leaf(2), leaf(3))
+
+        @fp.fpy(ctx=fp.FP64)
+        def entry(xs):
+            return low(xs) * high(xs)
+
+        m = fp.Module()
+        m.add(entry, arg_types=[ListType(RealType(fp.FP64), 4)])
+        out = CppCompiler().compile_module(m)
+        defs = [l for l in out.splitlines() if l.startswith('double pair')]
+        assert len(defs) == 2 and len(set(defs)) == 2, defs
+
+
 class TestCopiesOfOneFunctionAreOneSpec:
     """Specialization re-reads its own output, so from the second round on it
     is handed copies of a function, not the function.  A spec is the *source*

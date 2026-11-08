@@ -679,6 +679,22 @@ class TestDeadCode():
             assert f_opt.is_equiv(f_expect.ast), f'expect:\n{f_expect.format()}\nactual:\n{f_opt.format()}'
 
 
+    def test_a_folded_return_drops_what_follows(self):
+        """`if True: return ...` spliced in leaves the rest unreachable, where a
+        syntax check would read every name as unbound."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            y = x + 1
+            if True:
+                return y
+            z = y * 2
+            return z
+
+        f_opt = fp.transform.DeadCodeEliminate.apply(f.ast)
+        assert 'z' not in f_opt.format()
+        assert repr(f.with_ast(f_opt)(2.0)) == repr(f(2.0))
+
+
 class TestDeadContext:
     """What a shape comparison cannot check: that the elimination loop reaches
     the blocks other rules strand, and that the survivor is the right one."""

@@ -653,11 +653,12 @@ class AbstractFormat:
         return self.prec < needed
 
     def effective_prec(self):
-        """Effective maximum precision."""
+        """Effective maximum precision: at least one digit, as a precision is
+        positive, though a format of zero alone needs none."""
         if isinstance(self.prec, float) and not isinstance(self.bound, float):
             # bounded fixed-point format
             assert not isinstance(self.exp, float)
-            return _maxval_precision(self.bound, self.exp)
+            return max(_maxval_precision(self.bound, self.exp), 1)
 
         if not isinstance(self.prec, float) and not isinstance(self.bound, float) and not isinstance(self.exp, float):
             # bounded floating-point format
@@ -665,7 +666,7 @@ class AbstractFormat:
             cutoff = RealFloat(False, self.exp, 1 << self.prec)
             if self.bound < cutoff:
                 # format acts like a fixed-point format
-                return _maxval_precision(self.bound, self.exp)
+                return max(_maxval_precision(self.bound, self.exp), 1)
 
         # everything else
         return self.prec
