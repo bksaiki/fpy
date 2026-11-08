@@ -8,9 +8,9 @@ is first checked to agree with MMA-Sim bit for bit.
     python evaluation/cpu_performance/run.py --smoke        # one batch and length, briefly
     python evaluation/cpu_performance/run.py --designs hopper blackwell.mx -j 1
 
-The designs compile first (`common/fpy2_models/generate_models.py`), into
-`build/` under the results, which later runs reuse.  Both implementations run
-on `-j` threads (default: PyTorch's, its performance cores).
+The designs compile first, as the `common/fpy2_models` package (its
+`setup.py`, about a minute).  Both implementations run on `-j` threads
+(default: PyTorch's, its performance cores).
 
 Writes into the results directory (`evaluation/results/cpu_performance/`, or
 `-o DIR`) `validation.json`, `measurements.csv` (each block's time),
@@ -24,11 +24,9 @@ import json
 import os
 import platform
 import random
-import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -37,40 +35,27 @@ from pathlib import Path
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[2]
-_COMMON = _ROOT / 'evaluation' / 'common'
-sys.path[:0] = [str(_COMMON / 'mma'), str(_ROOT / 'examples' / 'mmasim')]
+PACKAGE = _ROOT / 'evaluation' / 'common' / 'fpy2_models'
+sys.path[:0] = [str(PACKAGE), str(_ROOT / 'evaluation' / 'common' / 'mma'),
+                str(_ROOT / 'examples' / 'mmasim')]
 sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
 import config
 import torch
 from core import outputs
-from torch.utils import benchmark, cpp_extension
+from torch.utils import benchmark
 
 RESULTS = _ROOT / 'evaluation' / 'results' / 'cpu_performance'
-GENERATE = _COMMON / 'fpy2_models' / 'generate_models.py'
-CSRC = _COMMON / 'fpy2_models' / 'fpy2_models' / 'csrc'
-# fpy2_models' flags (setup.py): the models set rounding modes with `fesetround`
-CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
-            '-DTORCH_TARGET_VERSION=0x020a000000000000']
 
 
-def build(out: Path) -> dict[str, Any]:
-    """Every design compiled to C++ and loaded as `torch.ops.fpy2_models.<op>`;
-    `generate_models.py`'s manifest of them.  Only changed files are rewritten
-    into *out*, so ninja rebuilds only those."""
-    with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run([sys.executable, str(GENERATE), tmp], check=True)
-        for f in Path(tmp).rglob('*'):
-            dst = out / 'generated' / f.relative_to(tmp)
-            if f.is_file() and (not dst.exists() or dst.read_bytes() != f.read_bytes()):
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(f, dst)
-    manifest = json.loads((out / 'generated' / 'manifest.json').read_text())
-    cpp_extension.load('fpy2_cpu_performance',
-                       [str(out / 'generated' / f'{m["op"]}.cpp') for m in manifest['models']],
-                       extra_cflags=CXXFLAGS, extra_include_paths=[str(CSRC)],
-                       build_directory=str(out), is_python_module=False)
-    return manifest
+def build() -> dict[str, Any]:
+    """Every design compiled and loaded as `torch.ops.fpy2_models.<op>`, by
+    rebuilding the `fpy2_models` package, so that no stale build is timed;
+    `generate_models.py`'s manifest of them."""
+    subprocess.run([sys.executable, 'setup.py', '--quiet', 'build_ext', '--inplace'],
+                   cwd=PACKAGE, check=True)
+    import fpy2_models  # registers the operators
+    return json.loads((PACKAGE / 'build' / 'generated_models' / 'manifest.json').read_text())
 
 
 def time_blocks(fn: Callable[[], Any], threads: int, min_run_time: float) -> list[float]:
@@ -104,19 +89,6 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _hardware() -> dict[str, str]:
-    """Model, chip, cores and memory, from macOS's hardware report if there is one."""
-    try:
-        report = subprocess.run(['system_profiler', 'SPHardwareDataType'], capture_output=True,
-                                text=True, check=True).stdout
-    except (OSError, subprocess.CalledProcessError):
-        report = ''
-    wanted = {'Model Name', 'Chip', 'Total Number of Cores', 'Memory'}
-    out = {k: v.strip() for k, _, v in (line.strip().partition(':') for line in report.splitlines())
-           if k in wanted}
-    return out or {'Chip': platform.processor() or platform.machine()}
-
-
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('-o', '--out', type=Path, default=RESULTS, help='results directory (default: %(default)s)')
@@ -140,13 +112,10 @@ def main(argv: list[str]) -> int:
     threads = torch.get_num_threads()
 
     out = args.out.resolve()
-    manifest = build(out / 'build')
-    import cases as cs   # MMA-Sim, compiling its FMA helper, after the designs' build
+    manifest = build()
+    import cases as cs  # MMA-Sim, compiling its FMA helper, after the designs' build
     import report
     cases = cs.select(cs.cases(manifest), args.designs)
-    for c in cases:
-        if any(n % c.k for n in args.lengths):
-            sys.exit(f'dot lengths must be multiples of {c.k} for {c.name}')
 
     started = time.monotonic()
     validations = [{'design': n, 'status': 'unsupported', 'reason': r}
@@ -158,8 +127,8 @@ def main(argv: list[str]) -> int:
         seed = config.CPU_PERF_SEED + i * 1_000_003 + batch
         torch._dynamo.reset()   # compiled from scratch each time, as in a fresh process
         p = cs.prepare(c, batch, seed, length, args.compile, config.CPU_PERF_DISTRIBUTION)
-        v = {'design': c.name, 'instruction': c.instruction, 'batch_size': batch,
-             'dot_length': length, 'seed': seed, **cs.validate(p)}
+        v = {'design': c.name, 'batch_size': batch, 'dot_length': length, 'seed': seed,
+             **cs.validate(p)}
         impls = {'fpy': p.fpy, 'mmasim': p.mmasim}
         if args.compile:
             v['mmasim_compiled'] = cs.validate_compiled(p)
@@ -189,14 +158,15 @@ def main(argv: list[str]) -> int:
     outputs.write_csv(out / 'measurements.csv', rows)
     cxx = os.environ.get('CXX', 'c++')
     outputs.write_json(out / 'provenance.json', {
-        'argv': sys.argv, **outputs.commit(), 'machine': platform.platform(), 'hardware': _hardware(),
+        'argv': sys.argv, **outputs.commit(), 'machine': platform.platform(),
+        'processor': platform.processor() or platform.machine(), 'cpus': os.cpu_count(),
         'python': platform.python_version(), 'torch': torch.__version__,
         'torchao': importlib.metadata.version('torchao'), 'mmasim': importlib.metadata.version('mmasim'),
         'cxx': subprocess.run([cxx, '--version'], capture_output=True, text=True).stdout.splitlines()[0],
         'threads': threads, 'replicates': replicates, 'min_run_time': min_run_time,
         'distribution': cs.DISTRIBUTIONS[config.CPU_PERF_DISTRIBUTION], 'seed': config.CPU_PERF_SEED,
-        'settings': {k: v if v is None or isinstance(v, int | bool | list | tuple) else str(v)
-                     for k, v in vars(args).items()},
+        'designs': args.designs, 'batches': args.batches, 'lengths': args.lengths,
+        'compile': args.compile, 'smoke': args.smoke,
         'elapsed_seconds': time.monotonic() - started, 'invalid_configurations': invalid})
     outputs.write_csv(out / 'summary.csv', summarize(rows))   # last: the run is complete
     report.main([str(out)])

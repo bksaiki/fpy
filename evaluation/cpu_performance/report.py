@@ -12,14 +12,12 @@ Writes into the results directory:
   its hardware family, block-scaled formats hatched;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup, and all designs';
-- `perf-cpu-paper.json`: every design's speedup over each MMA-Sim measured,
-  at every batch size and length, and the table's numbers;
-- `perf-cpu-summary.txt`: the headline configuration's per-design table.
+
+and prints the per-design table.
 """
 
 import argparse
 import csv
-import json
 import math
 import os
 import sys
@@ -151,23 +149,17 @@ def figure(values: dict[str, float], out: Path) -> None:
     ax.set_axisbelow(True)
     ax.spines[['top', 'right']].set_visible(False)
     shown = [f for f in FAMILIES if f in {family(d) for d in order}]
-    style = dict(frameon=False, fontsize=7, handlelength=1.4, handleheight=1.0)
-    # the families fill a grid of two rows, column by column
-    families = ax.legend([plt.Rectangle((0, 0), 1, 1, color=FAMILIES[f]) for f in shown], shown,
-                         loc='upper left', ncol=math.ceil(len(shown) / 2), columnspacing=1.0, **style)
-    fig.tight_layout(pad=0.2)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=FAMILIES[f]) for f in shown]
     if any(map(block_scaled, order)):
-        # the hatch's key, right of the families, as outlined white swatches
-        # that cannot read as another family's color
-        ax.add_artist(families)
-        fig.canvas.draw()
-        right = families.get_window_extent().transformed(ax.transAxes.inverted()).x1
+        # an outlined white swatch, which cannot read as another family's color
         ink = '#52514e'
-        swatch = dict(facecolor='white', edgecolor=ink, linewidth=0.6)
-        ax.legend([plt.Rectangle((0, 0), 1, 1, **swatch),
-                   plt.Rectangle((0, 0), 1, 1, **swatch, hatch=HATCH, hatchcolor=ink)],
-                  ['not block-scaled', 'block-scaled (MX / NVFP4)'],
-                  loc='upper left', bbox_to_anchor=(right, 1), **style)
+        handles.append(plt.Rectangle((0, 0), 1, 1, facecolor='white', edgecolor=ink,
+                                     linewidth=0.6, hatch=HATCH, hatchcolor=ink))
+        shown = [*shown, 'block-scaled (MX / NVFP4)']
+    # a grid of two rows, filled column by column
+    ax.legend(handles, shown, loc='upper left', ncol=math.ceil(len(shown) / 2), columnspacing=1.0,
+              frameon=False, fontsize=7, handlelength=1.4, handleheight=1.0)
+    fig.tight_layout(pad=0.2)
     for ext in ('pdf', 'png'):
         fig.savefig(out / f'{PREFIX}speedup.{ext}', dpi=300)
     plt.close(fig)
@@ -215,19 +207,9 @@ def main(argv: list[str]) -> int:
     eager = {d: x for (d, b, n), x in ups['mmasim'].items() if (b, n) == (batch, length)}
     if not eager:
         sys.exit(f'no design was timed at batch={batch} length={length}')
-    rows_table = table(eager)
     figure(eager, args.results)
-    (args.results / f'{PREFIX}speedup.tex').write_text(latex(rows_table))
-    (args.results / f'{PREFIX}paper.json').write_text(json.dumps({
-        'batch_size': batch, 'dot_length': length, 'threads': rows[0]['threads'],
-        'families': rows_table,
-        'speedups': {BASELINES[b]: [{'design': d, 'batch_size': bs, 'dot_length': n, 'speedup': x}
-                                    for (d, bs, n), x in sorted(v.items())]
-                     for b, v in ups.items()},
-    }, indent=2) + '\n')
-    text = summary(rows, batch, length)
-    (args.results / f'{PREFIX}summary.txt').write_text(text)
-    print(text, end='')
+    (args.results / f'{PREFIX}speedup.tex').write_text(latex(table(eager)))
+    print(summary(rows, batch, length), end='')
     print(f'geomean over {len(eager)} designs: {geomean(list(eager.values())):.2f}x')
     return 0
 

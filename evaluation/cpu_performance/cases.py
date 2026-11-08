@@ -12,11 +12,15 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 from torch import Tensor
-from torchao.prototype.mx_formats.kernels import f4_unpacked_to_f32, f32_to_f4_unpacked, unpack_uint4
+from torchao.prototype.mx_formats.kernels import (
+    f4_unpacked_to_f32,
+    f32_to_f4_unpacked,
+    unpack_uint4,
+)
 from torchao.prototype.mx_formats.mx_tensor import to_mx
 from torchao.prototype.mx_formats.nvfp4_tensor import nvfp4_quantize
 
@@ -69,16 +73,19 @@ class Case:
     scale_block: int | None = None
     scale_dtype: torch.dtype | None = None
 
-    @property
-    def instruction(self) -> str:
-        """The instruction its simulator models: `shape_and_type` (NVIDIA) or `suffix` (AMD)."""
-        r = self.reference
-        return f'{r.arch} {getattr(r, "shape_and_type", None) or r.suffix}'
+
+class Reference(NamedTuple):
+    """The MMA-Sim simulator a design reproduces, and its operands' formats."""
+    simulator: Any
+    a_format: Format
+    b_format: Format
+    accumulator: torch.dtype
+    scale_block: int | None = None
+    scale_dtype: torch.dtype | None = None
 
 
-def references() -> dict[str, tuple]:
-    """Each FPy design's name to (MMA-Sim simulator, A format, B format,
-    accumulator dtype[, scale block, scale dtype])."""
+def references() -> dict[str, Reference]:
+    """Each design's name to its `Reference`."""
     f16, bf16, f32, f64 = torch.float16, torch.bfloat16, torch.float32, torch.float64
     e8m0, e4m3 = torch.float8_e8m0fnu, torch.float8_e4m3fn
     nv = {'e4m3': e4m3, 'e5m2': torch.float8_e5m2, 'e2m1': E2M1}
@@ -90,50 +97,50 @@ def references() -> dict[str, tuple]:
         return a if a == b else f'{a}.{b}'
 
     out = {
-        'nv.volta.f16.f32': (nv_ptx.MMA('Volta', 'm8n8k4.f32.f16.f16.f32'), f16, f16, f32),
-        'nv.volta.f16.f16': (nv_ptx.MMA('Volta', 'm8n8k4.f16.f16.f16.f16'), f16, f16, f16),
-        'nv.turing.f16.f32': (nv_ptx.MMA('Turing', 'm16n8k8.f32.f16.f16.f32'), f16, f16, f32),
-        'nv.turing.f16.f16': (nv_ptx.MMA('Turing', 'm16n8k8.f16.f16.f16.f16'), f16, f16, f16),
-        'nv.ampere.tf32.f32': (nv_ptx.MMA('Ampere', 'm16n8k8.f32.tf32.tf32.f32'), TF32, TF32, f32),
-        'nv.ampere.bf16.f32': (nv_ptx.MMA('Ampere', 'm16n8k16.f32.bf16.bf16.f32'), bf16, bf16, f32),
-        'nv.hopper.tf32.f32': (nv_ptx.WGMMA('Hopper', 'm64n8k8.f32.tf32.tf32'), TF32, TF32, f32),
-        'nv.hopper.bf16.f32': (nv_ptx.WGMMA('Hopper', 'm64n8k16.f32.bf16.bf16'), bf16, bf16, f32),
-        'nv.hopper.f16.f32': (nv_ptx.WGMMA('Hopper', 'm64n8k16.f32.f16.f16'), f16, f16, f32),
-        'nv.hopper.f16.f16.wgmma': (nv_ptx.WGMMA('Hopper', 'm64n8k16.f16.f16.f16'), f16, f16, f16),
-        'nv.hopper.f16.f16.mma': (nv_ptx.MMA('Hopper', 'm16n8k16.f16.f16.f16.f16'), f16, f16, f16),
-        'nv.blackwell.nvfp4': (
+        'nv.volta.f16.f32': Reference(nv_ptx.MMA('Volta', 'm8n8k4.f32.f16.f16.f32'), f16, f16, f32),
+        'nv.volta.f16.f16': Reference(nv_ptx.MMA('Volta', 'm8n8k4.f16.f16.f16.f16'), f16, f16, f16),
+        'nv.turing.f16.f32': Reference(nv_ptx.MMA('Turing', 'm16n8k8.f32.f16.f16.f32'), f16, f16, f32),
+        'nv.turing.f16.f16': Reference(nv_ptx.MMA('Turing', 'm16n8k8.f16.f16.f16.f16'), f16, f16, f16),
+        'nv.ampere.tf32.f32': Reference(nv_ptx.MMA('Ampere', 'm16n8k8.f32.tf32.tf32.f32'), TF32, TF32, f32),
+        'nv.ampere.bf16.f32': Reference(nv_ptx.MMA('Ampere', 'm16n8k16.f32.bf16.bf16.f32'), bf16, bf16, f32),
+        'nv.hopper.tf32.f32': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k8.f32.tf32.tf32'), TF32, TF32, f32),
+        'nv.hopper.bf16.f32': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f32.bf16.bf16'), bf16, bf16, f32),
+        'nv.hopper.f16.f32': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f32.f16.f16'), f16, f16, f32),
+        'nv.hopper.f16.f16.wgmma': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f16.f16.f16'), f16, f16, f16),
+        'nv.hopper.f16.f16.mma': Reference(nv_ptx.MMA('Hopper', 'm16n8k16.f16.f16.f16.f16'), f16, f16, f16),
+        'nv.blackwell.nvfp4': Reference(
             nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.block16.f32.e2m1.e2m1.ue4m3'),
             E2M1, E2M1, f32, 16, e4m3),
-        'nv.blackwell.mxfp4': (
+        'nv.blackwell.mxfp4': Reference(
             nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.block16.f32.e2m1.e2m1.ue8m0'),
             E2M1, E2M1, f32, 16, e8m0),
-        'amd.cdna2.bf16': (amd.MFMA('CDNA2', 'f32_32x32x4bf16'), bf16, bf16, f32),
-        'amd.cdna2.bf16_1k': (amd.MFMA('CDNA2', 'f32_32x32x8bf16_1k'), bf16, bf16, f32),
-        'amd.cdna2.f16': (amd.MFMA('CDNA2', 'f32_32x32x8f16'), f16, f16, f32),
-        'amd.cdna3.tf32': (amd.MFMA('CDNA3', 'f32_32x32x4_xf32'), TF32, TF32, f32),
-        'amd.cdna3.f16': (amd.MFMA('CDNA3', 'f32_32x32x8_f16'), f16, f16, f32),
-        'amd.cdna3.bf16': (amd.MFMA('CDNA3', 'f32_32x32x8_bf16'), bf16, bf16, f32),
-        'fp64 (fma)': (nv_ptx.MMA('Ampere', 'm8n8k4.f64.f64.f64.f64'), f64, f64, f64),
-        'fp32 (fma)': (amd.MFMA('CDNA3', 'f32_32x32x2_f32'), f32, f32, f32),
+        'amd.cdna2.bf16': Reference(amd.MFMA('CDNA2', 'f32_32x32x4bf16'), bf16, bf16, f32),
+        'amd.cdna2.bf16_1k': Reference(amd.MFMA('CDNA2', 'f32_32x32x8bf16_1k'), bf16, bf16, f32),
+        'amd.cdna2.f16': Reference(amd.MFMA('CDNA2', 'f32_32x32x8f16'), f16, f16, f32),
+        'amd.cdna3.tf32': Reference(amd.MFMA('CDNA3', 'f32_32x32x4_xf32'), TF32, TF32, f32),
+        'amd.cdna3.f16': Reference(amd.MFMA('CDNA3', 'f32_32x32x8_f16'), f16, f16, f32),
+        'amd.cdna3.bf16': Reference(amd.MFMA('CDNA3', 'f32_32x32x8_bf16'), bf16, bf16, f32),
+        'fp64.fma': Reference(nv_ptx.MMA('Ampere', 'm8n8k4.f64.f64.f64.f64'), f64, f64, f64),
+        'fp32.fma': Reference(amd.MFMA('CDNA3', 'f32_32x32x2_f32'), f32, f32, f32),
     }
     for a, b in fp8_pairs:
         for acc, dtype in (('f32', f32), ('f16', f16)):
-            out[f'nv.ada.{tag(a, b)}.{acc}'] = (
+            out[f'nv.ada.{tag(a, b)}.{acc}'] = Reference(
                 nv_ptx.MMA('Ada Lovelace', f'm16n8k32.{acc}.{a}.{b}.{acc}'), nv[a], nv[b], dtype)
-            out[f'nv.hopper.{tag(a, b)}.{acc}'] = (
+            out[f'nv.hopper.{tag(a, b)}.{acc}'] = Reference(
                 nv_ptx.WGMMA('Hopper', f'm64n8k32.{acc}.{a}.{b}'), nv[a], nv[b], dtype)
     for a, b in f8f6f4_pairs:
-        out[f'nv.blackwell.{tag(a, b)}.f32'] = (
+        out[f'nv.blackwell.{tag(a, b)}.f32'] = Reference(
             nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.f32.{a}.{b}'), nv[a], nv[b], f32)
-        out[f'nv.blackwell.{tag(a, b)}.f16.tcgen05'] = (
+        out[f'nv.blackwell.{tag(a, b)}.f16.tcgen05'] = Reference(
             nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.f16.{a}.{b}'), nv[a], nv[b], f16)
-        out[f'nv.rtx_blackwell.{tag(a, b)}.f16.mma'] = (
+        out[f'nv.rtx_blackwell.{tag(a, b)}.f16.mma'] = Reference(
             nv_ptx.MMA('RTX Blackwell', f'm16n8k32.f16.{a}.{b}.f16'), nv[a], nv[b], f16)
-        out[f'nv.blackwell.mx.{tag(a, b)}'] = (
+        out[f'nv.blackwell.mx.{tag(a, b)}'] = Reference(
             nv_ptx.TCGen05MMABlockScale('Blackwell', f'm128n8k32.block32.f32.{a}.{b}.ue8m0'),
             nv[a], nv[b], f32, 32, e8m0)
     for a, b in (('fp8', 'fp8'), ('bf8', 'bf8'), ('fp8', 'bf8')):
-        out[f'amd.cdna3.{tag(a, b)}'] = (
+        out[f'amd.cdna3.{tag(a, b)}'] = Reference(
             amd.MFMA('CDNA3', f'f32_32x32x16_{a}_{b}'), cdna3[a], cdna3[b], f32)
     return out
 
@@ -143,13 +150,13 @@ def cases(manifest: dict[str, Any]) -> list[Case]:
     refs = references()
     out = []
     for m in manifest['models']:
-        if m['name'] not in refs:
-            sys.exit(f'no MMA-Sim reference for {m["name"]}')
-        ref, a, b, acc, *scaling = refs[m['name']]
-        block, dtype = scaling or (None, None)
-        out.append(Case(m['name'].replace(' (', '.').rstrip(')'),   # `fp64 (fma)` -> `fp64.fma`
-                        ref, a, b, acc, m['k'], m['op'],
-                        torch.float64 if m['compute'] == 'double' else torch.float32, block, dtype))
+        name = m['name'].replace(' (', '.').rstrip(')')   # `fp64 (fma)` -> `fp64.fma`
+        if name not in refs:
+            sys.exit(f'no MMA-Sim reference for {name}')
+        r = refs[name]
+        out.append(Case(name, r.simulator, r.a_format, r.b_format, r.accumulator, m['k'], m['op'],
+                        torch.float64 if m['compute'] == 'double' else torch.float32,
+                        r.scale_block, r.scale_dtype))
     return out
 
 
@@ -267,19 +274,13 @@ def compare(got: Tensor, want: Tensor, name: str) -> dict[str, Any]:
         return {'valid': False, 'reason': 'shape or dtype mismatch',
                 f'{name}_shape': list(got.shape), 'mmasim_shape': list(want.shape),
                 f'{name}_dtype': str(got.dtype), 'mmasim_dtype': str(want.dtype)}
-    got_bits = got.contiguous().view(BITS[got.dtype]).flatten()
-    want_bits = want.contiguous().view(BITS[want.dtype]).flatten()
-    differences = (got_bits != want_bits).nonzero()
-    if differences.numel() == 0:
+    differ = (got.contiguous().view(BITS[got.dtype]) != want.contiguous().view(BITS[want.dtype]))
+    if not differ.any():
         return {'valid': True}
-    i, width = int(differences[0]), got.element_size() * 8
-
-    def hex_bits(bits: Tensor) -> str:
-        return f'0x{int(bits[i]) & ((1 << width) - 1):0{width // 4}x}'
-
-    return {'valid': False, 'reason': 'output bit mismatch', 'first_difference': i,
-            f'{name}_value': float(got.flatten()[i]), 'mmasim_value': float(want.flatten()[i]),
-            f'{name}_bits': hex_bits(got_bits), 'mmasim_bits': hex_bits(want_bits)}
+    i = int(differ.flatten().nonzero()[0])
+    return {'valid': False, 'reason': 'output bit mismatch', 'mismatches': int(differ.sum()),
+            'first_difference': i, f'{name}_value': float(got.flatten()[i]),
+            'mmasim_value': float(want.flatten()[i])}
 
 
 def validate(p: Prepared) -> dict[str, Any]:

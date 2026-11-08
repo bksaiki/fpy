@@ -1,4 +1,4 @@
-"""Puts the evaluation's modules and the MMA-Sim designs on the import path;
+"""Puts the evaluation's modules on the import path (`run` adds the rest);
 the designs' operators, built once."""
 
 import sys
@@ -7,19 +7,14 @@ from typing import Any
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(_ROOT), str(_ROOT.parent / 'common' / 'mma'), str(_ROOT.parents[1] / 'examples' / 'mmasim')]
-sys.path.append(str(_ROOT.parent))  # last: `config`, not shadowing this `run`
-
-BUILD = _ROOT.parent / '.torch_extensions' / 'cpu_performance'
-"""Kept between sessions, so that only changed designs recompile."""
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 @pytest.fixture(scope='session')
 def manifest() -> dict[str, Any]:
     import run
 
-    return run.build(BUILD)
+    return run.build()
 
 
 @pytest.fixture(scope='session')

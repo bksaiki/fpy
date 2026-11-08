@@ -22,8 +22,9 @@ uv run cpu_performance/run.py --smoke                   # one batch and length, 
 uv run cpu_performance/run.py --designs hopper -j 1     # designs by substring, one thread
 ```
 
-The designs compile first (`common/fpy2_models/generate_models.py`), into
-`build/` under the results, which later runs reuse.  On macOS, MMA-Sim's FMA
+The designs compile first, as the `common/fpy2_models` package (its
+`setup.py`, about a minute), rebuilt every run so that no stale build is
+timed.  On macOS, MMA-Sim's FMA
 helper needs OpenMP, which Apple's clang lacks: it compiles with Homebrew's
 LLVM (`brew install llvm`) unless `$CXX` is set.  `--compile` also times
 MMA-Sim under default `torch.compile`.
@@ -48,8 +49,8 @@ It exits 1 if any configuration disagrees with MMA-Sim.
   colored by hardware family;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup;
-- `perf-cpu-paper.json`: every speedup, at every batch size and length;
-- `perf-cpu-summary.txt`: the per-design table.
+
+and prints the per-design table.
 
 ## Tests
 
@@ -57,4 +58,4 @@ It exits 1 if any configuration disagrees with MMA-Sim.
 uv run pytest cpu_performance/tests
 ```
 
-They build the designs once into `.torch_extensions/cpu_performance/`.
+They rebuild the `fpy2_models` package once per session.

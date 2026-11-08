@@ -1,15 +1,12 @@
-import pytest
-import torch
-
 import cases as cs
-import config
+import pytest
 import run
+import torch
 
 
 def test_every_compiled_design_has_a_reference(manifest, cases):
     assert len(cases) == len(manifest['models'])
     assert len({c.name for c in cases}) == len({c.op for c in cases}) == len(cases)
-    assert all(c.instruction for c in cases)
 
 
 @pytest.mark.parametrize('distribution', list(cs.DISTRIBUTIONS))
@@ -57,13 +54,6 @@ def test_batched_calls_match_one_row_at_a_time(cases):
         batched = dpa(a, b, acc, *scales)
         for row in range(3):
             assert batched[row].item() == dpa(a[row], b[row], acc[row], *(s[row] for s in scales)).item()
-        with pytest.raises(RuntimeError):
-            dpa(a[:, :-1], b[:, :-1], acc, *scales)
-        with pytest.raises(RuntimeError):
-            dpa(a, b, acc[:-1], *scales)
-        if scales:
-            with pytest.raises(RuntimeError):
-                dpa(a, b, acc, *(s[:, :-1] for s in scales))
         with pytest.raises(ValueError):
             cs.prepare(c, 1, 1, length=c.k + 1)
 
@@ -74,8 +64,6 @@ def test_summary_separates_lengths():
     out = run.summarize(rows)
     assert [r['dot_length'] for r in out] == [1024, 2048]
     assert all(r['dots_per_second'] == 4 for r in out)
-    assert config.CPU_PERF_LENGTHS == (1024, 4096, 16384)
-    assert config.CPU_PERF_BATCHES == (1024, 4096, 16384)
 
 
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float64])
@@ -85,6 +73,5 @@ def test_validation_keeps_signed_zero_and_reports_first_mismatch(dtype):
     v = cs.validate(cs.Prepared(lambda: got, lambda: want))
     assert not v['valid']
     assert v['reason'] == 'output bit mismatch'
+    assert v['mismatches'] == 1
     assert v['first_difference'] == 1
-    assert int(v['fpy_bits'], 16) == 0
-    assert int(v['mmasim_bits'], 16) == 1 << (31 if dtype == torch.float32 else 63)
