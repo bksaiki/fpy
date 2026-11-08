@@ -764,11 +764,13 @@ Confirmed by toggling the pass rather than comparing two programs: the same
 kernel with `ReduceFusion` monkeypatched to the identity is 475 sized and 3500
 unsized against 719 / 721 fused, with the checksum unchanged either way.
 
-**The pass pays exactly where the length is not proven, and is applied
-regardless.** It runs before `Specialize`, so the representation it would need
-to decide by has not been chosen yet. Gating it means moving it, or splitting
-the decision from the rewrite; neither is done, and the sized-path loss is
-accepted.
+**The pass pays exactly where the length is not proven, and is applied only
+there.** It runs after `Specialize`, which proves the lengths, and with
+`arrays` on (proven lengths as `std::array`) it skips a comprehension of proven
+length. Run before `Specialize`, it also hid a guard's refinement from format
+inference: `if any([fp.isnan(s) for s in xs]): return ...` refines `xs` past
+it, the fused `acc = acc or b` loop does not, so a callee was specialized on a
+NaN-capable argument. That still happens where the length is unproven.
 
 Spelling a vector's `bool` element `uint8_t` would remove the cliff and make
 materializing win everywhere — considered and declined, since it would make one

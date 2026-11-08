@@ -45,7 +45,15 @@ open the positions it lowers.
 import dataclasses
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, Hoistability, SyntaxCheck
+from ..analysis import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
+    DefineUse,
+    DefineUseAnalysis,
+    Hoistability,
+    SyntaxCheck,
+)
+from ..analysis.array_size import static_trip_count
 from ..analysis.hoistability import force_names
 from ..ast.fpyast import (
     AllOf,
@@ -88,11 +96,14 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
     func: FuncDef
     gensym: Gensym
     strict: set[Expr]
+    sizes: ArraySizeAnalysis | None
+    """Where set, a comprehension of proven length is left alone."""
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, sized: bool):
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
         self.strict = Hoistability.analyze(func).strict
+        self.sizes = None if sized else ArraySizeInfer.analyze(func)
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -118,6 +129,8 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
             and isinstance(e.arg, ListComp)
             # multi-stage comps would need nested loops; leave them alone
             and len(e.arg.targets) == 1
+            and (self.sizes is None
+                 or static_trip_count(e.arg.iterables[0], self.sizes) is None)
         )
 
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
@@ -160,12 +173,16 @@ class ReduceFusion:
     for the rewrite shape and why the element is bound to a temp."""
 
     @staticmethod
-    def apply(func: FuncDef) -> FuncDef:
+    def apply(func: FuncDef, *, sized: bool = True) -> FuncDef:
         """Apply the transformation to a :class:`FuncDef`.  Returns a new
-        ``FuncDef``; the input is not mutated."""
+        ``FuncDef``; the input is not mutated.
+
+        With *sized* false, a comprehension whose length is statically proven
+        is left alone: a backend holding it in a fixed-size array pays more
+        for the loop than for the list."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got `{func}`")
         def_use = DefineUse.analyze(func)
-        out = _ReduceFusionInstance(func, def_use).apply()
+        out = _ReduceFusionInstance(func, def_use, sized).apply()
         SyntaxCheck.check(out, ignore_unknown=True)
         return out
