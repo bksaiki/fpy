@@ -22,9 +22,8 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MMASIM = ROOT / 'examples' / 'mmasim'
-# `examples/mmasim`, for `compile` and `compile_triton`; `serve`, for `core`
-sys.path[:0] = [str(MMASIM), str(MMASIM / 'serve')]
+# `common/mma`, for `compile`, `compile_triton` and `core`; `examples/mmasim`, for `models`
+sys.path[:0] = [str(ROOT / 'evaluation' / 'common' / 'mma'), str(ROOT / 'examples' / 'mmasim')]
 
 from compile import DESIGNS, _prepare
 from compile_triton import compile_matmul

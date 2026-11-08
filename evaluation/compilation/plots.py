@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / 'evaluation' / 'results'
-sys.path.insert(0, str(ROOT / 'examples' / 'mmasim' / 'serve'))
+sys.path.insert(0, str(ROOT / 'evaluation' / 'dse' / 'llm'))
 
 # `plot_grid.py`'s look: its grid colour and text styles
 from plot_grid import GRID, INK, LARGE, SMALL

@@ -229,9 +229,11 @@ def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
             return dpa_special_values(A, B, c)
 
+        e_s = exponent(alpha, emin_s) + exponent(beta, emin_s)
+
         es = [e_zero if p == 0 else
               exponent(a, emin_a) + exponent(b, emin_b)
-              + exponent(alpha, emin_s) + exponent(beta, emin_s)
+              + e_s
               for p, a, b in zip(prods, A, B)]
         e_c = e_zero if c == 0 else exponent(c, emin_c)
 

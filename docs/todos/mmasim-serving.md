@@ -1,6 +1,6 @@
 # mmasim serving: the grid evaluation
 
-Code under `examples/mmasim/serve/`; how to run it: `serve/README.md`.
+Code under `evaluation/dse/llm/` (shared harness: `evaluation/common/mma/`); how to run it: `evaluation/dse/llm/README.md`.
 Every `nn.Linear` of an LLM computes through a Triton kernel emitted from an
 MMA design, and the effect of each design's arithmetic on the model's
 next-token predictions is measured: the paper's RQ1.
@@ -18,7 +18,7 @@ MT-Bench, quantized checkpoints, `fp8-block`, split-K -- were removed after
 - **Run only the tests relevant to the phase**; the full suite once, at the
   end.
 - **Comments stay succinct**; process notes belong here.
-- `pytest -n 8`, never `-n auto`; `serve/tests` serially: they load models
+- `pytest -n 8`, never `-n auto`; `evaluation/dse/llm/tests` and `evaluation/common/mma/core/tests` serially: they load models
   on the GPU (12 GB).
 
 ## The harness
@@ -149,8 +149,9 @@ and free Δ NLL over `F`, ~50 segments.
 ## After the last phase
 
     .venv/bin/python -m pytest -n 8 tests/unit
-    cd examples/mmasim && ../../.venv/bin/python -m pytest -n 8 tests && ../../.venv/bin/python -m pytest serve/tests
-    .venv/bin/ruff check examples/mmasim/serve
+    .venv/bin/python -m pytest -n 8 examples/mmasim/tests evaluation/common/mma/tests
+    .venv/bin/python -m pytest evaluation/common/mma/core/tests evaluation/dse/llm/tests
+    .venv/bin/ruff check evaluation/common/mma evaluation/dse/llm
 
 ## Sources
 

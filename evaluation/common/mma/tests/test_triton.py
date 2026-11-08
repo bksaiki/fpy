@@ -1,0 +1,159 @@
+"""
+The Triton kernels against the interpreter on hard test cases: zeros of both
+signs, the smallest and largest magnitudes, the least normal, and the
+specials each format has.  Needs a GPU; skipped without one.
+
+    pytest evaluation/common/mma/tests/test_triton.py
+"""
+
+import functools
+import math
+import os
+import sys
+from typing import TYPE_CHECKING
+
+import pytest
+
+_MMA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [_MMA, os.path.join(_MMA, '..', '..', '..', 'examples', 'mmasim')]
+
+from fpy2.backend.triton import unavailable
+
+if TYPE_CHECKING:
+    from generator import Design
+
+_WHY = unavailable()
+pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
+
+
+@functools.cache
+def _kernel(name: str):
+    """`(kernel, design, arg_types)` for the design `name`."""
+    import compile_triton as ct
+    from compile import DESIGNS
+
+    return ct.compile_matmul(dict(DESIGNS)[name], None)
+
+
+@pytest.mark.parametrize('name', ['nv.volta.f16.f32', 'amd.cdna3.bf8'])
+def test_hard_cases_agree(name: str) -> None:
+    import compile_triton as ct
+
+    kernel, design, arg_types = _kernel(name)
+    m, n, trials = 4, 4, 8
+    agree = ct.run_matmul(kernel, design, arg_types, m, n, trials, seed=0, hard_every=1)
+    assert agree == m * n * trials
+
+
+@pytest.mark.parametrize('name', ['nv.volta.f16.f32', 'nv.hopper.f16.f32'])
+def test_all_negative_zeros_agree(name: str) -> None:
+    """Every product and the accumulator `-0`: the terms are summed as
+    integers, which have no `-0`, so the sign is the rounding's to give."""
+    import compile_triton as ct
+    import torch
+
+    from fpy2.backend.triton import launch
+
+    kernel, design, arg_types = _kernel(name)
+    a, b, c = arg_types[:3]
+    m = n = 2
+    A = [[-0.0] * ct._length(a) for _ in range(m)]
+    BT = [[0.0] * ct._length(b) for _ in range(n)]
+    C = [[-0.0] * n for _ in range(m)]
+    out = torch.zeros(m, n, dtype=ct._dtype(ct._fmt(c))).cuda()
+    launch(kernel, [ct._tensor(A, a), ct._tensor(BT, b), ct._tensor(C, c), out], block=64)
+    got = out.cpu().tolist()
+    for i in range(m):
+        for j in range(n):
+            want = float(design(A[i], BT[j], C[i][j]))
+            assert math.copysign(1.0, got[i][j]) == math.copysign(1.0, want) and got[i][j] == want
+
+
+def _remixes() -> 'dict[str, Design]':
+    """Designs no model has, one or more per structure the catalog has."""
+    from dataclasses import replace
+
+    from generator import Design
+    from generator.catalog import CATALOG
+    from models.nv import RZ_E8M13, RZ_FP32
+
+    import fpy2 as fp
+
+    hopper = CATALOG['nv.hopper.e4m3.f32']
+    return {
+        'hopper-separate': replace(hopper, join='separate', F2=20, e_zero=None),
+        'hopper-ftz': replace(hopper, ftz=True),
+        'tree-8-exact': Design(fp.BF16, fp.BF16, fp.FP32, 8, fp.FP32, 16, sum='tree'),
+        'cdna2-rz': replace(CATALOG['amd.cdna2.f16'], rho=RZ_FP32),
+        'exact-e8m13': Design(fp.MX_E4M3, fp.MX_E4M3, fp.FP32, 16, RZ_E8M13, 32, sum='exact'),
+        'even-odd-e4m3': Design(fp.MX_E4M3, fp.MX_E4M3, fp.FP32, 16, fp.FP32, 32, F=13,
+                                join='separate', groups='even-odd'),
+        'mx-13': replace(CATALOG['nv.blackwell.mx.e4m3'], F=13, rho=RZ_E8M13),
+        'nvfp4-g32': replace(CATALOG['nv.blackwell.nvfp4'], G=32),
+        'fma-rz': replace(CATALOG['fp32 (fma)'], rho=RZ_FP32),
+        'tree-16': replace(CATALOG['amd.cdna2.f16'], L=16, k=32),
+        'hopper-rne': replace(hopper, rho=fp.IEEEContext(8, 22, fp.RM.RNE)),
+        'cdna3-rne-7': replace(CATALOG['amd.cdna3.bf16'], rho=fp.IEEEContext(8, 15, fp.RM.RNE)),
+        'hopper-tree': replace(hopper, sum='tree'),
+        'ampere-tree': replace(CATALOG['nv.ampere.bf16.f32'], sum='tree'),
+        'cdna3-tree': replace(CATALOG['amd.cdna3.bf16'], sum='tree'),
+        # an exact round to `rho`, its operand held wider
+        'hopper-bf16-f8': replace(CATALOG['nv.hopper.bf16.f32'], F=8),
+        # an FP16-held round to the integers, which libdevice has only for FP32 and FP64
+        'hopper-bf16-f10-rne13': replace(CATALOG['nv.hopper.bf16.f32'], F=10, rho=fp.IEEEContext(8, 22, fp.RM.RNE)),
+        'cdna3-fma': replace(CATALOG['amd.cdna3.bf16'], sum='fma'),
+    }
+
+
+REFUSED = {
+    'exact-e8m13': '`sum` is exact, and no storage holds',
+    # the chain's exit is bounded only per add, not as a sum
+    'cdna3-fma': 'no storage format contains',
+}
+"""The remixes the backend refuses, by error text."""
+
+
+@pytest.mark.parametrize('remix', list(REFUSED))
+def test_a_backend_gap_is_refused(remix: str) -> None:
+    """Refused at compile time, never computed wrong; a gap closed fails
+    here, to move its remix to the agreeing ones."""
+    import compile_triton as ct
+    from generator import build
+
+    from fpy2.analysis.storage_infer import StorageSelectionError
+    from fpy2.backend.triton.emitter import TritonEmitError
+
+    with pytest.raises((TritonEmitError, StorageSelectionError), match=REFUSED[remix]):
+        ct.compile_matmul(lambda: build(_remixes()[remix]), None)
+
+
+@pytest.mark.parametrize('tile', [(16, 1), (64, 4)])
+@pytest.mark.parametrize('remix', [r for r in _remixes() if r not in REFUSED])
+def test_a_remix_agrees_with_the_interpreter(remix: str, tile: tuple[int, int]) -> None:
+    """Every output bit for bit, a quarter of the draws hard cases, at two
+    tiles: a tile changes the launch, not the result."""
+    import compile_triton as ct
+    from generator import build
+
+    kernel, design, arg_types = ct.compile_matmul(lambda: build(_remixes()[remix]), None)
+    m, n, trials = 4, 4, 8
+    agree = ct.run_matmul(kernel, design, arg_types, m, n, trials, seed=0, hard_every=2,
+                          block=tile[0], block_m=tile[1])
+    assert agree == m * n * trials
+
+
+@pytest.mark.parametrize('name', ['nv.blackwell.mx.e4m3', 'nv.blackwell.mx.e2m1', 'nv.blackwell.mxfp4',
+                                  'nv.blackwell.nvfp4', 'mx-13'])
+def test_a_block_scaled_design_is_one_kernel_at_any_k(name: str) -> None:
+    """Compiled once, its chain of instructions agrees with the
+    interpreter's bit for bit at one, two and three instructions."""
+    import compile_triton as ct
+    from compile import DESIGNS
+    from generator import build as generate
+
+    build = dict(DESIGNS).get(name) or (lambda: generate(_remixes()[name]))
+    kernel, _, arg_types = ct.compile_matmul(build, None)
+    m, n, trials = 3, 2, 4
+    for s in (1, 2, 3):
+        design, at_k = ct.typed(build, s * ct._length(arg_types[0]))
+        assert ct.run_matmul(kernel, design, at_k, m, n, trials, seed=s, hard_every=2) == m * n * trials

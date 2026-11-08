@@ -581,7 +581,7 @@ class TestAPowerOfTwoThroughAName:
             [fmt] = [f for e, f in fa.by_expr.items() if e.format().startswith('fp.round')]
             maxvals.append(fmt.pos_maxval)
         # `x * 2 ** -k` is below 2^11, so an 11-bit integer
-        assert maxvals == [fp.RealFloat.from_int(2 ** 11)] * 2
+        assert maxvals == [fp.RealFloat.from_int(2 ** 11 - 1)] * 2
 
 
 class TestAPartOfAListKeepsItsPairing:
