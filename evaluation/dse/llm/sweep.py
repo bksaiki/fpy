@@ -92,9 +92,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--manifest', action='store_true',
                     help='compile and launch the grid as --model runs it, and write manifest.csv')
     ap.add_argument('--list', action='store_true', help='print the points, and stop')
+    ap.add_argument('--smoke', action='store_true', help="the grid's first 2 designs, 1 segment")
     args = ap.parse_args(argv)
+    if args.smoke:
+        args.segments = 1
 
-    pts = config.grid()
+    pts = config.grid()[:2] if args.smoke else config.grid()
     tag = args.model.rsplit('/', 1)[-1]
     out = args.results / 'sweep'
     table = out / f'sweep-grid-{tag}.csv'

@@ -212,11 +212,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 1,
                     help='processes compiling the designs, and threads grading them '
                     '(default: every CPU)')
+    ap.add_argument('--smoke', action='store_true', help="the grid's first 2 designs, 64 x 64")
     args = ap.parse_args(argv)
     # the threads `<op>_gemm` grades on
     torch.set_num_threads(args.jobs)
 
-    pts = config.grid()
+    pts = config.grid()[:2] if args.smoke else config.grid()
+    n = 64 if args.smoke else config.BLAS_N
     designs = [FMA, *(p.design for p in pts)]
     # each stage's wall time
     wall = {}
@@ -231,9 +233,11 @@ def main(argv: list[str]) -> int:
 
     rows = []
     for f, (fmt, ss) in config.BLAS_FORMATS.items():
-        cases = [case(test, config.BLAS_N, s, fmt) for test in ('1c', '2c') for s in ss]
-        fma = [error(models[FMA], c) for c in cases]
         mine = [p for p in pts if p.design.a == fmt]
+        if not mine:
+            continue
+        cases = [case(test, n, s, fmt) for test in ('1c', '2c') for s in ss]
+        fma = [error(models[FMA], c) for c in cases]
         for p in mine:
             cpp = compiled[p.design]
             point = {'anchor': p.anchor, 'format': f, 'value': p.value, 'is_anchor': p.is_anchor,

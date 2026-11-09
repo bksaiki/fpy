@@ -156,9 +156,9 @@ def _foreign(out: Path) -> list[str]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('designs', nargs='*', default=list(config.GSM8K_DESIGNS or mmasim_matmul.DESIGNS),
-                    choices=mmasim_matmul.DESIGNS, metavar='DESIGN',
-                    help='designs (default: every design both backends compute, `mmasim_matmul.DESIGNS`)')
+    ap.add_argument('designs', nargs='*', choices=mmasim_matmul.DESIGNS, metavar='DESIGN',
+                    help='designs (default: every design both backends compute, `mmasim_matmul.DESIGNS`; '
+                         'with --smoke, Hopper BF16 and Blackwell FP8)')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the results directory, replaced (default %(default)s)')
     ap.add_argument('-n', '--problems', type=int, default=config.GSM8K_PROBLEMS,
@@ -188,6 +188,9 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.smoke:
         args.problems, args.max_new = 2, 8
+    if not args.designs:
+        args.designs = (['nv.hopper.bf16.f32', 'nv.blackwell.e4m3.f32'] if args.smoke
+                        else list(config.GSM8K_DESIGNS or mmasim_matmul.DESIGNS))
     if 'mmasim' in args.backends and 'fpy' not in args.backends:
         ap.error("MMA-Sim's prediction starts from FPy's run: add --backends fpy")
     if foreign := _foreign(args.out):

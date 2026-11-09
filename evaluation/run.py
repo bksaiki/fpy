@@ -14,6 +14,7 @@ evaluation to run needs (README.md, Setup).
     python evaluation/run.py DIR --plot        # only redraw, from existing results
     python evaluation/run.py DIR --no-cache    # discard results and compile caches first
     python evaluation/run.py DIR --threads 8   # processes or threads per evaluation
+    python evaluation/run.py DIR --smoke       # each evaluation at a token size, in minutes
 """
 
 import argparse
@@ -37,8 +38,9 @@ TAG = config.MODEL.rsplit('/', 1)[-1]
 Commands = Callable[[Path], list[list[str]]]
 """An evaluation's commands, given its results directory."""
 
-RunCommands = Callable[[Path, list[str]], list[list[str]]]
-"""Its run's commands, given also `-j N` (`--threads`) or nothing."""
+RunCommands = Callable[[Path, list[str], list[str]], list[list[str]]]
+"""Its run's commands, given also `-j N` (`--threads`) or nothing, and
+`--smoke` or nothing."""
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ class Eval:
 
 EVALS = {
     'analysis': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'analysis' / 'run.py'), '-o', str(d), *j]],
+        run=lambda d, j, s: [[PY, str(HERE / 'analysis' / 'run.py'), '-o', str(d), *j, *s]],
         plot=lambda d: [[PY, str(HERE / 'analysis' / 'report.py'), str(d)]],
         done='precision-paper.json', needs=('matplotlib',)),
     'sensitivity': Eval(
@@ -74,7 +76,8 @@ EVALS = {
         done='ablation-paper.json', needs=()),
     # `explore.py` and `plots.py` add `blas/` to the root they are given
     'blas': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'dse' / 'blas' / 'explore.py'), '--results', str(d.parent), *j]],
+        run=lambda d, j, s: [[PY, str(HERE / 'dse' / 'blas' / 'explore.py'), '--results', str(d.parent),
+                              *j, *s]],
         plot=lambda d: [[PY, str(HERE / 'dse' / 'blas' / 'plots.py'), '--results', str(d.parent)]],
         done='blas-grid.csv', needs=('torch', 'matplotlib'),
         tools=(os.environ.get('CXX', 'c++'),)),  # as `torch.utils.cpp_extension` picks it
@@ -84,15 +87,16 @@ EVALS = {
         done='summary.csv', needs=('torch', 'torchao', 'mmasim', 'matplotlib'),
         tools=(os.environ.get('CXX', 'c++'),)),
     'gsm8k': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d), *j]],
+        run=lambda d, j, s: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d), *j, *s]],
         plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)],
                         [PY, str(HERE / 'gsm8k' / 'plot.py'), str(d)]],
         done='gsm8k-speed.json', needs=('torch', 'triton', 'transformers', 'datasets', 'mmasim', 'matplotlib'),
         gpu=True),
     'llm': Eval(
         # the manifest compiles one design at a time, so each compile time is its own
-        run=lambda d, j: [[PY, str(HERE / 'dse' / 'llm' / 'sweep.py'), '--results', str(d), '--manifest', '-j', '1'],
-                          [PY, str(HERE / 'dse' / 'llm' / 'sweep.py'), '--results', str(d), *j]],
+        run=lambda d, j, s: [[PY, str(HERE / 'dse' / 'llm' / 'sweep.py'), '--results', str(d), '--manifest',
+                              '-j', '1', *s],
+                             [PY, str(HERE / 'dse' / 'llm' / 'sweep.py'), '--results', str(d), *j, *s]],
         plot=lambda d: [[PY, str(HERE / 'dse' / 'llm' / 'plot_grid.py'), '--results', str(d),
                          '--table', f'sweep-grid-{TAG}.csv']],
         done=f'sweep/sweep-grid-{TAG}.provenance.json',
@@ -133,6 +137,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--plot', action='store_true', help='only redraw plots and tables')
     ap.add_argument('--no-cache', action='store_true',
                     help="discard each evaluation's results and compile caches, and rerun it")
+    ap.add_argument('--smoke', action='store_true',
+                    help='run each evaluation at a token size (into a results root of its own)')
     args = ap.parse_args(argv)
     if args.plot and args.no_cache:
         ap.error('--plot redraws from results that --no-cache would discard')
@@ -151,7 +157,8 @@ def main(argv: list[str]) -> int:
         if args.no_cache:
             shutil.rmtree(out, ignore_errors=True)
         if not args.plot and not (out / ev.done).exists():
-            if not _run(ev.run(out, [] if args.threads is None else ['-j', str(args.threads)])):
+            if not _run(ev.run(out, [] if args.threads is None else ['-j', str(args.threads)],
+                               ['--smoke'] if args.smoke else [])):
                 failed.append(name)
                 continue
         if (out / ev.done).exists():
