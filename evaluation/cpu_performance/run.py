@@ -15,7 +15,12 @@ The designs compile first, as the `common/fpy2_models` package (its
 Writes into the results directory (`evaluation/results/cpu_performance/`, or
 `-o DIR`) `validation.json`, `measurements.csv` (each block's time),
 `summary.csv` (each configuration's median), `provenance.json` and
-`report.py`'s outputs.  Exits 1 if any configuration disagrees with MMA-Sim.
+`report.py`'s outputs.  A partial run -- `--smoke`, `--designs`, or batches or
+lengths other than `config.py`'s -- writes into
+`evaluation/results/cpu_performance-partial/` instead, so as not to replace a
+full run's.  `summary.csv` comes last, only once every configuration agrees
+with MMA-Sim: `evaluation/run.py` takes it to mean the run is finished.
+Exits 1, without it, if any configuration disagrees.
 """
 
 import argparse
@@ -24,10 +29,12 @@ import json
 import os
 import platform
 import random
+import shlex
 import statistics
 import subprocess
 import sys
 import time
+import zlib
 from collections import defaultdict
 from collections.abc import Callable
 from itertools import product
@@ -46,6 +53,7 @@ from core import outputs
 from torch.utils import benchmark
 
 RESULTS = _ROOT / 'evaluation' / 'results' / 'cpu_performance'
+PARTIAL = RESULTS.with_name('cpu_performance-partial')
 
 
 def build() -> dict[str, Any]:
@@ -65,6 +73,18 @@ def time_blocks(fn: Callable[[], Any], threads: int, min_run_time: float) -> lis
     m = benchmark.Timer(stmt='fn()', globals={'fn': fn}, num_threads=threads).blocked_autorange(
         min_run_time=min_run_time)
     return [t / m.number_per_run for t in m.raw_times]
+
+
+def compiler_version(cxx: str) -> str:
+    """The first line *cxx* `--version` prints, or why there is none: never
+    raises, as it runs after the timing."""
+    try:
+        done = subprocess.run([*shlex.split(cxx), '--version'], capture_output=True, text=True,
+                              timeout=60, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return f'{cxx}: {type(e).__name__}: {e}'
+    lines = (done.stdout or done.stderr).splitlines()
+    return lines[0] if lines else f'{cxx}: no version printed'
 
 
 KEY = ('design', 'implementation', 'batch_size', 'dot_length', 'threads')
@@ -91,7 +111,8 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('-o', '--out', type=Path, default=RESULTS, help='results directory (default: %(default)s)')
+    ap.add_argument('-o', '--out', type=Path,
+                    help=f'results directory (default: {RESULTS}, or {PARTIAL} for a partial run)')
     ap.add_argument('-j', '--threads', type=int, help="threads for both implementations (default: PyTorch's)")
     ap.add_argument('--designs', nargs='+', default=[], metavar='NAME',
                     help='only the designs whose names contain one of these')
@@ -106,12 +127,19 @@ def main(argv: list[str]) -> int:
     replicates = 1 if args.smoke else config.CPU_PERF_REPLICATES
     min_run_time = 0.05 if args.smoke else config.CPU_PERF_MIN_RUN_TIME
     if args.threads is not None:
-        # PyTorch, which runs FPy's models, and MMA-Sim's OpenMP FMA helper
-        os.environ['OMP_NUM_THREADS'] = str(args.threads)
-        torch.set_num_threads(args.threads)
+        torch.set_num_threads(args.threads)   # PyTorch's, which runs FPy's models
     threads = torch.get_num_threads()
+    # as many for MMA-Sim's OpenMP FMA helper.  On macOS it shares PyTorch's
+    # OpenMP runtime, and so its threads; on Linux, GCC links it to its own
+    # libgomp, which reads this when the helper loads (`import cases`, below)
+    # and would otherwise take every core
+    os.environ['OMP_NUM_THREADS'] = str(threads)
 
-    out = args.out.resolve()
+    partial = (args.smoke or args.designs or tuple(args.batches) != config.CPU_PERF_BATCHES
+               or tuple(args.lengths) != config.CPU_PERF_LENGTHS)
+    out = (args.out or (PARTIAL if partial else RESULTS)).resolve()
+    # an earlier run's, which would mark this one finished should it fail
+    (out / 'summary.csv').unlink(missing_ok=True)
     manifest = build()
     import cases as cs  # MMA-Sim, compiling its FMA helper, after the designs' build
     import report
@@ -122,16 +150,19 @@ def main(argv: list[str]) -> int:
                    for n, r in manifest['unsupported'].items()]
     rows = []
     rng = random.Random(config.CPU_PERF_SEED)
-    for (i, c), length, batch in product(enumerate(cases), args.lengths, args.batches):
+    for c, length, batch in product(cases, args.lengths, args.batches):
         label = f'{c.name} batch={batch} length={length}'
-        seed = config.CPU_PERF_SEED + i * 1_000_003 + batch
+        # by the design's name, not its place among those run, so that a
+        # `--designs` run draws a full run's inputs
+        seed = config.CPU_PERF_SEED + zlib.crc32(c.name.encode()) * 1_000_003 + batch
         torch._dynamo.reset()   # compiled from scratch each time, as in a fresh process
         p = cs.prepare(c, batch, seed, length, args.compile, config.CPU_PERF_DISTRIBUTION)
+        want = p.mmasim()   # once: eager MMA-Sim is the slowest call of all
         v = {'design': c.name, 'batch_size': batch, 'dot_length': length, 'seed': seed,
-             **cs.validate(p)}
+             **cs.validate(p, want)}
         impls = {'fpy': p.fpy, 'mmasim': p.mmasim}
         if args.compile:
-            v['mmasim_compiled'] = cs.validate_compiled(p)
+            v['mmasim_compiled'] = cs.validate_compiled(p, want)
             if v['mmasim_compiled']['valid']:
                 impls['mmasim-compiled'] = p.mmasim_compiled
             else:
@@ -140,10 +171,9 @@ def main(argv: list[str]) -> int:
         if not v['valid']:
             print(f'INVALID {label}: {v["reason"]}', flush=True)
             continue
-        # warmed up, then each timed once per replicate, in a shuffled order so
-        # that none is always first
-        for fn in impls.values():
-            fn()
+        # warmed up by validation, which ran each once (compiling MMA-Sim);
+        # each timed once per replicate, in a shuffled order so that none is
+        # always first
         order = list(impls.items())
         for rep in range(replicates):
             rng.shuffle(order)
@@ -156,21 +186,24 @@ def main(argv: list[str]) -> int:
     invalid = sum(v.get('valid') is False for v in validations)
     outputs.write_json(out / 'validation.json', validations)
     outputs.write_csv(out / 'measurements.csv', rows)
-    cxx = os.environ.get('CXX', 'c++')
     outputs.write_json(out / 'provenance.json', {
         'argv': sys.argv, **outputs.commit(), 'machine': platform.platform(),
         'processor': platform.processor() or platform.machine(), 'cpus': os.cpu_count(),
         'python': platform.python_version(), 'torch': torch.__version__,
         'torchao': importlib.metadata.version('torchao'), 'mmasim': importlib.metadata.version('mmasim'),
-        'cxx': subprocess.run([cxx, '--version'], capture_output=True, text=True).stdout.splitlines()[0],
+        'cxx': compiler_version(os.environ.get('CXX', 'c++')),
+        'mmasim_cxx': compiler_version(cs.MMASIM_CXX),
         'threads': threads, 'replicates': replicates, 'min_run_time': min_run_time,
         'distribution': cs.DISTRIBUTIONS[config.CPU_PERF_DISTRIBUTION], 'seed': config.CPU_PERF_SEED,
         'designs': args.designs, 'batches': args.batches, 'lengths': args.lengths,
         'compile': args.compile, 'smoke': args.smoke,
         'elapsed_seconds': time.monotonic() - started, 'invalid_configurations': invalid})
+    if invalid:
+        print(f'{invalid} configurations disagree with MMA-Sim: no summary.csv', flush=True)
+        return 1
     outputs.write_csv(out / 'summary.csv', summarize(rows))   # last: the run is complete
     report.main([str(out)])
-    return 1 if invalid else 0
+    return 0
 
 
 if __name__ == '__main__':

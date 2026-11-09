@@ -38,7 +38,11 @@ It writes into `evaluation/results/cpu_performance/` (or `-o DIR`):
 - `provenance.json`: the commit, machine, versions and settings;
 - `report.py`'s outputs, below.
 
-It exits 1 if any configuration disagrees with MMA-Sim.
+A partial run (`--smoke`, `--designs`, or other `--batches` or `--lengths`)
+writes into `evaluation/results/cpu_performance-partial/` instead, so as not
+to replace a full run's results.  `summary.csv` is written last, and only if
+every configuration agrees with MMA-Sim; otherwise the run exits 1 without it,
+and `evaluation/run.py` reruns it next time.
 
 ## Report
 
@@ -49,6 +53,8 @@ It exits 1 if any configuration disagrees with MMA-Sim.
   colored by hardware family;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup;
+- `perf-cpu-macros.tex`: the paper's `\EvalCPUPerf...` macros (speedups,
+  designs, batch, length, threads), to paste into its `eval.tex`;
 
 and prints the per-design table.
 

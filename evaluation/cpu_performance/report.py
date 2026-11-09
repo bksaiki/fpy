@@ -12,6 +12,8 @@ Writes into the results directory:
   its hardware family, block-scaled formats hatched;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup, and all designs';
+- `perf-cpu-macros.tex`: the paper's `EvalCPUPerf...` macros, for its
+  `eval.tex`: all designs' speedups, and the configuration they are at;
 
 and prints the per-design table.
 """
@@ -115,6 +117,26 @@ def latex(rows: list[dict[str, Any]]) -> str:
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 
+def macros(values: dict[str, float], batch: int, length: int, threads: int) -> str:
+    """The paper's macros for *values*' speedups, as `eval.tex` writes them,
+    rounded as `latex` rounds them."""
+    def cmd(name: str, value: str) -> str:
+        return f'\\newcommand{{\\EvalCPUPerf{name}}}{{{value}\\xspace}}'
+
+    xs = list(values.values())
+    return '\n'.join([
+        '%% CPU performance (fpy evaluation/cpu_performance/report.py)',
+        f'% FPy over eager MMA-Sim: a batch of {batch} dot products of length {length},',
+        f'% on {threads} threads; least, greatest and geometric mean over {len(xs)} designs.',
+        *(cmd(f'Speedup{k}', f'{x:.2f}$\\times$')
+          for k, x in (('Min', min(xs)), ('Max', max(xs)), ('Mean', geomean(xs)))),
+        cmd('Designs', str(len(xs))),
+        cmd('Batch', str(batch)),
+        cmd('Length', str(length)),
+        cmd('Threads', str(threads)),
+        ''])
+
+
 def figure(values: dict[str, float], out: Path) -> None:
     """`perf-cpu-speedup`: *values*' designs ascending, unnamed; the legend
     names their families."""
@@ -209,6 +231,8 @@ def main(argv: list[str]) -> int:
         sys.exit(f'no design was timed at batch={batch} length={length}')
     figure(eager, args.results)
     (args.results / f'{PREFIX}speedup.tex').write_text(latex(table(eager)))
+    threads = next(r['threads'] for r in rows if (r['batch_size'], r['dot_length']) == (batch, length))
+    (args.results / f'{PREFIX}macros.tex').write_text(macros(eager, batch, length, threads))
     print(summary(rows, batch, length), end='')
     print(f'geomean over {len(eager)} designs: {geomean(list(eager.values())):.2f}x')
     return 0

@@ -25,14 +25,16 @@ from torchao.prototype.mx_formats.mx_tensor import to_mx
 from torchao.prototype.mx_formats.nvfp4_tensor import nvfp4_quantize
 
 
-def _import_mmasim() -> tuple[Any, Any, Any]:
-    """MMA-Sim's `amd`, `nv_ptx` and `truncate_fp32_to_tf32`.  Its FMA helper
-    compiles on import and needs OpenMP, which Apple's clang lacks: on macOS,
-    Homebrew's LLVM compiles it, unless `$CXX` is set."""
+def _import_mmasim() -> tuple[Any, Any, Any, str]:
+    """MMA-Sim's `amd`, `nv_ptx` and `truncate_fp32_to_tf32`, and the
+    compiler of its FMA helper.  The helper compiles on import and needs
+    OpenMP, which Apple's clang lacks: on macOS, Homebrew's LLVM compiles it,
+    unless `$CXX` is set."""
     brew = Path('/opt/homebrew/opt/llvm/bin/clang++')
     swap = platform.system() == 'Darwin' and 'CXX' not in os.environ and brew.exists()
     if swap:
         os.environ['CXX'] = str(brew)
+    cxx = os.environ.get('CXX', 'c++')   # as `torch.utils.cpp_extension` picks it
     try:
         from mmasim import amd, nv_ptx
         from mmasim.arithmetic.helper import truncate_fp32_to_tf32
@@ -42,10 +44,10 @@ def _import_mmasim() -> tuple[Any, Any, Any]:
     finally:
         if swap:   # the designs' operators build with the default compiler
             del os.environ['CXX']
-    return amd, nv_ptx, truncate_fp32_to_tf32
+    return amd, nv_ptx, truncate_fp32_to_tf32, cxx
 
 
-amd, nv_ptx, truncate_fp32_to_tf32 = _import_mmasim()
+amd, nv_ptx, truncate_fp32_to_tf32, MMASIM_CXX = _import_mmasim()
 
 # Operand formats without a torch dtype.  MMA-Sim takes TF32 operands as FP32
 # and truncates them itself; E2M1 (FP4) operands only as FP16 values, which
@@ -283,9 +285,10 @@ def compare(got: Tensor, want: Tensor, name: str) -> dict[str, Any]:
             'mmasim_value': float(want.flatten()[i])}
 
 
-def validate(p: Prepared) -> dict[str, Any]:
-    """FPy's output against eager MMA-Sim's."""
-    want, got = p.mmasim(), p.fpy()
+def validate(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
+    """FPy's output against eager MMA-Sim's, *want* if already computed."""
+    want = p.mmasim() if want is None else want
+    got = p.fpy()
     if got.dtype != want.dtype:
         # FPy computes FP16-output designs in FP32; their results must still
         # be exactly FP16
@@ -297,11 +300,12 @@ def validate(p: Prepared) -> dict[str, Any]:
     return compare(got, want, 'fpy')
 
 
-def validate_compiled(p: Prepared) -> dict[str, Any]:
-    """`torch.compile`'d MMA-Sim against eager; failing to compile is a result."""
+def validate_compiled(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
+    """`torch.compile`'d MMA-Sim against eager, *want* if already computed;
+    failing to compile is a result."""
     try:
         got = p.mmasim_compiled()
     except Exception as e:  # noqa: BLE001 -- a compile failure is a result
         return {'valid': False, 'reason': 'compile or runtime error',
                 'error': f'{type(e).__name__}: {str(e).splitlines()[0][:300]}'}
-    return compare(got, p.mmasim(), 'compiled')
+    return compare(got, p.mmasim() if want is None else want, 'compiled')

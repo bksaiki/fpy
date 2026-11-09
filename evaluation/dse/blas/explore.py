@@ -74,10 +74,7 @@ def to_cpp(d: generator.Design) -> dict:
         src = compiler.compile_module(mod)
         params, result = compiler.signature(mod.public()[0], module=mod)
         out = {'src': src, 'model': {'name': name, 'file': mm._filename(name),
-                                     'namespace': f'fpy_models::{mm._namespace(name)}',
-                                     'entry': func.name,
-                                     'params': [mm._cpp_type(p) for p in params],
-                                     'result': mm._cpp_type(result)}}
+                                     'namespace': f'fpy_models::{mm._namespace(name)}', **sig}}
     except Exception as e:  # noqa: BLE001 -- a refusal is a result
         out = {'reason': f'{type(e).__name__}: {e}'.splitlines()[0][:300]}
     return out | {'seconds': time.perf_counter() - t0}

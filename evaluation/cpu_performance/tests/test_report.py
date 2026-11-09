@@ -27,3 +27,11 @@ def test_speedups_and_table():
     assert [r['family'] for r in t] == ['AMD CDNA3', 'FMA chain', 'All']
     assert t[-1]['geomean'] == 2.0
     assert '2.00$\\times$' in report.latex(t)
+
+
+def test_macros():
+    tex = report.macros({'fp32.fma': 4.0, 'amd.cdna3.fp8': 1.0}, 8, 64, 5)
+    assert '\\newcommand{\\EvalCPUPerfSpeedupMin}{1.00$\\times$\\xspace}' in tex
+    assert '\\newcommand{\\EvalCPUPerfSpeedupMax}{4.00$\\times$\\xspace}' in tex
+    assert '\\newcommand{\\EvalCPUPerfSpeedupMean}{2.00$\\times$\\xspace}' in tex
+    assert '\\newcommand{\\EvalCPUPerfThreads}{5\\xspace}' in tex
