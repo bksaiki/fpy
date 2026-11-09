@@ -377,7 +377,27 @@ class DigitBoundStore:
         That is below what a :class:`Format` admits, so a caller
         materializing one has to handle it.
         """
-        return max(self.maximum(value - _as_term(grid) + 1, assuming), 0)
+        return self._prec(value, grid, (), assuming)[0]
+
+    def digit_bounds(
+        self, msb: Term, lsb: Term, assuming: frozenset[int] = frozenset(),
+    ) -> tuple[int | float, int | float, int | float]:
+        """The :meth:`prec` of a value bounded by *msb* on the grid *lsb*, the
+        finest digit position *lsb* reaches, and *msb*'s greatest value.
+
+        Asked as one query: a backend that optimizes (`z3-opt`) answers all
+        three in one search; the default bisects each in turn.
+        """
+        prec, (neg_exp, mag) = self._prec(msb, lsb, (-lsb, msb), assuming)
+        return prec, -neg_exp, mag
+
+    def _prec(
+        self, value: Term, grid: Term | int, also: Sequence[Term],
+        assuming: frozenset[int],
+    ) -> tuple[int | float, list[int | float]]:
+        """:meth:`prec`, and the maximum of each of *also*, asked as one query."""
+        digits, *rest = self.maximums([value - _as_term(grid) + 1, *also], assuming)
+        return max(digits, 0), rest
 
 
 def _as_term(x: Term | int) -> Term:

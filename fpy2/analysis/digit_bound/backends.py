@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from .solver import Solver
+from .solver import MeasuredSolver, Solver
 from .z3_solver import Z3Solver
 
 __all__ = [
@@ -27,16 +27,16 @@ __all__ = [
 ]
 
 
-def _cvc5(**opts: Any) -> Solver:
+def _cvc5(**opts: Any) -> MeasuredSolver:
     from .cvc5_solver import Cvc5Solver
     return Cvc5Solver(**opts)
 
 
-def _z3_opt(**opts: Any) -> Solver:
+def _z3_opt(**opts: Any) -> MeasuredSolver:
     return Z3Solver(bisect=False, **opts)
 
 
-BACKENDS: dict[str, Callable[..., Solver]] = {
+BACKENDS: dict[str, Callable[..., MeasuredSolver]] = {
     'z3': Z3Solver,
     'z3-opt': _z3_opt,
     'cvc5': _cvc5,
@@ -46,7 +46,7 @@ BACKENDS: dict[str, Callable[..., Solver]] = {
 ENV_VAR = 'FPY_DIGIT_BOUND_SOLVER'
 
 
-def make_solver(name: str, **opts: Any) -> Solver:
+def make_solver(name: str, **opts: Any) -> MeasuredSolver:
     """A fresh solver of backend *name*, built with *opts*."""
     make = BACKENDS.get(name)
     if make is None:
@@ -54,7 +54,7 @@ def make_solver(name: str, **opts: Any) -> Solver:
     return make(**opts)
 
 
-_factory: ContextVar[Callable[[], Solver] | None] = ContextVar('_factory', default=None)
+_factory: ContextVar[Callable[[], MeasuredSolver] | None] = ContextVar('_factory', default=None)
 """What :func:`solver_backend` chose, where it is in effect."""
 
 
@@ -69,19 +69,19 @@ def default_solver() -> Solver:
 
 
 @contextmanager
-def solver_backend(name: str, **opts: Any) -> Iterator[list[Solver]]:
+def solver_backend(name: str, **opts: Any) -> Iterator[list[MeasuredSolver]]:
     """Give every store made inside the block a solver of backend *name*.
 
     Yields the list of solvers made, which grows as they are; their
-    :attr:`~Solver.stats` together are what the block cost::
+    :attr:`~MeasuredSolver.stats` together are what the block cost::
 
         with solver_backend('cvc5') as solvers:
             compile_design(build)
         total = sum((s.stats for s in solvers), SolverStats())
     """
-    made: list[Solver] = []
+    made: list[MeasuredSolver] = []
 
-    def factory() -> Solver:
+    def factory() -> MeasuredSolver:
         s = make_solver(name, **opts)
         made.append(s)
         return s

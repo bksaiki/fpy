@@ -55,10 +55,6 @@ class Z3Solver(_ComponentSolver[_Z3Solver]):
         self._encoded = {}
         self._lits = {}
 
-    @property
-    def _optimizes(self) -> bool:
-        return not self.bisect
-
     def _to_z3(self, term: Term) -> z3.ArithRef:
         cached = self._encoded.get(term)
         if cached is not None:
@@ -126,20 +122,12 @@ class Z3Solver(_ComponentSolver[_Z3Solver]):
     def _maxima(
         self, solver: _Z3Solver, objectives: Sequence[Term], lits: tuple[int, ...],
     ) -> list[int | float]:
-        """Every objective from one ``Optimize`` check, where z3 optimizes.
+        """Every objective from one ``Optimize`` check: one search, run by z3.
 
         Box priority finds each objective's optimum independently, which is
         what the bounds of one format need: the widest value and the finest
         digit need not occur together.
         """
-        if self.bisect:
-            return super()._maxima(solver, objectives, lits)
-        return self._optimize(solver, objectives, lits)
-
-    def _optimize(
-        self, solver: _Z3Solver, objectives: Sequence[Term], lits: tuple[int, ...],
-    ) -> list[int | float]:
-        """Each objective's maximum from ``Optimize``: one search, run by z3."""
         assert isinstance(solver, z3.Optimize)
         solver.push()
         try:

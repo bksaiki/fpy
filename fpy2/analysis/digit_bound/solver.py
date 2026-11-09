@@ -21,6 +21,7 @@ from ...utils import Unionfind
 
 __all__ = [
     'Constraint',
+    'MeasuredSolver',
     'QueryRecord',
     'Solver',
     'SolverStats',
@@ -134,17 +135,6 @@ class Solver(Protocol):
     asks many objectives against the accumulated system.
     """
 
-    stats: 'SolverStats'
-    """What the backend has done so far."""
-
-    trace: 'list[QueryRecord]'
-    """Each query the backend answered, in order, where it was built to keep
-    them (``keep_trace``); empty otherwise."""
-
-    bisect: bool
-    """Whether a maximum is found by bisecting over satisfiability checks,
-    rather than by the backend optimizing."""
-
     def assume(self, constraint: Constraint) -> None:
         """State *constraint*.  Constraints only ever narrow."""
         ...
@@ -179,6 +169,18 @@ class Solver(Protocol):
         ...
 
 
+class MeasuredSolver(Solver, Protocol):
+    """A backend that reports what it did, as every one here does: what
+    the sensitivity evaluation reads, and nothing the store needs."""
+
+    stats: 'SolverStats'
+    """What the backend has done so far."""
+
+    trace: 'list[QueryRecord]'
+    """Each query the backend answered, in order, where it was built to keep
+    them (``keep_trace``); empty otherwise."""
+
+
 @dataclass
 class SolverStats:
     """What a backend has done, and the time it took.
@@ -190,8 +192,6 @@ class SolverStats:
     solver_time: float = 0.0
     """Seconds in the backend: stating constraints, which z3 and cvc5 encode
     into live solvers as they arrive, and answering queries."""
-    constraints: int = 0
-    """Constraints assumed."""
     queries: int = 0
     """Calls to :meth:`Solver.maximize` and :meth:`Solver.reaches`."""
     degraded: int = 0
@@ -228,8 +228,8 @@ class _ComponentSolver(Generic[_S]):
     statistics.
 
     A backend supplies :meth:`_new`, :meth:`_encode`, :meth:`_check` and
-    :meth:`_value`; one that optimizes natively overrides :meth:`_maximum`
-    instead of bisecting, or :meth:`_maxima` to optimize a query's
+    :meth:`_value`; one that optimizes natively clears :attr:`bisect` and
+    overrides :meth:`_maximum`, or :meth:`_maxima` to optimize a query's
     objectives together, and needs no :meth:`_value`.
     """
 
@@ -244,9 +244,8 @@ class _ComponentSolver(Generic[_S]):
     trace: list[QueryRecord]
 
     bisect: bool = True
-    """Whether a maximum is found by bisection.  It describes, rather than
-    chooses: a backend that optimizes overrides :meth:`_maximum` or
-    :meth:`_maxima`, and says so here."""
+    """Whether a maximum is found by bisection, rather than asked of a
+    separate, optimizing solver."""
 
     _components: Unionfind[int]
     """Variable indices grouped into components: constraints that share no
@@ -289,11 +288,6 @@ class _ComponentSolver(Generic[_S]):
         self._degraded = False
 
     # -- what a backend supplies -------------------------------------------
-
-    @property
-    def _optimizes(self) -> bool:
-        """Whether a maximum is asked of a separate, optimizing solver."""
-        return False
 
     def _new(self, optimize: bool) -> _S:
         """An empty solver, optimizing where *optimize*."""
@@ -345,6 +339,10 @@ class _ComponentSolver(Generic[_S]):
             out.update(v.index for v, _ in t.coeffs)
         return out
 
+    @staticmethod
+    def _term_vars(term: Term) -> set[int]:
+        return {v.index for v, _ in term.coeffs}
+
     def assume(self, constraint: Constraint) -> None:
         start = time.perf_counter()
         for t in (constraint.lhs, *constraint.rhs):
@@ -363,7 +361,6 @@ class _ComponentSolver(Generic[_S]):
             live = self._built.get((root, opt))
             if live is not None:
                 self._encode(live, constraint)
-        self.stats.constraints += 1
         self.stats.solver_time += time.perf_counter() - start
 
     def _solver_for_vars(self, named: set[int], *, optimize: bool) -> _S:
@@ -396,16 +393,26 @@ class _ComponentSolver(Generic[_S]):
     def maximize(
         self, objectives: Sequence[Term], assuming: frozenset[int] = frozenset(),
     ) -> list[int | float]:
-        # every objective's variables: one solver answers the whole query
+        lits = tuple(sorted(assuming))
         named = {v.index for t in objectives for v, _ in t.coeffs}
         with self._query(named):
-            solver = self._solver_for_vars(named, optimize=self._optimizes)
-            return self._maxima(solver, objectives, tuple(sorted(assuming)))
+            if not self.bisect:
+                # one search answers the whole query, so one solver holds
+                # every objective's component
+                solver = self._solver_for_vars(named, optimize=True)
+                return self._maxima(solver, objectives, lits)
+            # each objective alone, against its own component: merging every
+            # component a query happens to name would only grow later queries
+            return [
+                self._maximum(
+                    self._solver_for_vars(self._term_vars(t), optimize=False), t, lits)
+                for t in objectives
+            ]
 
     def reaches(
         self, objective: Term, k: int, assuming: frozenset[int] = frozenset(),
     ) -> bool:
-        named = {v.index for v, _ in objective.coeffs}
+        named = self._term_vars(objective)
         with self._query(named):
             # a check needs no optimizer, whichever way this backend maximizes
             solver = self._solver_for_vars(named, optimize=False)
@@ -428,11 +435,10 @@ class _ComponentSolver(Generic[_S]):
                 self.trace.append(QueryRecord(self._size(named), seconds))
 
     def _size(self, named: set[int]) -> int:
-        """How many constraints the solver for *named* holds, once
-        :meth:`_solver_for_vars` has put them in one component."""
-        if not named:
-            return 0
-        return len(self._group.get(self._components.add(min(named)), ()))
+        """How many constraints the components of *named* hold: what a query
+        over them saw, whether asked of one solver or of one per component."""
+        roots = {self._components.add(v) for v in named}
+        return sum(len(self._group.get(r, ())) for r in roots)
 
     def _record(self, status: Status) -> Status:
         """Note a backend call's result: an undecided one degrades the query
@@ -467,7 +473,8 @@ class _ComponentSolver(Generic[_S]):
     def _maxima(
         self, solver: _S, objectives: Sequence[Term], lits: tuple[int, ...],
     ) -> list[int | float]:
-        """Each objective's maximum, one :meth:`_maximum` apiece."""
+        """Each objective's maximum from the one optimizing *solver*, where
+        not :attr:`bisect`: one :meth:`_maximum` apiece."""
         return [self._maximum(solver, t, lits) for t in objectives]
 
     def _maximum(

@@ -19,7 +19,6 @@ import argparse
 import dataclasses
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -41,12 +40,18 @@ from fpy2.analysis.digit_bound import BACKENDS, SolverStats, make_solver, solver
 RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'sensitivity'
 
 
+def _record(name: str) -> str:
+    """The file design *name*'s record is written to."""
+    return _filename(name).removesuffix('.cpp') + '.json'
+
+
 def _foreign(out: Path) -> list[str]:
     """What in *out* a run did not write, and so must not be deleted."""
     if not out.exists():
         return []
+    own = {_record(name) for name, _ in DESIGNS}
     return sorted(p.name for p in out.iterdir()
-                  if not (p.suffix == '.json' or p.name.startswith('sensitivity-')))
+                  if not (p.name in own or p.name.startswith('sensitivity-')))
 
 
 def compile_once(
@@ -59,6 +64,8 @@ def compile_once(
     from compile import compile_design
 
     build = dict(DESIGNS)[name]
+    # untimed: a backend's first solver loads its module (cvc5's, lazily)
+    make_solver(backend)
     start = time.perf_counter()
     with solver_backend(
             backend, timeout_ms=round(1000 * call_timeout), keep_trace=True) as solvers:
@@ -82,17 +89,18 @@ def _run_child(
 ) -> dict[str, Any]:
     """:func:`compile_once` in a fresh process, killed past *timeout*
     seconds."""
-    # one thread: the backends are compared as single-threaded solvers
-    env = {**os.environ, 'OMP_NUM_THREADS': '1'}
     cmd = [sys.executable, __file__, '--child', name, backend, str(call_timeout)]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, env=env, check=False)
+            cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return {'timeout': timeout}
     if proc.returncode != 0:
         return {'error': proc.stderr.strip() or f'exit {proc.returncode}'}
-    return json.loads(proc.stdout.strip().splitlines()[-1])
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        return {'error': f'no result on stdout: {proc.stdout[-500:]!r}'}
 
 
 def _summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -106,8 +114,8 @@ def _summarize(runs: list[dict[str, Any]]) -> dict[str, Any]:
 
     The time, the counts and the queries are the median run's.  The counts
     are the same every run unless a backend call hit its limit in some runs
-    and not others; the report names the designs where they differ.  Only
-    that run's queries are kept: the others' would triple the results."""
+    and not others, which nothing checks: `runs` keeps each run's to compare.
+    Only that run's queries are kept: the others' would triple the results."""
     ok = [r for r in runs if 'cpp_sha256' in r]
     kept = [{k: v for k, v in r.items() if k != 'trace'} for r in runs]
     if len(ok) < len(runs):
@@ -141,7 +149,7 @@ def measure(
             for b in backends:
                 runs = [futures[(name, b, r)].result() for r in range(repeats)]
                 record['backends'][b] = results[(name, b)] = _summarize(runs)
-            (out / (_filename(name).removesuffix('.cpp') + '.json')).write_text(
+            (out / _record(name)).write_text(
                 json.dumps(record, indent=1))
             print(f'{name:{width}}  {_line(record)}', flush=True)
     broken = [
@@ -200,7 +208,6 @@ def main(argv: list[str]) -> int:
     (args.out / 'sensitivity-run.json').write_text(json.dumps({
         'backends': args.backends, 'repeats': args.repeats, 'jobs': args.jobs,
         'timeout': args.timeout, 'call_timeout': args.call_timeout, 'designs': names,
-        'bisects': {b: make_solver(b).bisect for b in args.backends},
     }, indent=1))
     n, broken = measure(names, args.backends, args.repeats, args.jobs, args.timeout,
                         args.call_timeout, args.out)

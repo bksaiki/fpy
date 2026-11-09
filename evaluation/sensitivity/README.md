@@ -42,8 +42,7 @@ holding files a run did not write is refused) with:
   hash, or the error or timeout), and the median run by compile time, with
   its queries (`trace`: each one's component size and time).  A backend
   compiled a design only where every repeat did;
-- `sensitivity-run.json`: the run's settings, and whether each backend
-  bisects;
+- `sensitivity-run.json`: the run's settings;
 - `sensitivity-table.tex`: one row per backend, over the designs every
   backend compiled: its method, compile and solver time, the solver's
   share, and solver time per query;

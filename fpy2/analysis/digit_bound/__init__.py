@@ -19,7 +19,7 @@ from .infer import (
     FormatView,
     Terms,
 )
-from .solver import Constraint, QueryRecord, Solver, SolverStats, Term
+from .solver import Constraint, MeasuredSolver, QueryRecord, Solver, SolverStats, Term
 from .store import DigitBoundStore
 from .z3_solver import Z3Solver
 
@@ -32,6 +32,7 @@ __all__ = [
     'DigitBoundParams',
     'DigitBoundStore',
     'FormatView',
+    'MeasuredSolver',
     'QueryRecord',
     'Solver',
     'SolverStats',

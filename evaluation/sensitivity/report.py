@@ -24,8 +24,8 @@ from matplotlib.ticker import FuncFormatter
 NAMES = {'z3': 'Z3 (Binary search)', 'z3-opt': 'Z3 (Optimize)', 'cvc5': 'cvc5'}
 """Each backend's label."""
 
-METHODS = {True: 'Binary search', False: 'Optimize'}
-"""How a backend finds a maximum, by `sensitivity-run.json`'s `bisects`."""
+METHODS = {'z3': 'Binary search', 'z3-opt': 'Optimize', 'cvc5': 'Binary search'}
+"""How each backend finds a maximum."""
 
 ROW_NAMES = {**NAMES, 'z3': 'Z3', 'z3-opt': 'Z3'}
 """Each backend's label in the table, whose method column tells the two z3
@@ -112,9 +112,8 @@ def figure(records: list[dict[str, Any]], path: Path) -> None:
     plt.close(fig)
 
 
-def numbers(records: list[dict[str, Any]], bisects: dict[str, bool]) -> dict[str, Any]:
-    """The totals the table, the summary and the paper cite; *bisects* says
-    how each backend finds a maximum."""
+def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The totals the table, the summary and the paper cite."""
     bs = backends_of(records)
     ref = bs[0]
     # totals only over designs every backend compiled, so they compare
@@ -126,7 +125,7 @@ def numbers(records: list[dict[str, Any]], bisects: dict[str, bool]) -> dict[str
         solver_s = sum(r['solver_time'] for r in rs)
         queries = sum(r['stats']['queries'] for r in rs)
         totals[b] = {
-            'method': METHODS[bisects[b]],
+            'method': METHODS.get(b, b),
             'compile_seconds': compile_s,
             'solver_seconds': solver_s,
             'solver_share': solver_s / compile_s if compile_s else 0.0,
@@ -207,7 +206,7 @@ def main(argv: list[str]) -> int:
     records = load(out)
     if not records:
         ap.error(f'no results in {out}')
-    nums = numbers(records, json.loads((out / 'sensitivity-run.json').read_text())['bisects'])
+    nums = numbers(records)
     (out / 'sensitivity-table.tex').write_text(totals_latex(nums))
     figure(records, out / 'sensitivity-scatter')
     (out / 'sensitivity-paper.json').write_text(json.dumps(nums, indent=1) + '\n')

@@ -13,7 +13,7 @@ def test_one_compilation_records_its_solver():
     rec = compile_once('nv.volta.f16.f32', 'z3')
     assert 'cpp_sha256' in rec, rec.get('error')
     st = rec['stats']
-    assert st['queries'] > 0 and st['constraints'] > 0
+    assert st['queries'] > 0
     assert 0 < st['solver_time'] <= rec['seconds']
 
 
@@ -31,7 +31,6 @@ def test_one_design_under_every_backend(tmp_path):
         assert all('trace' not in run for run in r['runs'])
     settings = json.loads((out / 'sensitivity-run.json').read_text())
     assert settings['call_timeout'] == 30
-    assert settings['bisects'] == {'z3': True, 'z3-opt': False, 'cvc5': True}
     # the run's data, and beside it the report
     assert {p.name for p in out.iterdir() if p.name.startswith('sensitivity-')} == {
         'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
@@ -39,11 +38,11 @@ def test_one_design_under_every_backend(tmp_path):
 
 
 def test_the_time_and_the_counts_come_from_one_run():
-    def run(seconds, solver, constraints):
+    def run(seconds, solver, queries):
         return {'seconds': seconds, 'cpp_sha256': 'x', 'trace': {'seconds': [solver]},
-                'stats': {'solver_time': solver, 'constraints': constraints}}
+                'stats': {'solver_time': solver, 'queries': queries}}
     s = _summarize([run(58, 43, 61144), run(51, 39, 54868), run(38, 28, 48592)])
-    assert (s['seconds'], s['solver_time'], s['stats']['constraints']) == (51, 39, 54868)
+    assert (s['seconds'], s['solver_time'], s['stats']['queries']) == (51, 39, 54868)
     assert s['trace'] == {'seconds': [39]}
 
 
@@ -60,15 +59,16 @@ def test_a_design_compiles_only_where_every_repeat_did():
 
 
 def test_a_run_replaces_the_last(tmp_path):
-    (tmp_path / 'stale.json').write_text('{}')
+    (tmp_path / 'nv.volta.f16.f32.json').write_text('{}')   # another design's record
     (tmp_path / 'sensitivity-table.tex').write_text('')
     assert main(['-o', str(tmp_path), '-b', 'z3', '-r', '1', 'fp32 (fma)']) == 0
-    assert not (tmp_path / 'stale.json').exists()
+    assert not (tmp_path / 'nv.volta.f16.f32.json').exists()
     assert (tmp_path / 'fp32_fma.json').exists()
 
 
-def test_files_a_run_did_not_write_are_kept(tmp_path):
-    (tmp_path / 'notes.md').write_text('mine')
+@pytest.mark.parametrize('mine', ['notes.md', 'settings.json'])
+def test_files_a_run_did_not_write_are_kept(tmp_path, mine):
+    (tmp_path / mine).write_text('mine')
     with pytest.raises(SystemExit):
         main(['-o', str(tmp_path), '-r', '1', 'fp32 (fma)'])
-    assert [p.name for p in tmp_path.iterdir()] == ['notes.md']
+    assert [p.name for p in tmp_path.iterdir()] == [mine]

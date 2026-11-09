@@ -127,7 +127,7 @@ def _rebuilt(store: DigitBoundStore, backend: str) -> DigitBoundStore:
 class TestStatistics:
     """Every backend counts what it was told and what it was asked."""
 
-    def test_constraints_are_counted(self, backend):
+    def test_stating_constraints_is_timed(self, backend):
         solver = make_solver(backend)
         s = DigitBoundStore(solver=solver)
         x, y = s.var('x'), s.var('y')
@@ -136,7 +136,6 @@ class TestStatistics:
         s.eq(y, x)
         s.le_max(x, [y, 4], guard=(g,))
         st = solver.stats
-        assert st.constraints == 3
         assert st.queries == 0
         assert st.solver_time > 0     # stating them is timed too
 
@@ -165,6 +164,20 @@ class TestStatistics:
         # each query sees only its own component: {x, y}, then {z}
         assert [q.constraints for q in trace] == [2, 1]
         assert sum(q.seconds for q in trace) <= solver.stats.solver_time
+
+    def test_a_query_leaves_components_apart_unless_it_optimizes(self, backend):
+        solver = make_solver(backend, keep_trace=True)
+        s = DigitBoundStore(solver=solver)
+        x, y, z = s.var('x'), s.var('y'), s.var('z')
+        s.le(x, 3)
+        s.le(y, x)
+        s.le(z, 9)
+        assert s.maximums([y, z]) == [3, 9]
+        s.maximum(z + 1)
+        trace = solver.trace
+        # the query saw both components; only an optimizer, which answers it
+        # in one search, merges them for good
+        assert [q.constraints for q in trace] == [3, 1 if solver.bisect else 3]
 
     def test_queries_are_traced_only_when_asked(self, backend):
         solver = make_solver(backend)
@@ -211,10 +224,10 @@ class TestStatistics:
 class TestStatsSum:
 
     def test_they_add_field_by_field(self):
-        a = SolverStats(solver_time=1.0, queries=2, constraints=3)
+        a = SolverStats(solver_time=1.0, queries=2)
         b = SolverStats(solver_time=0.5, queries=1, degraded=1)
         assert sum((a, b), SolverStats()) == SolverStats(
-            solver_time=1.5, constraints=3, queries=3, degraded=1)
+            solver_time=1.5, queries=3, degraded=1)
 
 
 class TestChoosingABackend:
