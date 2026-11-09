@@ -209,9 +209,9 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=str(__doc__).splitlines()[1])
     ap.add_argument('--results', type=Path, default=RESULTS,
                     help="the outputs' root (default: %(default)s)")
-    ap.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 1,
+    ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='processes compiling the designs, and threads grading them '
-                    '(default: every CPU)')
+                    '(default %(default)s)')
     ap.add_argument('--smoke', action='store_true', help="the grid's first 2 designs, 64 x 64")
     args = ap.parse_args(argv)
     # the threads `<op>_gemm` grades on

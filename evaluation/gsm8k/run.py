@@ -182,8 +182,8 @@ def main(argv: list[str]) -> int:
                     help='designs also sampled in the model, checking the prediction '
                          '(default %(default)s)')
     ap.add_argument('-j', '--jobs', type=int, default=1,
-                    help='processes compiling the designs; above 1, their compile times '
-                         'contend (default %(default)s)')
+                    help='processes compiling the designs; above 1, their recorded compile '
+                         'times contend (default %(default)s)')
     ap.add_argument('--smoke', action='store_true', help='2 problems, 8 tokens')
     args = ap.parse_args(argv)
     if args.smoke:

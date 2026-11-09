@@ -25,7 +25,6 @@ sys.path.insert(0, str(ROOT / 'evaluation' / 'dse' / 'llm'))
 # line, its colours and its text styles
 from plot_grid import BASES, GRID, INK, JOINS, LARGE, MUTED, SMALL, _look
 
-N = 1024
 # each panel's input formats; the FP32 FMA loop drawn is the first's
 PANELS = {'BF16': ('BF16',), 'FP8': ('E4M3', 'E4M3FNUZ')}
 # where each panel's legend has room, and its columns: above FP8's plateaus, two
@@ -55,13 +54,19 @@ def load(results: Path) -> tuple[list[dict], dict[str, dict]]:
     return list(points.values()), fma
 
 
-def worst(d: dict, n: int = N) -> float:
-    """d's worst error at n, over both tests and every s."""
+def size(d: dict) -> int:
+    """The matrix size d was graded at, the largest if several."""
+    return max(m for _, m, _ in d['errors'])
+
+
+def worst(d: dict) -> float:
+    """d's worst error at its :func:`size`, over both tests and every s."""
+    n = size(d)
     return max(e for (_, m, _), e in d['errors'].items() if m == n)
 
 
 def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
-    """The worst error at n = N against k, a panel per input format: a line per
+    """The worst error at the graded size n against k, a panel per input format: a line per
     generation and join, each generation's own design ringed; and the FP32
     FMA loop's worst error on the same matrices."""
     # laid out as `plot_grid.py`'s figure, so the two print at one scale at one
@@ -82,12 +87,13 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
                         linewidth=2, marker=marker, markersize=6, markeredgecolor='white')
                 ax.scatter([p[0] for p in pts if p[2]], [p[1] for p in pts if p[2]], s=200,
                            facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
-        ax.axhline(math.log2(worst(fma[fmts[0]])), color=INK, linestyle=':', linewidth=2, zorder=1)
+        if fmts[0] in fma:
+            ax.axhline(math.log2(worst(fma[fmts[0]])), color=INK, linestyle=':', linewidth=2, zorder=1)
         ax.legend(handles=[plt.Line2D([], [], color=c, marker=m, linewidth=2, markeredgecolor='white',
                                       label=BASES[a][1]) for a in anchors for c, m in [_look(a)]],
                   loc=LEGENDS[f][0], ncol=LEGENDS[f][1], fontsize=SMALL['fontsize'],
                   labelcolor=SMALL['color'], frameon=False, columnspacing=0.8)
-        ax.set_title(f'{f}, n = {N}', loc='left', **LARGE)
+        ax.set_title(f'{f}, n = {max(map(size, points))}', loc='left', **LARGE)
         ax.set_xlabel('k (bits)', **LARGE)
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))
         ax.tick_params(colors=SMALL['color'], labelsize=SMALL['fontsize'])
@@ -112,7 +118,7 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
 
 def numbers(points: list[dict], fma: dict[str, dict]) -> None:
     """Each generation's own design's and the FP32 FMA loop's log2 worst
-    error at n = N, as the figure plots it."""
+    error at the graded size, as the figure plots it."""
     for d in points:
         if d['is_anchor']:
             print(f'{d["anchor"]:24} {math.log2(worst(d)):7.2f}')

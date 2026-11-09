@@ -142,8 +142,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-s', '--seed', type=int, default=config.ANALYSIS_SEED, help='seed (default %(default)s)')
     ap.add_argument('--inputs', choices=sorted(SOURCES), default=config.ANALYSIS_INPUTS,
                     help='input source (default %(default)s)')
-    ap.add_argument('-j', '--jobs', type=int, default=8,
-                    help='measure in this many processes (default 8)')
+    ap.add_argument('-j', '--jobs', type=int, default=1,
+                    help='measure in this many processes (default %(default)s)')
     ap.add_argument('--smoke', action='store_true', help='Hopper BF16 alone, 50 inputs')
     args = ap.parse_args(argv)
     if args.smoke:

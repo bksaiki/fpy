@@ -53,7 +53,7 @@ def figure(rows: list[dict], out: Path) -> None:
     families = sorted(set(family.values()))
     fig = plt.figure(figsize=(4 * len(families) * len(PANELS), 4.2), layout='constrained')
     fig.get_layout_engine().set(h_pad=0.06)
-    for i, (f, sub) in enumerate(zip(families, fig.subfigures(1, len(families)))):
+    for i, (f, sub) in enumerate(zip(families, fig.subfigures(1, len(families), squeeze=False)[0])):
         axes = sub.subplots(1, len(PANELS), squeeze=False)[0]
         mine = [a for a in BASES if family.get(a) == f]
         for a in mine:

@@ -47,7 +47,7 @@ uv run run.py results                                 # everything, ~18.5 h
 uv run run.py results --disable gsm8k --disable llm   # the CPU evaluations
 uv run run.py results --plot                          # only redraw, from existing results
 uv run run.py results --no-cache                      # discard results and caches, rerun
-uv run run.py results --threads 8                     # processes or threads per evaluation
+uv run run.py results --threads 16                    # processes or threads per evaluation (default 1)
 ```
 
 Each evaluation writes to `results/<name>/`. Before anything runs, `run.py`

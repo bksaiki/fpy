@@ -13,7 +13,7 @@ evaluation to run needs (README.md, Setup).
     python evaluation/run.py DIR --disable gsm8k --disable llm   # all but these
     python evaluation/run.py DIR --plot        # only redraw, from existing results
     python evaluation/run.py DIR --no-cache    # discard results and compile caches first
-    python evaluation/run.py DIR --threads 8   # processes or threads per evaluation
+    python evaluation/run.py DIR --threads 16  # processes or threads per evaluation (default 1)
     python evaluation/run.py DIR --smoke       # each evaluation at a token size, in minutes
 """
 
@@ -39,8 +39,8 @@ Commands = Callable[[Path], list[list[str]]]
 """An evaluation's commands, given its results directory."""
 
 RunCommands = Callable[[Path, list[str], list[str]], list[list[str]]]
-"""Its run's commands, given also `-j N` (`--threads`) or nothing, and
-`--smoke` or nothing."""
+"""Its run's commands, given also `-j N` (`--threads`), and `--smoke` or
+nothing."""
 
 
 @dataclass(frozen=True)
@@ -132,8 +132,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('results', type=Path, help="the results' root")
     ap.add_argument('--disable', action='append', choices=list(EVALS), default=[], metavar='EVAL',
                     help=f'skip an evaluation; repeatable (of {", ".join(EVALS)})')
-    ap.add_argument('--threads', type=int, metavar='N',
-                    help="processes or threads per evaluation (default: each evaluation's own)")
+    ap.add_argument('--threads', type=int, default=1, metavar='N',
+                    help='processes or threads per evaluation (default %(default)s)')
     ap.add_argument('--plot', action='store_true', help='only redraw plots and tables')
     ap.add_argument('--no-cache', action='store_true',
                     help="discard each evaluation's results and compile caches, and rerun it")
@@ -157,7 +157,7 @@ def main(argv: list[str]) -> int:
         if args.no_cache:
             shutil.rmtree(out, ignore_errors=True)
         if not args.plot and not (out / ev.done).exists():
-            if not _run(ev.run(out, [] if args.threads is None else ['-j', str(args.threads)],
+            if not _run(ev.run(out, ['-j', str(args.threads)],
                                ['--smoke'] if args.smoke else [])):
                 failed.append(name)
                 continue

@@ -83,7 +83,7 @@ def main(argv: list[str]) -> int:
                     help='the model (default: %(default)s)')
     ap.add_argument('--results', type=Path, default=cli.RESULTS,
                     help="the outputs' root (default: %(default)s)")
-    ap.add_argument('-j', '--jobs', type=int, default=8,
+    ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='processes compiling the designs (default: %(default)s)')
     ap.add_argument('--segments', type=int, default=config.LLM_SEGMENTS,
                     help='WikiText-2 segments (default: %(default)s)')
@@ -93,11 +93,15 @@ def main(argv: list[str]) -> int:
                     help='compile and launch the grid as --model runs it, and write manifest.csv')
     ap.add_argument('--list', action='store_true', help='print the points, and stop')
     ap.add_argument('--smoke', action='store_true', help="the grid's first 2 designs, 1 segment")
+    ap.add_argument('--anchor', action='append', choices=config.GRID_ANCHORS, metavar='NAME',
+                    help="only this anchor's own design; repeatable")
     args = ap.parse_args(argv)
     if args.smoke:
         args.segments = 1
 
     pts = config.grid()[:2] if args.smoke else config.grid()
+    if args.anchor:
+        pts = [p for p in pts if p.anchor in args.anchor and p.is_anchor]
     tag = args.model.rsplit('/', 1)[-1]
     out = args.results / 'sweep'
     table = out / f'sweep-grid-{tag}.csv'
