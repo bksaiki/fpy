@@ -4,14 +4,10 @@ The driver on one small design, under every backend, through to the report.
     pytest -n 8 evaluation/sensitivity/tests
 """
 
-import importlib.util
 import json
 
 import pytest
 from run import _summarize, compile_once, main
-
-_MISSING = [p for p in ('cvc5', 'highspy') if importlib.util.find_spec(p) is None]
-
 
 def test_one_compilation_records_its_solver():
     rec = compile_once('nv.volta.f16.f32', 'z3')
@@ -21,12 +17,11 @@ def test_one_compilation_records_its_solver():
     assert 0 < st['solver_time'] <= rec['seconds']
 
 
-@pytest.mark.skipif(bool(_MISSING), reason=f'not installed: {_MISSING}')
 def test_one_design_under_every_backend(tmp_path):
     out = tmp_path / 'results'
     assert main(['-o', str(out), '-r', '1', '-j', '4', '-c', '30', 'fp32 (fma)']) == 0
     record = json.loads((out / 'fp32_fma.json').read_text())
-    assert set(record['backends']) == {'z3', 'z3-opt', 'cvc5', 'highs'}
+    assert set(record['backends']) == {'z3', 'z3-opt', 'cvc5'}
     assert all(r['outcome'] == 'ok' for r in record['backends'].values())
     hashes = {r['cpp_sha256'] for r in record['backends'].values()}
     assert len(hashes) == 1
@@ -36,7 +31,7 @@ def test_one_design_under_every_backend(tmp_path):
         assert all('trace' not in run for run in r['runs'])
     settings = json.loads((out / 'sensitivity-run.json').read_text())
     assert settings['call_timeout'] == 30
-    assert settings['bisects'] == {'z3': True, 'z3-opt': False, 'cvc5': True, 'highs': False}
+    assert settings['bisects'] == {'z3': True, 'z3-opt': False, 'cvc5': True}
     # the run's data, and beside it the report
     assert {p.name for p in out.iterdir() if p.name.startswith('sensitivity-')} == {
         'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',

@@ -3,9 +3,7 @@ Which solver backend a store gets.
 
 z3 is the default.  The others exist to be measured against it: ``z3-opt``
 is z3 finding each maximum with ``Optimize`` rather than by bisection, and
-cvc5 and HiGHS import their solver only when asked for: FPy does not depend
-on either, and the evaluation's environment (``evaluation/pyproject.toml``)
-installs both.
+``cvc5`` imports its solver only when asked for.
 The environment variable ``FPY_DIGIT_BOUND_SOLVER`` names the default, so a
 test suite can run under any backend unchanged; :func:`solver_backend`
 chooses one for a block of code, and keeps what it makes.
@@ -34,11 +32,6 @@ def _cvc5(**opts: Any) -> Solver:
     return Cvc5Solver(**opts)
 
 
-def _highs(**opts: Any) -> Solver:
-    from .highs_solver import HighsSolver
-    return HighsSolver(**opts)
-
-
 def _z3_opt(**opts: Any) -> Solver:
     return Z3Solver(bisect=False, **opts)
 
@@ -47,7 +40,6 @@ BACKENDS: dict[str, Callable[..., Solver]] = {
     'z3': Z3Solver,
     'z3-opt': _z3_opt,
     'cvc5': _cvc5,
-    'highs': _highs,
 }
 """Each backend's constructor, by name."""
 

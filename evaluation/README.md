@@ -6,7 +6,7 @@ part measures by default.
 | Name | Measures | Needs | Time |
 |---|---|---|---|
 | `analysis` | how precise format inference is, with and without digit bounds, on the MMA-Sim designs | CPU | ~7 min |
-| `sensitivity` | how compile time depends on digit-bound analysis's solver backend (z3, z3's `Optimize`, cvc5, HiGHS) on the MMA-Sim designs | CPU | ~25 min |
+| `sensitivity` | how compile time depends on digit-bound analysis's solver backend (z3, z3's `Optimize`, cvc5) on the MMA-Sim designs | CPU | ~25 min |
 | `blas` | each grid design's GEMM backward error on Grading-the-BLAS matrices | CPU, C++ compiler | not yet timed |
 | `gsm8k` | GSM8K speed and accuracy: FPy's kernels against MMA-Sim and FP32 | CUDA GPU | ~3.5 h |
 | `llm` | how far each grid design moves Qwen3.5-0.8B's next-token predictions | CUDA GPU | ~13 h (TITAN V) |

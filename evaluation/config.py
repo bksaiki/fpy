@@ -126,7 +126,7 @@ ANALYSIS_INPUTS = 'mixed'
 # ---------------------------------------------------------------------------
 # `sensitivity`
 
-SENSITIVITY_BACKENDS = ('z3', 'z3-opt', 'cvc5', 'highs')
+SENSITIVITY_BACKENDS = ('z3', 'z3-opt', 'cvc5')
 """The digit-bound solver backends compared, the first the reference."""
 
 SENSITIVITY_REPEATS = 3

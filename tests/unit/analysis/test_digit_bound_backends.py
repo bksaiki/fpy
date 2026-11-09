@@ -1,13 +1,8 @@
 """
 Unit tests for the digit-bound solver backends: that each answers as z3 does,
 that each keeps its statistics, and how a store is given one.
-
-A backend whose package is not installed is skipped: cvc5 and HiGHS are only
-in the evaluation's environment, so from `evaluation/`, `uv run pytest
-../tests/unit/analysis/test_digit_bound_backends.py` runs every backend.
 """
 
-import importlib.util
 import math
 
 import pytest
@@ -25,14 +20,7 @@ from fpy2.analysis.digit_bound.backends import ENV_VAR
 
 from .test_digit_bound import TestBisectionMatchesOptimization, TestFusedSum
 
-_PACKAGE = {'z3': 'z3', 'z3-opt': 'z3', 'cvc5': 'cvc5', 'highs': 'highspy'}
-
-BACKEND_PARAMS = [
-    pytest.param(name, marks=pytest.mark.skipif(
-        importlib.util.find_spec(_PACKAGE[name]) is None,
-        reason=f'{_PACKAGE[name]} is not installed'))
-    for name in BACKENDS
-]
+BACKEND_PARAMS = list(BACKENDS)
 
 
 def _store(backend: str) -> DigitBoundStore:

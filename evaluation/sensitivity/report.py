@@ -21,7 +21,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5', 'highs': 'HiGHS'}
+NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5'}
 """Each backend's label."""
 
 METHODS = {True: 'Binary search', False: 'Optimize'}
@@ -31,7 +31,7 @@ ROW_NAMES = {**NAMES, 'z3-opt': 'z3'}
 """Each backend's label in the table, whose method column tells the two z3
 rows apart."""
 
-COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6', 'highs': '#d6772a'}
+COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6'}
 INK, GRID = '#1f1f1e', '#e4e3dc'
 
 

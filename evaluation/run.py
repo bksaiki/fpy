@@ -62,7 +62,7 @@ EVALS = {
     'sensitivity': Eval(
         run=lambda d, j: [[PY, str(HERE / 'sensitivity' / 'run.py'), '-o', str(d), *j]],
         plot=lambda d: [[PY, str(HERE / 'sensitivity' / 'report.py'), str(d)]],
-        done='sensitivity-paper.json', needs=('matplotlib', 'cvc5', 'highspy')),
+        done='sensitivity-paper.json', needs=('matplotlib',)),
     # `explore.py` and `plots.py` add `blas/` to the root they are given
     'blas': Eval(
         run=lambda d, j: [[PY, str(HERE / 'dse' / 'blas' / 'explore.py'), '--results', str(d.parent), *j]],

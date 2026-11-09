@@ -1,26 +1,22 @@
 # Sensitivity to the solver backend
 
 How much of compilation the digit-bound solver takes, and how z3 compares
-with its own optimizer, cvc5 (SMT) and HiGHS (MILP) as its backend, on the
+with its own optimizer and with cvc5 as its backend, on the
 MMA-Sim designs (`evaluation/common/mma/compile.py`'s `DESIGNS`).  Each design
 is compiled to C++ with `compile_design`, which always runs digit-bound
 inference, once per backend and repeat.
 
 The backends are in `fpy2/analysis/digit_bound/`: `solver.py` (the
-interface, and the base every backend shares), `z3_solver.py`,
-`cvc5_solver.py` and `highs_solver.py`:
+interface, and the base every backend shares), `z3_solver.py` and
+`cvc5_solver.py`:
 
 - `z3`: bisection over satisfiability checks, the default;
 - `z3-opt`: z3's `Optimize`, one search per query, all its objectives
   together;
-- `cvc5`: bisection;
-- `highs`: one MIP solve per objective.  Not sound in general
-  (`highs_solver.py`'s docstring), so differing C++ under it is worth
-  reading.
+- `cvc5`: bisection.
 
 A query is one `maximize` call: a format's three bounds are one query of
-three objectives.  cvc5 and HiGHS are only in the evaluation's environment
-(`../pyproject.toml`); FPy itself depends on neither.
+three objectives.
 
 ## Run
 
