@@ -124,6 +124,26 @@ ANALYSIS_INPUTS = 'mixed'
 
 
 # ---------------------------------------------------------------------------
+# `sensitivity`
+
+SENSITIVITY_BACKENDS = ('z3', 'z3-opt', 'cvc5')
+"""The digit-bound solver backends compared, the first the reference."""
+
+SENSITIVITY_REPEATS = 3
+"""Compilations per design and backend; the median is reported."""
+
+SENSITIVITY_TIMEOUT = 600.0
+"""Seconds one compilation may take."""
+
+SENSITIVITY_CALL_TIMEOUT = 60.0
+"""Seconds one backend call may take.  The solvers' own default, 10 s, is a
+guard for the compiler; the large CDNA3 designs have calls near it, and one
+that crosses it answers loosely (`degraded`) and sends the analysis down a
+different path, so the backends would no longer be compared on the same
+work."""
+
+
+# ---------------------------------------------------------------------------
 # `gsm8k`
 
 GSM8K_DESIGNS: tuple[str, ...] | None = None

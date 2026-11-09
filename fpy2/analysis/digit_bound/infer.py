@@ -231,10 +231,7 @@ class DigitBoundAnalysis:
         terms = self.by_expr.get(e)
         if terms is None or terms.msb is None or terms.lsb is None:
             return None
-        at = self.query_at(e)
-        prec = self.store.prec(terms.msb, terms.lsb, at)
-        exp = -self.store.maximum(-terms.lsb, at)
-        mag = self.store.maximum(terms.msb, at)
+        prec, exp, mag = self.store.digit_bounds(terms.msb, terms.lsb, self.query_at(e))
         if math.isinf(prec) and math.isinf(exp) and math.isinf(mag):
             return None
         # The three are independent maxima and need not be attained together,

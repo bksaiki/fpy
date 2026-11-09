@@ -6,6 +6,7 @@ part measures by default.
 | Name | Measures | Needs | Time |
 |---|---|---|---|
 | `analysis` | how precise format inference is, with and without digit bounds, on the MMA-Sim designs | CPU | ~7 min |
+| `sensitivity` | how compile time depends on digit-bound analysis's solver backend (z3, z3's `Optimize`, cvc5) on the MMA-Sim designs | CPU | ~25 min |
 | `blas` | each grid design's GEMM backward error on Grading-the-BLAS matrices | CPU, C++ compiler | not yet timed |
 | `gsm8k` | GSM8K speed: FPy's kernels against MMA-Sim (tuned: no host waits, CUDA graphs in decode; `--mmasim-as released` for MMA-Sim as released; predicted per layer, `gsm8k/sample.py`) and FP32, every design; MMA-Sim measured whole: `gsm8k/run.py --mmasim full nv.hopper.bf16.f32` (~2.5 h, apart) | CUDA GPU | ~2.5 h (~1.2 h reusing FPy's records: `--reuse DIR`) |
 | `llm` | how far each grid design moves Qwen3.5-0.8B's next-token predictions | CUDA GPU | ~13 h (TITAN V) |
@@ -24,7 +25,7 @@ made with. Nothing needs building beforehand: BLAS's C++ operators and the
 Triton kernels compile on first use, cached under the results.
 
 - **Linux x86_64** runs everything; `gsm8k` and `llm` need a CUDA GPU.
-- **macOS (Apple silicon)** runs `analysis` and `blas`.
+- **macOS (Apple silicon)** runs `analysis`, `sensitivity` and `blas`.
 - `blas` needs a C++ compiler: `c++`, or `$CXX`.
 - torch is its CUDA 12.6 build, the newest that supports Volta (the TITAN V
   the results ran on). Blackwell GPUs need CUDA 12.8 or later: change the
@@ -51,6 +52,7 @@ Hugging Face on first use.
 
 ```
 results/analysis/  precision-*.tex, precision-slack.pdf, precision-paper.json
+results/sensitivity/  sensitivity-table.tex, sensitivity-scatter.pdf, sensitivity-paper.json
 results/blas/      blas-grid.csv, plots/k.pdf
 results/gsm8k/     gsm8k-speed.tex, gsm8k-designs.tex, gsm8k-check.tex, gsm8k-speed.json, gsm8k-designs.pdf (gsm8k/plot.py)
 results/llm/       sweep/sweep-grid-Qwen3.5-0.8B.csv, plots/sweep-grid-Qwen3.5-0.8B.pdf
@@ -60,6 +62,7 @@ results/llm/       sweep/sweep-grid-Qwen3.5-0.8B.csv, plots/sweep-grid-Qwen3.5-0
 
 ```sh
 uv run pytest -n 8 analysis/tests common/mma/tests
+uv run pytest -n 8 sensitivity/tests                # apart from analysis/tests
 uv run pytest gsm8k/tests                           # GPU; apart from analysis/tests
 uv run pytest common/mma/core/tests dse/llm/tests   # GPU, serially
 ```
@@ -69,6 +72,7 @@ uv run pytest common/mma/core/tests dse/llm/tests   # GPU, serially
 ```
 run.py, config.py   the entry point, and each evaluation's defaults
 analysis/           analysis: format inference's precision
+sensitivity/        sensitivity: compile time under each digit-bound solver backend
 gsm8k/              gsm8k: speed and accuracy on GSM8K
 dse/llm/, dse/blas/ llm, blas: the design space, through an LLM and a GEMM
 common/mma/         shared: the designs, their compilers and the harness running them

@@ -47,20 +47,25 @@ def _term(b, text: str):
 
 
 class _FakeSolver:
-    """A backend answering every query with *answer*, recording what it is
-    told and each query's cutoff."""
+    """A backend answering every objective with *answer*, recording what it
+    is told, each query's objectives and each decision's threshold."""
 
     def __init__(self, answer):
         self.answer = answer
         self.assumed = []
-        self.cutoffs = []
+        self.asked = []
+        self.thresholds = []
 
     def assume(self, constraint):
         self.assumed.append(constraint)
 
-    def maximize(self, objective, cutoff=None, assuming=frozenset()):
-        self.cutoffs.append(cutoff)
-        return self.answer
+    def maximize(self, objectives, assuming=frozenset()):
+        self.asked.append(list(objectives))
+        return [self.answer] * len(objectives)
+
+    def reaches(self, objective, k, assuming=frozenset()):
+        self.thresholds.append(k)
+        return self.answer >= k
 
 
 class TestTerm:
@@ -213,7 +218,7 @@ class TestBackendIsReplaceable:
         assert s.maximum(x) == math.inf
         assert s.maximum(-x) == math.inf
         assert s.maximum(x + y) == math.inf
-        assert solver.cutoffs == []
+        assert solver.asked == []
 
     def test_every_constraint_reaches_the_backend(self):
         """The store states each constraint once, as it is made: a backend
@@ -227,16 +232,17 @@ class TestBackendIsReplaceable:
         s.le_max(x, [y, 4])
         assert len(solver.assumed) == 3
 
-    def test_a_backend_may_ignore_the_cutoff(self):
-        """`cutoff` lets a backend stop early; the exact maximum is an upper
-        bound whatever the caller asked for, so ignoring it stays correct."""
+    def test_a_decision_is_asked_as_one(self):
+        """`reaches` hands the backend its threshold, not a search for a
+        maximum."""
         solver = _FakeSolver(3)
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
         assert s.reaches([(x, 3)]) is True
         assert s.reaches([(x, 4)]) is False
-        assert solver.cutoffs == [3, 4]      # the threshold reached the backend
+        assert solver.thresholds == [3, 4]
+        assert solver.asked == []
 
 
 class TestReachesIsADecision:
@@ -265,7 +271,15 @@ class TestReachesIsADecision:
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         assert s.reaches([(x, 10**9)]) is True
-        assert solver.cutoffs == []
+        assert solver.thresholds == []
+
+    def test_a_new_constraint_forgets_the_answer(self):
+        s = DigitBoundStore()
+        x = s.var('x')
+        s.le(x, 9)
+        assert s.reaches([(x, 4)]) is True
+        s.le(x, 3)
+        assert s.reaches([(x, 4)]) is False
 
 
 class TestBisectionMatchesOptimization:
@@ -274,8 +288,8 @@ class TestBisectionMatchesOptimization:
     stop, and where it stops must only ever loosen the answer."""
 
     CASES = (
-        # far below any plausible cutoff: reading it as unsatisfiable, or as
-        # anything below itself, would be unsound
+        # far below where the probe starts: reading it as unsatisfiable, or
+        # as anything below itself, would be unsound
         ('deeply negative', lambda s, x, y: (s.le(x, -5_000_000), x), -5_000_000),
         ('large finite', lambda s, x, y: (s.le(x, 9_000_000), x), 9_000_000),
         ('through a chain', lambda s, x, y: ((s.le(y, 7), s.le(x, y)), x), 7),
