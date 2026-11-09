@@ -19,13 +19,14 @@ _ORIGINAL = {n: getattr(fdpa, n) for n in ('pow2', 'frexp_and_normalize', 'ldexp
                                            'st_fdpa', 'gst_fdpa', 'tr_fdpa', 'gtr_fdpa')}
 
 
-def pow2(e):
+def pow2(e: torch.Tensor) -> torch.Tensor:
     # MMA-Sim widens to FP64 only when FP32 cannot hold 2^e; powers of two are
     # exact in both, so always FP64 gives the same values without a branch
     return torch.exp2(e.double())
 
 
-def frexp_and_normalize(x, e_subnormal=None):
+def frexp_and_normalize(x: torch.Tensor,
+                        e_subnormal: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     assert x.dtype in dtype_subnormal_exponent, f"Unsupported dtype: {x.dtype}"
     if x.dtype == torch.float64:
         s, e = torch.frexp(x)
@@ -41,7 +42,7 @@ def frexp_and_normalize(x, e_subnormal=None):
     return s, e
 
 
-def ldexp_and_normalize(s, e, rho):
+def ldexp_and_normalize(s: torch.Tensor, e: torch.Tensor, rho: str) -> torch.Tensor:
     if rho == "RNE-FP16":
         s, e = frexp_and_normalize(s * pow2(e), e_subnormal=-14)
         s = torch.round(s * 2.0**10) * 2.0**-10
@@ -63,7 +64,8 @@ def ldexp_and_normalize(s, e, rho):
     return res
 
 
-def t_fdpa(a, b, c, F, rho, e_zero):
+def t_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, rho: str,
+           e_zero: int) -> torch.Tensor:
     s_a, e_a = frexp_and_normalize(a)
     s_b, e_b = frexp_and_normalize(b)
     s_c, e_c = frexp_and_normalize(c)
@@ -74,7 +76,8 @@ def t_fdpa(a, b, c, F, rho, e_zero):
     return ldexp_and_normalize(sum, e_max, rho)
 
 
-def st_fdpa(a, b, c, alpha, beta, F, rho, e_zero):
+def st_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, alpha: torch.Tensor, beta: torch.Tensor,
+            F: int, rho: str, e_zero: int) -> torch.Tensor:
     s_a, e_a = frexp_and_normalize(a)
     s_b, e_b = frexp_and_normalize(b)
     s_c, e_c = frexp_and_normalize(c)
@@ -87,7 +90,8 @@ def st_fdpa(a, b, c, alpha, beta, F, rho, e_zero):
     return ldexp_and_normalize(sum, e_max, rho)
 
 
-def gst_fdpa(a, b, c, alpha, beta, G, F, rho, e_zero):
+def gst_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, alpha: torch.Tensor, beta: torch.Tensor,
+             G: int, F: int, rho: str, e_zero: int) -> torch.Tensor:
     p = a.float() * b.float()
     p = p.view(*p.shape[:-1], -1, G)
     apply_e_zero = (p == 0.0).all(dim=-1)
@@ -108,7 +112,8 @@ def gst_fdpa(a, b, c, alpha, beta, G, F, rho, e_zero):
     return ldexp_and_normalize(sum, e_max, rho)
 
 
-def tr_fdpa(a, b, c, F, F2, rho):
+def tr_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, F2: int,
+            rho: str) -> torch.Tensor:
     s_a, e_a = frexp_and_normalize(a)
     s_b, e_b = frexp_and_normalize(b)
     s, e = s_a * s_b, e_a + e_b
@@ -126,7 +131,8 @@ def tr_fdpa(a, b, c, F, F2, rho):
     return ldexp_and_normalize(sum, e_max, rho)
 
 
-def gtr_fdpa(a, b, c, F, F2, rho):
+def gtr_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, F2: int,
+             rho: str) -> torch.Tensor:
     s_a, e_a = frexp_and_normalize(a)
     s_b, e_b = frexp_and_normalize(b)
     s = s_a * s_b

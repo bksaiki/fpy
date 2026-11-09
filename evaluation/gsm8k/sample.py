@@ -132,13 +132,6 @@ def prefilled(model: torch.nn.Module, run: mmasim_matmul.Run, prompts: list[list
     return Prefilled(prompts, pre, n, batched.batch(prompts, caches, firsts), rows, sampled, passes)
 
 
-def _room(run: mmasim_matmul.Run) -> None:
-    """Free FPy's copies of the weights (the check makes the few it needs)
-    for MMA-Sim's graphs."""
-    run._prepared.clear()
-    torch.cuda.empty_cache()
-
-
 def graphless(design: str) -> list[list]:
     """*design*'s call shapes whose graph did not fit: their operands'
     shapes."""
@@ -193,7 +186,7 @@ def layers(model: torch.nn.Module, run: mmasim_matmul.Run, design: str, fpy: dic
     finally:
         run.calls = None
     run.mode = mmasim_matmul.PREFIX + design
-    _room(run)
+    run.drop_storage()
     check: Counter[str] = Counter()
     step, step_shapes = _pass(run, design, step_calls, check, decode=True)
     questions = [_pass(run, design, p.passes[i], check) for i in p.sampled]
@@ -225,7 +218,7 @@ def in_model(model: torch.nn.Module, run: mmasim_matmul.Run, design: str, fpy: d
         return t
 
     run.mode = mmasim_matmul.PREFIX + design
-    _room(run)
+    run.drop_storage()
     try:
         run.calls = []   # prefill before any graph, as in a run
         questions = [timed(lambda q=p.prompts[i]: batched.question(model, p.prefix, p.n, q))

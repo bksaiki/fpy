@@ -29,8 +29,7 @@ PREFIX = 'mmasim:'
 
 EAGER_BUDGET = 3 << 30
 """Bytes of intermediates (:func:`_bytes`) one MMA-Sim call without a graph
-may hold: fixed, so a call splits the same however much memory is free (a
-call holding all of `k`, TF32's or CDNA2's, runs slower in smaller blocks).
+may hold: fixed, so a call splits the same however much memory is free.
 Every decode layer but `lm_head` fits in one block."""
 
 _BUDGET: int | None = None
@@ -66,6 +65,7 @@ def tune(on: bool = True) -> None:
     global TUNED
     mmasim_nosync.install(on)
     TUNED = on
+    GRAPHLESS.clear()
     release_graphs()
 
 
@@ -266,9 +266,8 @@ def accumulate(design: str, scheme: quant.Scheme, qa: quant.Quantized,
                qw: quant.Quantized) -> torch.Tensor:
     """`qa @ qw.T` by *design*'s MMA-Sim operation, as :func:`swap.accumulate`
     by its kernel: block scales applied by its instructions, *scheme*'s others
-    not yet.  The operands are converted to :data:`DTYPES` per call, not kept
-    (under 0.1% of a step; the memory goes to graphs): tuned and
-    :func:`replaying`, by the copy into the graph's buffers."""
+    not yet.  The operands are converted to :data:`DTYPES` per call, not kept:
+    tuned and :func:`replaying`, by the copy into the graph's buffers."""
     ins, dtypes = _operands(scheme, qa, qw)
     if TUNED and _REPLAYING and qa.elements.is_cuda:
         return _replay(design, ins, dtypes)
@@ -285,7 +284,7 @@ class Run(swap.Run):
     """While a list, each design's call appended: its operands, and an
     `mmasim:` call's accumulator (`None` for FPy's kernel)."""
 
-    def _matmul(self, qa, qw, w):
+    def _matmul(self, qa: quant.Quantized, qw: quant.Quantized, w: torch.Tensor) -> torch.Tensor:
         if not self.mode.startswith(PREFIX):
             y = super()._matmul(qa, qw, w)
             if self.calls is not None and kernels.known(self.mode):
@@ -310,16 +309,22 @@ class Run(swap.Run):
         gc.collect()
         torch.cuda.empty_cache()
 
+    def drop_storage(self) -> None:
+        """Free the kernel's copies of the weights, for MMA-Sim's graphs; the
+        check converts the few it needs."""
+        self._prepared.clear()
+        torch.cuda.empty_cache()
+
     def check(self) -> dict[str, int]:
         """:attr:`calls`' MMA-Sim accumulators, recomputed by FPy's kernel for
         the same design and compared, then emptied: the calls, their outputs,
         the outputs that differ in any bit (every NaN equal), and the finite
         ones."""
         design = self.mode.removeprefix(PREFIX)
-        held = kernels.storage(design)[1]
+        storage = kernels.storage(design)[1]
         out = {'calls': 0, 'outputs': 0, 'differing': 0, 'finite': 0}
         for qa, qw, _, y in self.calls or []:
-            z = swap.accumulate(design, self.scheme, qa, qw, qw.elements.to(held))   # uncached: room for graphs
+            z = swap.accumulate(design, self.scheme, qa, qw, qw.elements.to(storage))   # uncached: room for graphs
             out['calls'] += 1
             out['outputs'] += y.numel()
             out['differing'] += int((~same(y, z)).sum())

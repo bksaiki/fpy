@@ -257,10 +257,6 @@ def _text(header: list[str], rows: list[list[str]]) -> str:
                      for row in table)
 
 
-def _label(r: Row) -> str:
-    return LABELS[r.backend] + (' (predicted)' if r.predicted else '')
-
-
 HEADER = ['Problems', 'Tokens', 'Prefill (s)', 'Decode (s)', 'Tokens/s', 'Strict (\\%)',
           'Flexible (\\%)', 'Same as MMA-Sim', 'Speedup']
 
@@ -276,18 +272,17 @@ def latex(rs: list[Row]) -> str:
             design = '---' if r.design is None else rf'\texttt{{{r.design}}}'
         else:
             design = ''
-        lines.append(' & '.join([design, _label(r), *_cells(r)]) + r' \\')
+        lines.append(' & '.join([design, LABELS[r.backend], *_cells(r)]) + r' \\')
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 
 def text(rs: list[Row]) -> str:
     table = [['Design', 'Backend', *(h.replace('\\', '') for h in HEADER)],
-             *([r.design or '-', r.backend + ('*' if r.predicted else ''), *_cells(r)] for r in rs)]
+             *([r.design or '-', r.backend, *_cells(r)] for r in rs)]
     widths = [max(len(row[i]) for row in table) for i in range(len(table[0]))]
-    note = ['* time predicted from a sample (sample.py)'] if any(r.predicted for r in rs) else []
-    return '\n'.join(['  '.join(c.ljust(w) if i < 2 else c.rjust(w)
-                                for i, (c, w) in enumerate(zip(row, widths, strict=True))).rstrip()
-                      for row in table] + note)
+    return '\n'.join('  '.join(c.ljust(w) if i < 2 else c.rjust(w)
+                               for i, (c, w) in enumerate(zip(row, widths, strict=True))).rstrip()
+                     for row in table)
 
 
 def main(argv: list[str]) -> int:

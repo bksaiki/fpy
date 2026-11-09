@@ -65,8 +65,8 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     eos = generate.stop_tokens(model, tok)
     prompts = encode(tok, problems)
     warmup = time.perf_counter()
-    # a tuned MMA-Sim's first decode step captures its graphs, inside the timing: prefill
-    # then runs without them resident, as in its prediction
+    # tuned MMA-Sim captures decode's graphs in its first timed step, so prefill runs without
+    # them, as in its prediction
     decoding = (mmasim_matmul.replaying if backend == 'mmasim' and mmasim_matmul.TUNED
                 else contextlib.nullcontext)
     if backend != 'mmasim':   # Triton's JIT and CUDA's start-up, outside the timing
@@ -226,7 +226,8 @@ def _run(args: argparse.Namespace) -> int:
             swap.use(run, model, kernels.scheme(design))
             print(f'  {torch.cuda.memory_allocated() / 2**30:.2f} GiB allocated', flush=True)
         reused = None if args.reuse is None or backend == 'mmasim' else args.reuse / f'{name}.json'
-        if reused is not None and reused.exists():
+        reusing = reused is not None and reused.exists()
+        if reusing:
             r = json.loads(reused.read_text())
             print(f'  reused {reused}', flush=True)
         elif backend == 'mmasim':
@@ -235,7 +236,7 @@ def _run(args: argparse.Namespace) -> int:
         else:
             r = measure(model, run, tok, problems, backend, design, args.max_new, args.batch)
         records[backend, design] = r
-        if reused is None or not reused.exists():
+        if not reusing:
             r |= {'seconds': time.perf_counter() - start, **env}
         (args.out / f'{name}.json').write_text(json.dumps(r, indent=1))
 
