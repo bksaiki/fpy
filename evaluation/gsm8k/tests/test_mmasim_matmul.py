@@ -125,3 +125,36 @@ def test_fpy_calls_are_recorded():
             model(torch.randn(3, 1024, device='cuda'))
     ((qa, _, w, acc),) = run.calls
     assert qa.elements.shape == (3, 1024) and w is model[0].weight and acc is None
+
+
+def test_release_drops_every_held_weight():
+    model = torch.nn.Sequential(torch.nn.Linear(1024, 2048, bias=False)).cuda()
+    run = mmasim_matmul.patch(model)
+    with torch.no_grad():
+        for run.mode in ('nv.hopper.bf16.f32', 'mmasim:nv.hopper.bf16.f32'):
+            model(torch.randn(3, 1024, device='cuda'))
+    assert run._weights and run._prepared
+    run.release()
+    assert not run._weights and not run._prepared
+    assert run._input is None
+
+
+@pytest.mark.parametrize('design', ['nv.hopper.bf16.f32', 'nv.hopper.tf32.f32', 'amd.cdna3.bf16',
+                                    'amd.cdna3.fp8', 'amd.cdna2.bf16', 'fp32 (fma)', 'nv.blackwell.mx.e4m3',
+                                    'nv.blackwell.nvfp4'])
+def test_tuned_is_bit_for_bit(design: str, compiled: None):
+    """Tuned (no host waits; replaying, a CUDA graph per call shape) gives
+    MMA-Sim's own bits, and each replay its own operands'."""
+    released = [_both(design, 3, 16, 1024, seed)[0] for seed in (0, 1)]
+    mmasim_matmul.tune()
+    try:
+        eager = _both(design, 3, 16, 1024, 0)[0]
+        assert not mmasim_matmul._GRAPHS   # no graph outside `replaying`
+        with mmasim_matmul.replaying():
+            tuned = [_both(design, 3, 16, 1024, seed)[0] for seed in (0, 1)]
+        assert len(mmasim_matmul._GRAPHS) == 1   # one shape, captured once
+    finally:
+        mmasim_matmul.tune(False)
+    assert bool(mmasim_matmul.same(eager, released[0]).all())
+    assert all(bool(mmasim_matmul.same(t, r).all()) for t, r in zip(tuned, released, strict=True))
+    assert not bool(mmasim_matmul.same(*released).all())

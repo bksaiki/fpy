@@ -33,8 +33,9 @@ RECORDS = [
 PREDICTED = [
     _record('fpy', E, [[1, 2], [3, 4, 5]], WRONG, 2.0, 2.0) | {'scheme': 'fp8-row'},
     {'backend': 'mmasim', 'design': E, 'scheme': 'fp8-row', 'problems': 2, 'method': 'layers',
-     'prefill': 40.0, 'decode': 160.0, 'check': CHECK | {'differing': 3},
-     'layers': {'prefill': 40.0, 'decode': 160.0}},
+     'baseline': 'tuned', 'prefill': 40.0, 'decode': 160.0, 'check': CHECK | {'differing': 3},
+     'layers': {'prefill': 40.0, 'decode': 160.0,
+                'passes': {'step': [{'graph': True}, {'graph': False}, {'graph': True}]}}},
 ]
 
 
@@ -64,10 +65,11 @@ def test_predicted_rows_leave_the_main_table():
 
 def test_designs_and_summary():
     ds = report.designs(RECORDS + PREDICTED)
-    assert [(d.design, d.measured, d.speedup) for d in ds] == [(E, False, 50.0), (D, True, 300.0)]
+    assert [(d.design, d.measured, d.speedup, d.graphs) for d in ds] == \
+        [(E, False, 50.0, (2, 3)), (D, True, 300.0, None)]
     s = report.summary(ds)
-    assert (s['designs'], s['min'], s['median'], s['max'], s['differing']) == \
-        (2, (50.0, E), 175.0, (300.0, D), 3)
+    assert (s['designs'], s['min'], s['max'], s['differing']) == (2, (50.0, E), (300.0, D), 3)
+    assert s['geomean'] == pytest.approx((50.0 * 300.0) ** 0.5)
 
 
 def test_checks():
@@ -85,10 +87,10 @@ def test_main(tmp_path: Path):
     assert r'\texttt{nv.hopper.bf16.f32} & FPy & 2 & 5 & 1 & 3 & 1.25 & 50.0 & 50.0 & 2/2 & 300 \\' in tex
     assert E not in tex
     designs = (tmp_path / 'gsm8k-designs.tex').read_text()
-    assert r'\texttt{nv.blackwell.e4m3.f32} & fp8-row & 2 & 2 & 4 & 40* & 160* & 200* & 50 & 3/100 & 90.0 \\' in designs
-    assert r'\texttt{nv.hopper.bf16.f32} & full run & 1,200 & 1,200 & +10.0 & -3.3 & +0.0 \\' in \
+    assert r'\texttt{nv.blackwell.e4m3.f32} & fp8-row & 2 & 2 & 4 & 40* & 160* & 200* & 50 & 3/100 & 90.0 & 2/3 \\' in designs
+    assert r'\texttt{nv.hopper.bf16.f32} & full run & 1,200 & 1,200 & +10.0 & -3.3 & +0.0 & --- \\' in \
         (tmp_path / 'gsm8k-check.tex').read_text()
     nums = json.loads((tmp_path / 'gsm8k-speed.json').read_text())
     assert (len(nums['main']), len(nums['designs']), len(nums['check'])) == (3, 2, 2)
-    assert 'median 175' in (tmp_path / 'gsm8k-summary.txt').read_text()
+    assert 'geomean 122' in (tmp_path / 'gsm8k-summary.txt').read_text()
     assert report.main([str(tmp_path)]) == 0   # ignores its own outputs

@@ -18,6 +18,7 @@ differs from FPy's kernel.
 """
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import platform
@@ -64,13 +65,17 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     eos = generate.stop_tokens(model, tok)
     prompts = encode(tok, problems)
     warmup = time.perf_counter()
+    # a tuned MMA-Sim's first decode step captures its graphs, inside the timing: prefill
+    # then runs without them resident, as in its prediction
+    decoding = (mmasim_matmul.replaying if backend == 'mmasim' and mmasim_matmul.TUNED
+                else contextlib.nullcontext)
     if backend != 'mmasim':   # Triton's JIT and CUDA's start-up, outside the timing
         batched.generate(model, prompts[:batch], 2, eos)
     warmup = time.perf_counter() - warmup
     tokens: list[list[int]] = []
     batches = []
     for i in range(0, len(prompts), batch):
-        g = batched.generate(model, prompts[i:i + batch], max_new, eos)
+        g = batched.generate(model, prompts[i:i + batch], max_new, eos, decoding)
         tokens += g.tokens
         batches.append({'first': i, 'shared': batched.shared(prompts[i:i + batch]),
                         **{k: v for k, v in dataclasses.asdict(g).items() if k != 'tokens'}})
@@ -81,6 +86,7 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     return {
         'backend': backend, 'design': design, 'model': model.config.name_or_path,
         'scheme': None if design is None else run.scheme.name,
+        'baseline': _baseline() if backend == 'mmasim' else None,
         'problems': len(problems), 'max_new': max_new, 'batch': batch,
         'prefill': sum(b['prefill'] for b in batches), 'decode': sum(b['decode'] for b in batches),
         'warmup': warmup,
@@ -100,10 +106,11 @@ def mmasim(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     way, and the in-model sample if *sampled*.  *fpy* is FPy's record."""
     if method == 'full':
         r = measure(model, run, tok, problems, 'mmasim', design, max_new, batch)
+        r['graphless'] = sample.graphless(design)
     else:
         r = {'backend': 'mmasim', 'design': design, 'model': model.config.name_or_path,
-             'scheme': run.scheme.name, 'problems': fpy['problems'], 'max_new': fpy['max_new'],
-             'batch': fpy['batch']}
+             'scheme': run.scheme.name, 'baseline': _baseline(), 'problems': fpy['problems'],
+             'max_new': fpy['max_new'], 'batch': fpy['batch']}
     p = sample.prefilled(model, run, encode(tok, problems), design, fpy)
     lay = sample.layers(model, run, design, fpy, p)
     r |= {'method': method, 'layers': lay, 'check': lay['check']}
@@ -115,6 +122,10 @@ def mmasim(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
         print(f"  mmasim: in the model {r['in_model']['prefill'] + r['in_model']['decode']:.0f}s",
               flush=True)
     return r
+
+
+def _baseline() -> str:
+    return 'tuned' if mmasim_matmul.TUNED else 'released'
 
 
 def _git(*args: str) -> str:
@@ -162,6 +173,11 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--mmasim', choices=('layers', 'full'), default='layers',
                     help="MMA-Sim's time: predicted per layer, or measured over the whole "
                          'run (default %(default)s)')
+    ap.add_argument('--mmasim-as', choices=('tuned', 'released'), default='tuned',
+                    help='MMA-Sim tuned (no host waits, CUDA graphs; same bits), or as released '
+                         '(default %(default)s)')
+    ap.add_argument('--reuse', metavar='DIR', type=Path,
+                    help="take `torch`'s and `fpy`'s records from DIR where there, rather than run them")
     ap.add_argument('--sampled', nargs='*', default=list(config.GSM8K_SAMPLED), metavar='DESIGN',
                     help='designs also sampled in the model, checking the prediction '
                          '(default %(default)s)')
@@ -179,6 +195,15 @@ def main(argv: list[str]) -> int:
     shutil.rmtree(args.out, ignore_errors=True)
     args.out.mkdir(parents=True)
 
+    mmasim_matmul.tune(args.mmasim_as == 'tuned')
+    try:
+        return _run(args)
+    finally:
+        mmasim_matmul.tune(False)
+
+
+def _run(args: argparse.Namespace) -> int:
+    """*args*' runs, records and report; whether every design agrees (0)."""
     fpy = args.designs if 'fpy' in args.backends else []
     if refused := kernels.compile_designs(fpy, args.jobs):
         sys.exit(f'refused: {refused}')
@@ -196,15 +221,22 @@ def main(argv: list[str]) -> int:
         name = backend if design is None else f'{design}-{backend}'
         print(f'-- {name}', flush=True)
         start = time.perf_counter()
-        if design is not None:
+        if design is not None and backend == 'fpy':
+            run.release()
             swap.use(run, model, kernels.scheme(design))
-        if backend == 'mmasim':
+            print(f'  {torch.cuda.memory_allocated() / 2**30:.2f} GiB allocated', flush=True)
+        reused = None if args.reuse is None or backend == 'mmasim' else args.reuse / f'{name}.json'
+        if reused is not None and reused.exists():
+            r = json.loads(reused.read_text())
+            print(f'  reused {reused}', flush=True)
+        elif backend == 'mmasim':
             r = mmasim(model, run, tok, problems, design, records['fpy', design], args.mmasim,
                        args.max_new, args.batch, design in args.sampled)
         else:
             r = measure(model, run, tok, problems, backend, design, args.max_new, args.batch)
         records[backend, design] = r
-        r |= {'seconds': time.perf_counter() - start, **env}
+        if reused is None or not reused.exists():
+            r |= {'seconds': time.perf_counter() - start, **env}
         (args.out / f'{name}.json').write_text(json.dumps(r, indent=1))
 
     print('-- report')

@@ -10,7 +10,7 @@ Writes, beside the records:
   over it: `torch`, then each design whose MMA-Sim run was measured;
 - `gsm8k-designs.tex`: per design, FPy's time (measured), MMA-Sim's
   (predicted per layer, or measured), the speedup, and the bit check of the
-  calls MMA-Sim ran; and the speedup's minimum, median and maximum;
+  calls MMA-Sim ran; and the speedup's minimum, geometric mean and maximum;
 - `gsm8k-check.tex`: the per-layer prediction against MMA-Sim's in-model
   sample, or its whole run;
 - `gsm8k-speed.json`: every number in them;
@@ -121,6 +121,9 @@ class Design:
     """MMA-Sim's, predicted per layer or measured."""
     measured: bool
     check: dict[str, int]
+    graphs: tuple[int, int] | None = None
+    """Decode shapes MMA-Sim's prediction replayed as graphs, of all; `None`
+    for MMA-Sim as released."""
 
     @property
     def speedup(self) -> float:
@@ -131,18 +134,26 @@ def designs(records: list[dict[str, Any]]) -> list[Design]:
     """A row per design with both records, by design."""
     by = {(r['design'], r['backend']): r for r in records}
     return [Design(d, f['scheme'], (f['prefill'], f['decode']), (m['prefill'], m['decode']),
-                   'tokens' in m, m['check'])
+                   'tokens' in m, m['check'], _graphs(m))
             for (d, b), f in sorted(by.items(), key=lambda kv: kv[0][0] or '')
             if b == 'fpy' and (m := by.get((d, 'mmasim'))) is not None]
 
 
+def _graphs(m: dict[str, Any]) -> tuple[int, int] | None:
+    """*m*'s decode shapes timed as graphs, of all, if tuned."""
+    if m.get('baseline') != 'tuned':
+        return None
+    step = m['layers']['passes']['step']
+    return sum(s.get('graph', False) for s in step), len(step)
+
+
 def summary(ds: list[Design]) -> dict[str, Any]:
-    """The speedup's minimum, median and maximum over *ds*, and where."""
+    """The speedup's minimum, geometric mean and maximum over *ds*, and where."""
     if not ds:
         return {}
     by = sorted(ds, key=lambda d: d.speedup)
     return {'designs': len(ds), 'min': (by[0].speedup, by[0].design),
-            'median': statistics.median(d.speedup for d in ds),
+            'geomean': statistics.geometric_mean(d.speedup for d in ds),
             'max': (by[-1].speedup, by[-1].design),
             'differing': sum(d.check['differing'] for d in ds)}
 
@@ -157,6 +168,8 @@ class Check:
     predicted: tuple[float, float]
     """Prefill and decode seconds, per layer."""
     reference: tuple[float, float]
+    graphless: int | None = None
+    """Decode shapes the measurement ran without a graph, if tuned."""
 
     @property
     def errors(self) -> tuple[float, float, float]:
@@ -171,11 +184,14 @@ def checks(records: list[dict[str, Any]]) -> list[Check]:
     out = []
     for m in sorted((r for r in records if r['backend'] == 'mmasim'), key=lambda r: r['design']):
         lay = (m['layers']['prefill'], m['layers']['decode'])
+        tuned = m.get('baseline') == 'tuned'
         if 'tokens' in m:
-            out.append(Check(m['design'], 'full run', lay, (m['prefill'], m['decode'])))
+            out.append(Check(m['design'], 'full run', lay, (m['prefill'], m['decode']),
+                             len(m.get('graphless', [])) if tuned else None))
         if 'in_model' in m:
-            out.append(Check(m['design'], 'in-model sample', lay,
-                             (m['in_model']['prefill'], m['in_model']['decode'])))
+            im = m['in_model']
+            out.append(Check(m['design'], 'in-model sample', lay, (im['prefill'], im['decode']),
+                             len(im.get('graphless', [])) if tuned else None))
     return out
 
 
@@ -205,22 +221,24 @@ def _bits(c: dict[str, int]) -> list[str]:
 
 
 DESIGN_HEADER = ['Scheme', 'FPy prefill (s)', 'FPy decode (s)', 'FPy (s)', 'MMA-Sim prefill (s)',
-                 'MMA-Sim decode (s)', 'MMA-Sim (s)', 'Speedup', 'Differing outputs', 'Finite (\\%)']
+                 'MMA-Sim decode (s)', 'MMA-Sim (s)', 'Speedup', 'Differing outputs', 'Finite (\\%)',
+                 'Decode graphs']
 
 
 def _design_cells(d: Design) -> list[str]:
     star = '' if d.measured else '*'
     return [d.scheme, _num(d.fpy[0]), _num(d.fpy[1]), _num(sum(d.fpy)), _num(d.mmasim[0]) + star,
-            _num(d.mmasim[1]) + star, _num(sum(d.mmasim)) + star, _num(d.speedup), *_bits(d.check)]
+            _num(d.mmasim[1]) + star, _num(sum(d.mmasim)) + star, _num(d.speedup), *_bits(d.check),
+            '---' if d.graphs is None else f'{d.graphs[0]}/{d.graphs[1]}']
 
 
 CHECK_HEADER = ['Against', 'Predicted (s)', 'Measured (s)', 'Prefill error (\\%)',
-                'Decode error (\\%)', 'Total error (\\%)']
+                'Decode error (\\%)', 'Total error (\\%)', 'Graphless']
 
 
 def _check_cells(c: Check) -> list[str]:
     return [c.against, _num(sum(c.predicted)), _num(sum(c.reference)),
-            *(f'{100 * e:+.1f}' for e in c.errors)]
+            *(f'{100 * e:+.1f}' for e in c.errors), '---' if c.graphless is None else str(c.graphless)]
 
 
 def _tabular(header: list[str], rows: list[list[str]], note: str = '') -> str:
@@ -300,7 +318,7 @@ def main(argv: list[str]) -> int:
         parts += [_text(DESIGN_HEADER, design_rows), star]
     if stats:
         parts.append(f"Speedup over {stats['designs']} designs: min {_num(stats['min'][0])} "
-                     f"({stats['min'][1]}), median {_num(stats['median'])}, "
+                     f"({stats['min'][1]}), geomean {_num(stats['geomean'])}, "
                      f"max {_num(stats['max'][0])} ({stats['max'][1]})")
     if cs:
         parts.append(_text(CHECK_HEADER, check_rows))

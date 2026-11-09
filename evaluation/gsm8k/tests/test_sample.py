@@ -46,20 +46,22 @@ def _call(m: int, n: int, k: int) -> tuple:
 
 
 def test_a_pass_times_each_shape_once(monkeypatch: pytest.MonkeyPatch):
-    """Each distinct `(m, n, k)` runs twice (warm-up, then timed) on its
-    first call's operands; the pass is each shape's time by its count; the
+    """Each distinct `(m, n, k)` runs twice on its first call's operands,
+    every warm-up before any timed call; the pass is each shape's time by its count; the
     timed calls are checked."""
     ran, ticks = [], iter(range(100))
-    monkeypatch.setattr(mmasim_matmul, 'accumulate', lambda d, s, qa, qw, b: ran.append(qa) or qa.elements)
+    monkeypatch.setattr(mmasim_matmul, 'accumulate', lambda d, s, qa, qw: ran.append(qa) or qa.elements)
     monkeypatch.setattr(sample.batched, 'clock', lambda: float(next(ticks)) * 0.5)
+    monkeypatch.setattr(mmasim_matmul, 'graphed', lambda d, s, qa, qw: qa.elements.shape[0] == 32)
+    monkeypatch.setattr(mmasim_matmul, 'release_graphs', lambda: None)
     checked = []
-    run = SimpleNamespace(scheme=None, calls=None, held=lambda w, qw: None,
+    run = SimpleNamespace(scheme=None, calls=None,
                           check=lambda: checked.append(len(run.calls)) or {'calls': len(run.calls)})
     calls = [_call(32, 8, 16), _call(32, 8, 16), _call(32, 4, 16), _call(1, 8, 16), _call(32, 8, 16)]
     check = sample.Counter()
     seconds, shapes = sample._pass(run, 'd', calls, check)
-    assert [(s['m'], s['n'], s['k'], s['count'], s['seconds']) for s in shapes] == \
-        [(32, 8, 16, 3, 0.5), (32, 4, 16, 1, 0.5), (1, 8, 16, 1, 0.5)]
+    assert [(s['m'], s['n'], s['k'], s['count'], s['seconds'], s['graph']) for s in shapes] == \
+        [(32, 8, 16, 3, 0.5, True), (32, 4, 16, 1, 0.5, True), (1, 8, 16, 1, 0.5, False)]
     assert seconds == 2.5 and len(ran) == 6
-    assert ran[0] is ran[1] is calls[0][0]
+    assert ran[:3] == ran[3:] and ran[0] is calls[0][0]   # every warm-up, then every timed call
     assert checked == [3] and check == {'calls': 3} and run.calls is None

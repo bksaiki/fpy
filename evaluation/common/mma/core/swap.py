@@ -219,6 +219,10 @@ class Run:
         return self._weights[key][1]
 
     def _prepare(self, w: torch.Tensor, qw: quant.Quantized, dtype: torch.dtype) -> torch.Tensor:
+        """*qw*'s elements in *dtype*, kept per weight; converted per call
+        instead if wider than *w* (FP64: every weight's copy would not fit)."""
+        if dtype.itemsize > w.dtype.itemsize:
+            return qw.elements.to(dtype)
         got = self._prepared.get(id(w))
         if got is None or got[0] is not qw or got[1] != dtype:
             got = self._prepared[id(w)] = (qw, dtype, qw.elements.to(dtype))

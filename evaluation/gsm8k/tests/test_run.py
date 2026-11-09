@@ -48,8 +48,13 @@ def test_smoke_layers(tiny: Path, tmp_path: Path):
         lay = m['layers']
         assert (m['prefill'], m['decode']) == (lay['prefill'], lay['decode'])
         assert lay['decode'] == pytest.approx(len(f['batches'][0]['steps']) * lay['step'])
-        assert m['prefill'] > m['prefix'] > 0
+        a, b = lay['fit']   # on the tiny model the line is noise: check it is the one used
+        f = records[f'{d}-fpy']
+        n = f['batches'][0]['shared']
+        assert m['prefix'] == pytest.approx(a + b * n)
+        assert m['prefill'] == pytest.approx(m['prefix'] + sum(a + b * (k - n) for k in f['prompt_tokens']))
         assert len(lay['passes']['questions']) == 2 and lay['passes']['step']
+        assert all(isinstance(x['graph'], bool) for x in lay['passes']['step'])
         assert m['check']['calls'] > 0 and m['check']['differing'] == 0
     assert records[f'{D}-fpy']['scheme'] == 'bf16' and records[f'{E}-fpy']['scheme'] == 'fp8-row'
     assert 'in_model' not in records[f'{D}-mmasim']
@@ -59,14 +64,28 @@ def test_smoke_layers(tiny: Path, tmp_path: Path):
 
 def test_smoke_full(tiny: Path, tmp_path: Path):
     out = tmp_path / 'results'
-    assert run.main(['--smoke', '--mmasim', 'full', D, '--sampled', '--model', str(tiny),
-                     '-o', str(out)]) == 0
+    assert run.main(['--smoke', '--mmasim', 'full', D, '--mmasim-as', 'released', '--sampled',
+                     '--model', str(tiny), '-o', str(out)]) == 0
     records = _records(out, ['torch', f'{D}-fpy', f'{D}-mmasim'])
     for r in records.values():
         _check_run(r)
     m = records[f'{D}-mmasim']
-    assert m['method'] == 'full' and records[f'{D}-fpy']['tokens'] == m['tokens']
+    assert m['method'] == 'full' and m['baseline'] == 'released'
+    assert records[f'{D}-fpy']['tokens'] == m['tokens']
     assert m['layers']['decode'] > 0 and m['check']['differing'] == 0
+
+
+def test_reuse(tiny: Path, tmp_path: Path):
+    """A tuned run that takes FPy's record from an earlier one, as it was."""
+    first, second = tmp_path / 'first', tmp_path / 'second'
+    assert run.main([D, '--smoke', '--backends', 'fpy', '--model', str(tiny), '-o', str(first)]) == 0
+    assert run.main([D, '--smoke', '--backends', 'fpy', 'mmasim', '--sampled', D, '--reuse', str(first),
+                     '--model', str(tiny), '-o', str(second)]) == 0
+    old, new = (json.loads((d / f'{D}-fpy.json').read_text()) for d in (first, second))
+    assert new == old
+    m = json.loads((second / f'{D}-mmasim.json').read_text())
+    assert m['baseline'] == 'tuned' and m['check']['differing'] == 0
+    assert m['in_model']['check']['differing'] == 0
 
 
 def test_sampling_needs_fpy(tmp_path: Path):

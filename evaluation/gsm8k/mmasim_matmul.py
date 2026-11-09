@@ -4,9 +4,13 @@ MMA-Sim's PyTorch model of it, built from the design's catalog parameters
 as `examples/mmasim/tests` builds them.
 """
 
+import gc
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import generator
+import mmasim_nosync
 import torch
 from core import kernels, quant, swap
 from generator.catalog import CATALOG
@@ -23,12 +27,68 @@ DESIGNS = tuple(d for d in CATALOG if d not in REFUSED)
 
 PREFIX = 'mmasim:'
 
-_SHARE = 0.6
-"""Of the GPU's free memory, and PyTorch's cached but unused, the share one
-MMA-Sim call's intermediates may take (:func:`_bytes`)."""
+EAGER_BUDGET = 3 << 30
+"""Bytes of intermediates (:func:`_bytes`) one MMA-Sim call without a graph
+may hold: fixed, so a call splits the same however much memory is free (a
+call holding all of `k`, TF32's or CDNA2's, runs slower in smaller blocks).
+Every decode layer but `lm_head` fits in one block."""
 
 _BUDGET: int | None = None
 """Bytes per call instead, if set (tests)."""
+
+TUNED = False
+"""Whether MMA-Sim is the tuned baseline (:func:`tune`)."""
+
+_REPLAYING = False
+"""Whether calls replay their shape's graph (:func:`replaying`)."""
+
+_GRAPHS: dict[tuple, tuple[torch.cuda.CUDAGraph, list[torch.Tensor], torch.Tensor]] = {}
+"""Each call shape's captured graph, its input buffers, and its output."""
+
+GRAPH_LIMIT = 2 << 30
+"""A call shape gets a graph only if its intermediates (:func:`_bytes`) fit
+in this: a graph keeps them reserved, out of the model's reach."""
+
+GRAPHLESS: set[tuple] = set()
+"""The call shapes without a graph, over :data:`GRAPH_LIMIT` or out of
+memory capturing: these run without one (still without host waits)."""
+
+_POOL: tuple | None = None
+"""The memory pool every graph shares: they never run at once, and each
+output is copied out of it."""
+
+
+def tune(on: bool = True) -> None:
+    """Make MMA-Sim the tuned baseline, or as released: tuned, its
+    arithmetic never waits for the GPU (`mmasim_nosync`), and in decode
+    (:func:`replaying`) each call shape is captured once as a CUDA graph and
+    replayed, as LLM servers do.  Bit for bit the same."""
+    global TUNED
+    mmasim_nosync.install(on)
+    TUNED = on
+    release_graphs()
+
+
+@contextmanager
+def replaying() -> Iterator[None]:
+    """Within, a tuned MMA-Sim replays each call shape's graph, captured on
+    first use: for decode, whose shapes repeat every step.  A graph holds
+    60-440 MiB beyond PyTorch's allocator, so prefill's one-off shapes run
+    without one."""
+    global _REPLAYING
+    old, _REPLAYING = _REPLAYING, True
+    try:
+        yield
+    finally:
+        _REPLAYING = old
+
+
+def release_graphs() -> None:
+    """Drop every captured graph and its memory."""
+    global _POOL
+    _GRAPHS.clear()
+    _POOL = None
+    torch.cuda.empty_cache()
 
 _RHO = {(32, fp.RM.RTZ): 'RZ-FP32', (22, fp.RM.RTZ): 'RZ-E8M13', (32, fp.RM.RNE): 'RNE-FP32',
         (16, fp.RM.RNE): 'RNE-FP16'}
@@ -85,10 +145,10 @@ def matmul(design: str, a: torch.Tensor, w: torch.Tensor,
     its :func:`output` dtype, for *a* `[m, k]` and *w* `[n, k]` in
     :data:`DTYPES`; a block-scaled design takes *scales* `[m, k / b]` and
     `[n, k / b]`, one per block `b` of its scheme.  Computed in blocks of
-    rows and columns as large as free memory allows (:data:`_SHARE`):
-    MMA-Sim is bound by launches, so fewer blocks are faster.  Out of
-    memory, it retries in blocks half as large."""
-    budget = _BUDGET or _free(a.device)
+    rows and columns within :data:`EAGER_BUDGET`: MMA-Sim is bound by
+    launches, so fewer blocks are faster.  Out of memory, it retries in
+    blocks half as large."""
+    budget = _BUDGET or EAGER_BUDGET
     while True:
         try:
             return _blocks(design, a, w, scales, budget)
@@ -99,10 +159,73 @@ def matmul(design: str, a: torch.Tensor, w: torch.Tensor,
             budget //= 2
 
 
-def _free(device: torch.device) -> int:
-    free, _ = torch.cuda.mem_get_info(device)
-    cached = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
-    return int(_SHARE * (free + cached))
+def _operands(scheme: quant.Scheme, qa: quant.Quantized,
+              qw: quant.Quantized) -> tuple[list[torch.Tensor], list[torch.dtype]]:
+    """A call's operands, then any block scales, and the dtypes MMA-Sim takes
+    them in."""
+    ins = [qa.elements, qw.elements]
+    dtypes = [DTYPES[scheme.x.elements], DTYPES[scheme.w.elements]]
+    if scheme.applied == 'instruction':
+        ins += [qa.scales, qw.scales]
+        dtypes += [DTYPES[scheme.x.scaling.fmt]] * 2
+    return ins, dtypes
+
+
+def _key(design: str, ins: list[torch.Tensor], dtypes: list[torch.dtype]) -> tuple:
+    return (design, *((tuple(x.shape), str(d)) for x, d in zip(ins, dtypes, strict=True)))
+
+
+def graphed(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized) -> bool:
+    """Whether this call's shape has a captured graph now."""
+    return _key(design, *_operands(scheme, qa, qw)) in _GRAPHS
+
+
+def _replay(design: str, ins: list[torch.Tensor], dtypes: list[torch.dtype]) -> torch.Tensor:
+    """*design*'s call on *ins* (operands, then any scales) converted to
+    *dtypes*, by its shape's graph, captured on first use: the operands
+    copied in, the output copied out.  A shape whose graph does not fit runs
+    without one (:data:`GRAPHLESS`)."""
+    key = _key(design, ins, dtypes)
+    (m, k), n = ins[0].shape, ins[1].shape[0]
+    if m * n * _bytes(design, k) > GRAPH_LIMIT:
+        GRAPHLESS.add(key)
+    if key not in _GRAPHS and key not in GRAPHLESS:
+        try:
+            _GRAPHS[key] = _capture(design, ins, dtypes)
+        except (torch.OutOfMemoryError, torch.AcceleratorError) as ex:
+            if 'out of memory' not in str(ex):
+                raise
+            GRAPHLESS.add(key)   # the other graphs stay: dropping them re-captures each, mid-decode
+            torch.cuda.empty_cache()
+    if key in GRAPHLESS:
+        a, b, *scales = (x.to(d) for x, d in zip(ins, dtypes, strict=True))
+        return matmul(design, a, b, tuple(scales) or None)
+    graph, static, out = _GRAPHS[key]
+    for buf, x in zip(static, ins, strict=True):
+        buf.copy_(x)
+    graph.replay()
+    return out.clone()
+
+
+def _capture(design: str, ins: list[torch.Tensor],
+             dtypes: list[torch.dtype]) -> tuple[torch.cuda.CUDAGraph, list[torch.Tensor], torch.Tensor]:
+    """*design*'s call on buffers like *ins* in *dtypes*, run once on a side
+    stream, then captured: in one block, as a graphed call fits in
+    :data:`GRAPH_LIMIT`."""
+    global _POOL
+    static = [x.to(d) for x, d in zip(ins, dtypes, strict=True)]
+    scales = (static[2], static[3]) if len(static) == 4 else None
+    budget = _BUDGET or GRAPH_LIMIT
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):
+        _blocks(design, static[0], static[1], scales, budget)
+    torch.cuda.current_stream().wait_stream(side)
+    _POOL = _POOL or torch.cuda.graph_pool_handle()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph, pool=_POOL):
+        out = _blocks(design, static[0], static[1], scales, budget)
+    return graph, static, out
 
 
 def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
@@ -139,19 +262,18 @@ def _call(op: MMAOperation | MMABlockScaleOperation, design: str, a: torch.Tenso
     return op(a, b, c)
 
 
-def accumulate(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
-               b: torch.Tensor | None = None) -> torch.Tensor:
+def accumulate(design: str, scheme: quant.Scheme, qa: quant.Quantized,
+               qw: quant.Quantized) -> torch.Tensor:
     """`qa @ qw.T` by *design*'s MMA-Sim operation, as :func:`swap.accumulate`
     by its kernel: block scales applied by its instructions, *scheme*'s others
-    not yet.  *b* is *qw*'s elements in :data:`DTYPES`, if converted already."""
-    a = qa.elements.to(DTYPES[scheme.x.elements])
-    if b is None:
-        b = qw.elements.to(DTYPES[scheme.w.elements])
-    scales = None
-    if scheme.applied == 'instruction':
-        dtype = DTYPES[scheme.x.scaling.fmt]
-        scales = (qa.scales.to(dtype), qw.scales.to(dtype))
-    return matmul(design, a, b, scales)
+    not yet.  The operands are converted to :data:`DTYPES` per call, not kept
+    (under 0.1% of a step; the memory goes to graphs): tuned and
+    :func:`replaying`, by the copy into the graph's buffers."""
+    ins, dtypes = _operands(scheme, qa, qw)
+    if TUNED and _REPLAYING and qa.elements.is_cuda:
+        return _replay(design, ins, dtypes)
+    a, b, *scales = (x.to(d) for x, d in zip(ins, dtypes, strict=True))
+    return matmul(design, a, b, tuple(scales) or None)
 
 
 @dataclass
@@ -172,20 +294,21 @@ class Run(swap.Run):
         design = self.mode.removeprefix(PREFIX)
         if design not in DESIGNS or not kernels.applicable(design, self.scheme):
             raise ValueError(f'{self.mode} does not take the {self.scheme.name} scheme')
-        acc = accumulate(design, self.scheme, qa, qw, self.held(w, qw))
+        acc = accumulate(design, self.scheme, qa, qw)
         if self.calls is not None:
             self.calls.append((qa, qw, w, acc.clone()))
         return swap.epilogue(acc, self.scheme, qa, qw)
 
-    def held(self, w: torch.Tensor, qw: quant.Quantized) -> torch.Tensor:
-        """*qw*'s elements in MMA-Sim's dtype, converted once per weight and
-        kept apart from the kernel's (`_prepare`), so neither evicts the other."""
-        dtype = DTYPES[self.scheme.w.elements]
-        held = self.__dict__.setdefault('_mmasim_held', {})
-        got = held.get(id(w))
-        if got is None or got[0] is not qw or got[1] != dtype:
-            got = held[id(w)] = (qw, dtype, qw.elements.to(dtype))
-        return got[2]
+    def release(self) -> None:
+        """Drop every weight held for a design (quantized, in the kernel's
+        storage) and the last input, its graphs, and return the GPU memory:
+        between designs, so they do not pile up."""
+        self._weights.clear()
+        self._prepared.clear()
+        self._input = None
+        release_graphs()
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def check(self) -> dict[str, int]:
         """:attr:`calls`' MMA-Sim accumulators, recomputed by FPy's kernel for
@@ -195,8 +318,8 @@ class Run(swap.Run):
         design = self.mode.removeprefix(PREFIX)
         held = kernels.storage(design)[1]
         out = {'calls': 0, 'outputs': 0, 'differing': 0, 'finite': 0}
-        for qa, qw, w, y in self.calls or []:
-            z = swap.accumulate(design, self.scheme, qa, qw, self._prepare(w, qw, held))
+        for qa, qw, _, y in self.calls or []:
+            z = swap.accumulate(design, self.scheme, qa, qw, qw.elements.to(held))   # uncached: room for graphs
             out['calls'] += 1
             out['outputs'] += y.numel()
             out['differing'] += int((~same(y, z)).sum())

@@ -8,9 +8,11 @@ caches then merge into one batch, attention keys and values left-padded and
 masked, to decode together.
 """
 
+import contextlib
 import copy
 import time
-from collections.abc import Collection
+from collections.abc import Callable, Collection
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
 import torch
@@ -125,10 +127,11 @@ def batch(prompts: list[list[int]], caches: list[DynamicCache], first: list[torc
 
 @torch.no_grad()
 def generate(model: torch.nn.Module, prompts: list[list[int]], max_new: int,
-             eos: Collection[int]) -> Generated:
+             eos: Collection[int],
+             decoding: Callable[[], AbstractContextManager] = contextlib.nullcontext) -> Generated:
     """Greedy tokens after each of *prompts*: up to *max_new*, through the
     first of *eos*; as :func:`core.generate.greedy` makes them one at a
-    time."""
+    time.  Decode runs within *decoding*."""
     start = clock()
     cache, n = prefix(model, prompts)
     prefixed = clock()
@@ -146,17 +149,18 @@ def generate(model: torch.nn.Module, prompts: list[list[int]], max_new: int,
     live = set(range(len(prompts)))
     steps: list[float] = []
     running: list[int] = []
-    for step in range(max_new):
-        for i, t in enumerate(state.x.tolist()):
-            if i in live:
-                tokens[i].append(t)
-                if t in eos:
-                    live.discard(i)
-        if not live or step == max_new - 1:
-            break
-        t = clock()
-        state.step(model)
-        steps.append(clock() - t)
-        running.append(len(live))
+    with decoding():
+        for step in range(max_new):
+            for i, t in enumerate(state.x.tolist()):
+                if i in live:
+                    tokens[i].append(t)
+                    if t in eos:
+                        live.discard(i)
+            if not live or step == max_new - 1:
+                break
+            t = clock()
+            state.step(model)
+            steps.append(clock() - t)
+            running.append(len(live))
     return Generated(tokens, prefilled - start, clock() - prefilled, prefixed - start,
                      questions, steps, running)
