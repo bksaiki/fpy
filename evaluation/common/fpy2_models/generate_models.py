@@ -36,8 +36,7 @@ def _operator(op: str, model: dict) -> str:
         '#include "runners.h"\n\n'
         "STABLE_TORCH_LIBRARY_FRAGMENT(fpy2_models, m) {\n"
         f'  m.def("{op}(Tensor a, Tensor b, Tensor c{params}) -> Tensor");\n'
-        f'  m.def("{op}_gemm(Tensor A, Tensor Bt, Tensor I, Tensor J{params}, '
-        'int threads) -> Tensor");\n'
+        f'  m.def("{op}_gemm(Tensor A, Tensor Bt, Tensor I, Tensor J{params}) -> Tensor");\n'
         "}\n\n"
         "STABLE_TORCH_LIBRARY_IMPL(fpy2_models, CPU, m) {\n"
         f'  m.impl("{op}", TORCH_BOX((&fpy_models::runners::{runner})));\n'

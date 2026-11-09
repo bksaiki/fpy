@@ -15,13 +15,10 @@
 #include <torch/csrc/stable/tensor.h>
 #include <torch/headeronly/core/ScalarType.h>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <thread>
 #include <type_traits>
-#include <vector>
 
 namespace fpy_models::runners {
 
@@ -121,10 +118,11 @@ Tensor run_scaled_dpa(const Tensor& a, const Tensor& b, const Tensor& c,
 }
 
 // The entries of A Bt^T at (I[p], J[p]): each chains call(i, j, chunk, acc)
-// over the chunks of K in a row. The entries split over `threads` threads.
+// over the chunks of K in a row. The entries split over Torch's intra-op
+// threads (torch.set_num_threads).
 template <typename T, std::size_t K, typename Call>
 Tensor gemm(const Tensor& A, const Tensor& Bt, const Tensor& I, const Tensor& J,
-            int64_t threads, Call call) {
+            Call call) {
   STD_TORCH_CHECK(A.dim() == 2 && Bt.dim() == 2 && A.size(1) == Bt.size(1) &&
                       A.size(1) % K == 0,
                   "A and Bt must be matrices with rows of a multiple of ", K);
@@ -147,33 +145,20 @@ Tensor gemm(const Tensor& A, const Tensor& Bt, const Tensor& I, const Tensor& J,
     }
   };
 
-  const int64_t P = I.numel();
-  const int64_t workers = std::max<int64_t>(threads, 1);
-  const int64_t step = (P + workers - 1) / workers;
-  if (step >= P) {
-    range(0, P);
-    return output;
-  }
-  std::vector<std::thread> pool;
-  for (int64_t lo = 0; lo < P; lo += step) {
-    pool.emplace_back(range, lo, std::min(P, lo + step));
-  }
-  for (auto& t : pool) {
-    t.join();
-  }
+  torch::stable::parallel_for(0, I.numel(), 1, range);
   return output;
 }
 
 template <typename T, std::size_t K, auto Model>
 Tensor run_gemm(const Tensor& A, const Tensor& Bt, const Tensor& I,
-                const Tensor& J, int64_t threads) {
+                const Tensor& J) {
   Tensor a = torch::stable::contiguous(A);
   Tensor b = torch::stable::contiguous(Bt);
   const T* a_ptr = a.const_data_ptr<T>();
   const T* b_ptr = b.const_data_ptr<T>();
   const int64_t L = a.size(1);
   return gemm<T, K>(a, b, torch::stable::contiguous(I),
-                    torch::stable::contiguous(J), threads,
+                    torch::stable::contiguous(J),
                     [=](int64_t i, int64_t j, int64_t chunk, T acc) {
                       return Model(
                           unsafe_array_view<T, K>(a_ptr + i * L + chunk * K),
@@ -186,7 +171,7 @@ Tensor run_gemm(const Tensor& A, const Tensor& Bt, const Tensor& I,
 template <typename T, std::size_t K, std::size_t ScaleK, auto Model>
 Tensor run_scaled_gemm(const Tensor& A, const Tensor& Bt, const Tensor& I,
                        const Tensor& J, const Tensor& alphas,
-                       const Tensor& betas, int64_t threads) {
+                       const Tensor& betas) {
   Tensor a = torch::stable::contiguous(A);
   Tensor b = torch::stable::contiguous(Bt);
   Tensor sa = torch::stable::contiguous(alphas);
@@ -203,7 +188,7 @@ Tensor run_scaled_gemm(const Tensor& A, const Tensor& Bt, const Tensor& I,
   const T* sa_ptr = sa.const_data_ptr<T>();
   const T* sb_ptr = sb.const_data_ptr<T>();
   return gemm<T, K>(
-      a, b, torch::stable::contiguous(I), torch::stable::contiguous(J), threads,
+      a, b, torch::stable::contiguous(I), torch::stable::contiguous(J),
       [=](int64_t i, int64_t j, int64_t chunk, T acc) {
         const auto& a_values =
             unsafe_array_view<T, K>(a_ptr + i * L + chunk * K);

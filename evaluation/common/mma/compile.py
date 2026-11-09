@@ -235,7 +235,7 @@ def compile_design(build: Build) -> tuple[str, dict]:
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
     mod = mod.map(_prepare)
-    compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS)
+    compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
     src = compiler.compile_module(mod)
     params, result = compiler.signature(mod.public()[0], module=mod)
     sig = {'entry': func.name, 'params': [_cpp_type(p) for p in params],

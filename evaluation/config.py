@@ -101,8 +101,8 @@ LLM_SEED = 0
 # `dse/blas`
 
 BLAS_SEED = 0
-BLAS_NS = (32, 64, 128, 256, 512, 1024)
-"""Matrix sizes of GtB's tests."""
+BLAS_N = 1024
+"""Matrix size of GtB's tests."""
 
 BLAS_FORMATS: dict[str, tuple[fp.Context, list[int]]] = {
     # name: (context, s)

@@ -25,10 +25,16 @@ sys.path.insert(0, str(ROOT / 'evaluation' / 'dse' / 'llm'))
 # line, its colours and its text styles
 from plot_grid import BASES, GRID, INK, JOINS, LARGE, MUTED, SMALL, _look
 
-U = 2.0 ** -24
 N = 1024
 # each panel's input formats; the FP32 FMA loop drawn is the first's
 PANELS = {'BF16': ('BF16',), 'FP8': ('E4M3', 'E4M3FNUZ')}
+# where each panel's legend has room, and its columns: above FP8's plateaus, two
+LEGENDS = {'BF16': ('upper right', 1), 'FP8': ('upper right', 2)}
+# the figure: `plot_grid.py`'s height, and wide enough for the key in one row
+SIZE = (8.4, 4.2)
+# the panels' width: one of `plot_grid.py`'s subfigures, two panels of about
+# 3.3 by 2.9 inches
+PANELS_WIDTH = 8.2
 
 
 def load(results: Path) -> tuple[list[dict], dict[str, dict]]:
@@ -54,17 +60,16 @@ def worst(d: dict, n: int = N) -> float:
     return max(e for (_, m, _), e in d['errors'].items() if m == n)
 
 
-def eta(d: dict) -> float:
-    """d's worst error over `n u`, FP32's worst case, at any n: GtB's grade A below 1."""
-    return max(e / (n * U) for (_, n, _), e in d['errors'].items())
-
-
 def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
     """The worst error at n = N against k, a panel per input format: a line per
-    generation and join, each generation's own design ringed; the FP32 FMA
-    loop's worst error on the same matrices, measured, and an FP32 dot
-    product's worst case `n u`, below which a design is GtB's grade A."""
-    fig, axes = plt.subplots(1, len(PANELS), figsize=(13, 4.2), layout='constrained')
+    generation and join, each generation's own design ringed; and the FP32
+    FMA loop's worst error on the same matrices."""
+    # laid out as `plot_grid.py`'s figure, so the two print at one scale at one
+    # height: its panels' size, centred, and the key above them in one row
+    fig = plt.figure(figsize=SIZE, layout='constrained')
+    fig.get_layout_engine().set(h_pad=0.06)
+    side = (SIZE[0] - PANELS_WIDTH) / 2
+    axes = fig.subfigures(1, 3, width_ratios=[side, PANELS_WIDTH, side])[1].subplots(1, len(PANELS))
     for (f, fmts), ax in zip(PANELS.items(), axes):
         mine = [d for d in points if d['format'] in fmts]
         anchors = [a for a in BASES if any(d['anchor'] == a for d in mine)]
@@ -77,11 +82,11 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
                         linewidth=2, marker=marker, markersize=6, markeredgecolor='white')
                 ax.scatter([p[0] for p in pts if p[2]], [p[1] for p in pts if p[2]], s=200,
                            facecolor='none', edgecolor=color, linewidth=1.5, zorder=3)
-        ax.axhline(math.log2(worst(fma[fmts[0]])), color=MUTED, linewidth=1.5, zorder=1)
-        ax.axhline(math.log2(N * U), color=INK, linestyle=':', linewidth=2, zorder=1)
+        ax.axhline(math.log2(worst(fma[fmts[0]])), color=INK, linestyle=':', linewidth=2, zorder=1)
         ax.legend(handles=[plt.Line2D([], [], color=c, marker=m, linewidth=2, markeredgecolor='white',
                                       label=BASES[a][1]) for a in anchors for c, m in [_look(a)]],
-                  fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False)
+                  loc=LEGENDS[f][0], ncol=LEGENDS[f][1], fontsize=SMALL['fontsize'],
+                  labelcolor=SMALL['color'], frameon=False, columnspacing=0.8)
         ax.set_title(f'{f}, n = {N}', loc='left', **LARGE)
         ax.set_xlabel('k (bits)', **LARGE)
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))
@@ -96,26 +101,23 @@ def figure(points: list[dict], fma: dict[str, dict]) -> plt.Figure:
     axes[0].set_ylabel(r'log$_2$ worst $|\hat C - C| \,/\, (|A|\,|B|)$', **LARGE)
     handles = [plt.Line2D([], [], linestyle='None', label='c added'),
                *(plt.Line2D([], [], color=MUTED, ls=s, linewidth=2, label=lab) for s, lab in JOINS.values()),
-               plt.Line2D([], [], linestyle='None', label='FP32 FMA worst case'),
-               plt.Line2D([], [], color=MUTED, linewidth=1.5, label='measured'),
-               plt.Line2D([], [], color=INK, linestyle=':', linewidth=2, label='theoretical')]
+               plt.Line2D([], [], linestyle='None', label=' '),
+               plt.Line2D([], [], color=INK, linestyle=':', linewidth=2, label='FMA')]
     leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles),
                      fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False,
                      handlelength=2.4, columnspacing=1.2)
-    for header in (0, 3):
-        leg.get_texts()[header].set(fontweight='bold', **LARGE)
+    leg.get_texts()[0].set(fontweight='bold', **LARGE)
     return fig
 
 
 def numbers(points: list[dict], fma: dict[str, dict]) -> None:
-    """Each generation's own design's and the FP32 FMA loop's `eta`, and how
-    many designs are grade A."""
+    """Each generation's own design's and the FP32 FMA loop's log2 worst
+    error at n = N, as the figure plots it."""
     for d in points:
         if d['is_anchor']:
-            print(f'{d["anchor"]:24} {eta(d):9.3g}')
+            print(f'{d["anchor"]:24} {math.log2(worst(d)):7.2f}')
     for f, b in fma.items():
-        print(f'{"FP32 FMA loop, " + f:24} {eta(b):9.3g}')
-    print(f'grade A: {sum(eta(d) < 1 for d in points)} of {len(points)}')
+        print(f'{"FP32 FMA loop, " + f:24} {math.log2(worst(b)):7.2f}')
 
 
 def main(argv: list[str]) -> int:
