@@ -78,7 +78,7 @@ def compare(lmeval: dict[str, Any], ours: dict[str, Any]) -> dict[str, Any]:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     ap.add_argument('--backends', nargs='+', choices=('torch', 'fpy'), default=['torch', 'fpy'])
-    ap.add_argument('--design', default=config.GSM8K_DESIGNS[0], help='for fpy (default %(default)s)')
+    ap.add_argument('--design', default='nv.hopper.bf16.f32', help='for fpy (default %(default)s)')
     ap.add_argument('--limit', type=int, help='the first LIMIT problems only (default all)')
     ap.add_argument('--batch', type=int, default=config.GSM8K_BATCH, help='default %(default)s')
     ap.add_argument('--model', default=config.MODEL, help='default %(default)s')

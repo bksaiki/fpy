@@ -67,8 +67,9 @@ EVALS = {
         tools=(os.environ.get('CXX', 'c++'),)),  # as `torch.utils.cpp_extension` picks it
     'gsm8k': Eval(
         run=lambda d, j: [[PY, str(HERE / 'gsm8k' / 'run.py'), '-o', str(d), *j]],
-        plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)]],
-        done='gsm8k-speed.json', needs=('torch', 'triton', 'transformers', 'datasets', 'mmasim'),
+        plot=lambda d: [[PY, str(HERE / 'gsm8k' / 'report.py'), str(d)],
+                        [PY, str(HERE / 'gsm8k' / 'plot.py'), str(d)]],
+        done='gsm8k-speed.json', needs=('torch', 'triton', 'transformers', 'datasets', 'mmasim', 'matplotlib'),
         gpu=True),
     'llm': Eval(
         # the manifest compiles one design at a time, so each compile time is its own

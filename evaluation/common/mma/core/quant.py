@@ -65,12 +65,17 @@ NAMES = (*SCHEMES, 'fp8-row:fnuz')
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
 DTYPES = {
-    fp.BF16: torch.bfloat16,
+    fp.FP64: torch.float64, fp.FP32: torch.float32, fp.TF32: torch.float32,
+    fp.FP16: torch.float16, fp.BF16: torch.bfloat16,
     fp.MX_E4M3: torch.float8_e4m3fn, fp.MX_E5M2: torch.float8_e5m2,
     fp.S1E4M3: torch.float8_e4m3fnuz, fp.S1E5M2: torch.float8_e5m2fnuz,
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
 }
-"""Each element format's torch dtype."""
+"""Each element format's torch dtype; TF32's holds it in FP32."""
+
+_SHORT = {fp.FP64: 'fp64', fp.FP32: 'fp32', fp.TF32: 'tf32', fp.FP16: 'fp16', fp.BF16: 'bf16',
+          fp.MX_E4M3: 'e4m3', fp.MX_E5M2: 'e5m2', fp.S1E4M3: 'e4m3fnuz', fp.S1E5M2: 'e5m2fnuz',
+          fp.MX_E2M1: 'e2m1'}
 
 
 def describe(s: Scheme) -> str:
@@ -92,6 +97,28 @@ def context(fmt: object) -> Context:
     """The element format among :data:`DTYPES` that is *fmt* (a design's
     argument format)."""
     return next(c for c in DTYPES if c.format() == fmt)
+
+
+def derive(x: Context, w: Context, block: object | None = None) -> Scheme:
+    """The scheme for a design taking *x* and *w* elements, and block scales
+    of format *block* if any: those scales (E8M0: MX's, E4M3: NVFP4's);
+    else none for elements of 16 bits or more; else one FP32 scale per row,
+    applied after the GEMM.  A named scheme if one is it."""
+    if block is not None:
+        mx = block == fp.MX_E8M0.format()
+        xs, ws = (_mx(x), _mx(w)) if mx else (_NVFP4, _NVFP4)
+        s = Scheme('', xs, ws, 'instruction')
+    elif min(x.format().nbits, w.format().nbits) >= 16:
+        s = Scheme('', Operand(x), Operand(w), 'none')
+    else:
+        row = Scaling(fp.FP32, None)
+        s = Scheme('', Operand(x, row), Operand(w, row), 'epilogue')
+    for name in NAMES:
+        if replace(scheme(name), name='') == s:
+            return scheme(name)
+    elements = _SHORT[x] if x == w else f'{_SHORT[x]}.{_SHORT[w]}'
+    suffix = {'none': '', 'epilogue': '-row'}.get(s.applied)
+    return replace(s, name=f'mx-{elements}' if suffix is None else elements + suffix)
 
 
 def scheme(name: str) -> Scheme:
@@ -135,6 +162,12 @@ _E4M3_TINY = torch.finfo(torch.float8_e4m3fn).tiny
 _F32_TINY = torch.finfo(torch.float32).tiny
 
 
+def _tf32(x: torch.Tensor) -> torch.Tensor:
+    """FP32 *x* rounded to TF32 (nearest, ties to even)."""
+    i = x.view(torch.int32)
+    return ((i + 0xFFF + ((i >> 13) & 1)) & ~0x1FFF).view(torch.float32)
+
+
 def _e2m1(x: torch.Tensor) -> torch.Tensor:
     """*x*, within ±6, rounded to E2M1 (nearest, ties to even): steps of
     1/2 below 2, 1 below 4, 2 up to 6."""
@@ -159,7 +192,7 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
     dtype = DTYPES[op.elements]
     if s is None:
         # reuse *t* when lossless (e.g. BF16 weights held in FP32)
-        q = t.to(dtype).float()
+        q = _tf32(t) if op.elements == fp.TF32 else t.to(dtype).float()
         return Quantized(op, t if t.dtype == torch.float32 and torch.equal(q, t) else q)
     r, k = t.shape
     fp4 = op.elements == fp.MX_E2M1
@@ -182,5 +215,6 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
     cols = s.cols or k
     v = t.view(r, k // cols, cols)
     scales = v.abs().amax(-1, keepdim=True).clamp(min=_F32_TINY) / top
-    elements = (v / scales).clamp(-top, top).to(dtype).float().view(r, k)
+    v = (v / scales).clamp(-top, top)
+    elements = (_e2m1(v) if fp4 else v.to(dtype).float()).view(r, k)
     return Quantized(op, elements, scales.view(r, k // cols))

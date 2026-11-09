@@ -100,18 +100,33 @@ def _per_group(q: quant.Quantized, design: str) -> torch.Tensor:
     return q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).to(kernels.storage(design)[2])
 
 
-def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
-         w: torch.Tensor) -> torch.Tensor:
-    """`qa @ qw.T` by *design* under *scheme*, FP32; *w* is *qw*'s elements
-    in *design*'s storage (`kernels.storage`).  Scales apply per `scheme.applied`: after
-    the GEMM, `acc * s_x[i] * s_w[j]`; or in the instructions, then per
-    tensor, `acc * (g_x * g_w)`."""
+def accumulate(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
+               w: torch.Tensor) -> torch.Tensor:
+    """`qa @ qw.T` by *design*'s kernel, in its accumulator: block scales
+    applied by its instructions, *scheme*'s others not yet (:func:`epilogue`).
+    *w* is *qw*'s elements in *design*'s storage (`kernels.storage`)."""
     a = qa.elements.to(kernels.storage(design)[0])
     if scheme.applied == 'instruction':
-        y = kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design)))
+        return kernels.matmul(a, w, design, scales=(_per_group(qa, design), _per_group(qw, design)))
+    return kernels.matmul(a, w, design)
+
+
+def epilogue(y: torch.Tensor, scheme: quant.Scheme, qa: quant.Quantized,
+             qw: quant.Quantized) -> torch.Tensor:
+    """A design's accumulator *y* in FP32, *scheme*'s remaining scales
+    applied: after the GEMM, `acc * s_x[i] * s_w[j]`; after block-scaled
+    instructions, per tensor, `acc * (g_x * g_w)`.  May reuse *y*."""
+    y = y.float()
+    if scheme.applied == 'instruction':
         return y if qa.tensor is None else y.mul_(qa.tensor * qw.tensor)
-    y = kernels.matmul(a, w, design)
     return y.mul_(qa.scales).mul_(qw.scales.T) if scheme.applied == 'epilogue' else y
+
+
+def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
+         w: torch.Tensor) -> torch.Tensor:
+    """`qa @ qw.T` by *design* under *scheme*, FP32: :func:`accumulate`, then
+    :func:`epilogue`."""
+    return epilogue(accumulate(design, scheme, qa, qw, w), scheme, qa, qw)
 
 
 _FP8 = (torch.float8_e4m3fn, torch.float8_e4m3fnuz, torch.float8_e5m2, torch.float8_e5m2fnuz)
@@ -204,6 +219,10 @@ class Run:
         return self._weights[key][1]
 
     def _prepare(self, w: torch.Tensor, qw: quant.Quantized, dtype: torch.dtype) -> torch.Tensor:
+        """*qw*'s elements in *dtype*, kept per weight; converted per call
+        instead if wider than *w* (FP64: every weight's copy would not fit)."""
+        if dtype.itemsize > w.dtype.itemsize:
+            return qw.elements.to(dtype)
         got = self._prepared.get(id(w))
         if got is None or got[0] is not qw or got[1] != dtype:
             got = self._prepared[id(w)] = (qw, dtype, qw.elements.to(dtype))
@@ -247,7 +266,7 @@ class Run:
     def _matmul(self, qa: quant.Quantized, qw: quant.Quantized, w: torch.Tensor) -> torch.Tensor:
         if (r := _exact_run(self.mode, self.scheme)) is not None:
             return exact(qa, qw, self.signs, r)
-        if self.mode in kernels.TILES and kernels.applicable(self.mode, self.scheme):
+        if kernels.known(self.mode) and kernels.applicable(self.mode, self.scheme):
             held = kernels.storage(self.mode)[1]
             return gemm(self.mode, self.scheme, qa, qw, self._prepare(w, qw, held))
         raise ValueError(f'{self.mode!r} is not one of {modes(self.scheme)}')
@@ -269,9 +288,9 @@ def patch(model: torch.nn.Module) -> Run:
 
 
 def use(run: Run, model: torch.nn.Module, scheme: quant.Scheme) -> None:
-    """Set *run*'s scheme; under a quantizing one, `lm_head` computes as R0."""
+    """Set *run*'s scheme; under a scaled one, `lm_head` computes as R0."""
     run.scheme = scheme
-    run.ignore = set() if scheme.name == BF16.name else {id(dict(model.named_modules())['lm_head'].weight)}
+    run.ignore = set() if scheme.applied == 'none' else {id(dict(model.named_modules())['lm_head'].weight)}
 
 
 def load(name: str, scheme: quant.Scheme = BF16) -> tuple[torch.nn.Module, Run]:

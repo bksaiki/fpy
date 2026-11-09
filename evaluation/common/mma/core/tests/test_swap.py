@@ -118,6 +118,32 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
     run.mode, run.scheme = 'fp32', swap.BF16
 
 
+@pytest.mark.parametrize('design', [
+    'nv.volta.f16.f16', 'nv.hopper.tf32.f32', 'fp64 (fma)', 'amd.cdna2.f16',
+    'nv.blackwell.e4m3.e5m2.f32', 'nv.blackwell.e4m3.e2m1.f32', 'amd.cdna3.bf8',
+    'nv.blackwell.mx.e5m2', 'nv.blackwell.mx.e4m3.e2m1',
+])
+def test_a_design_runs_under_its_scheme(
+    design: str, model: torch.nn.Module, tokens: torch.Tensor,
+) -> None:
+    """One design per kind of derived scheme (`kernels.scheme`): under it,
+    the design lands near the scheme's exact run, its accumulator converted
+    to FP32; `lm_head` is left out only under a scaled scheme.  (Hopper's and
+    Ada's FP8 accumulate in E8M13 and land 1-2% off, so FP32 Blackwell's.)"""
+    run = swap.patch(model)
+    scheme = kernels.scheme(design)
+    swap.use(run, model, scheme)
+    assert bool(run.ignore) == (scheme.applied != 'none')
+    run.mode = f'{scheme.name}-exact'
+    exact = _logits(model, tokens)
+    run.mode = design
+    got = _logits(model, tokens)
+    assert got.dtype == torch.float32
+    assert (got - exact).abs().max() <= 1e-2 * exact.abs().max()
+    run.mode = 'fp32'
+    swap.use(run, model, swap.BF16)
+
+
 def test_an_exact_run_is_known_by_its_suffix() -> None:
     fp8 = quant.SCHEMES['fp8-row']
     assert swap._exact_run('fp8-row-exact', fp8) == 'nearest'
