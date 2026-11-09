@@ -20,7 +20,7 @@ dependencies = [
   "titanfp==0.1.2",
   "gmpy2==2.3.1",
   "numpy",
-  "z3-solver>=4.13",
+  "z3-solver==5.3.3.0",
   "cvc5==1.4.2"
 ]
 

@@ -4,8 +4,9 @@ The sensitivity evaluation's table and figure, from `run.py`'s results;
 
     python evaluation/sensitivity/report.py evaluation/results/sensitivity
 
-Writes `sensitivity-table.tex`, `sensitivity-scatter.{pdf,png}`,
-`sensitivity-paper.json` and `sensitivity-summary.txt` beside the data,
+Writes `sensitivity-table.tex`, `sensitivity-macros.tex`,
+`sensitivity-scatter.{pdf,png}`, `sensitivity-paper.json` and
+`sensitivity-summary.txt` beside the data,
 overwriting only those; the README says what each holds.
 """
 
@@ -30,6 +31,10 @@ METHODS = {'z3': 'Binary search', 'z3-opt': 'Optimize', 'cvc5': 'Binary search'}
 ROW_NAMES = {**NAMES, 'z3': 'Z3', 'z3-opt': 'Z3'}
 """Each backend's label in the table, whose method column tells the two z3
 rows apart."""
+
+MACROS = {'z3': 'zthreebin', 'z3-opt': 'zthreeopt', 'cvc5': 'cvc'}
+"""Each backend's prefix in the paper's macros: letters only, as a LaTeX
+command name must be."""
 
 COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6'}
 INK, GRID = '#1f1f1e', '#e4e3dc'
@@ -178,6 +183,25 @@ def totals_latex(nums: dict[str, Any]) -> str:
     return '\n'.join(lines)
 
 
+def macros(nums: dict[str, Any]) -> str:
+    """The numbers the paper's text cites, as macros: each backend's solver
+    time and its share of compile time, and the range of the others' solver
+    time over the reference's (`\\solverslowdown`)."""
+    totals = nums['totals']
+    lines = []
+    for b, t in totals.items():
+        if (name := MACROS.get(b)) is not None:
+            lines.append(f'\\newcommand{{\\{name}time}}{{{t["solver_seconds"]:.0f}\\,s}}')
+            lines.append(f'\\newcommand{{\\{name}share}}{{{100 * t["solver_share"]:.0f}\\%}}')
+    ref = totals[nums['reference']]['solver_seconds']
+    ratios = sorted(t['solver_seconds'] / ref for b, t in totals.items()
+                    if b != nums['reference'] and ref)
+    if ratios:
+        span = f'{ratios[0]:.1f}' if len(ratios) == 1 else f'{ratios[0]:.1f}--{ratios[-1]:.1f}'
+        lines.append(f'\\newcommand{{\\solverslowdown}}{{{span}$\\times$}}')
+    return '\n'.join(lines) + '\n'
+
+
 def summary(nums: dict[str, Any]) -> str:
     ref = nums['reference']
     lines = [(f'{nums["designs"]} designs; {nums["compared"]} compiled by every backend, '
@@ -208,6 +232,7 @@ def main(argv: list[str]) -> int:
         ap.error(f'no results in {out}')
     nums = numbers(records)
     (out / 'sensitivity-table.tex').write_text(totals_latex(nums))
+    (out / 'sensitivity-macros.tex').write_text(macros(nums))
     figure(records, out / 'sensitivity-scatter')
     (out / 'sensitivity-paper.json').write_text(json.dumps(nums, indent=1) + '\n')
     text = summary(nums)

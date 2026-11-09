@@ -423,7 +423,7 @@ requires-dist = [
     { name = "sphinx-rtd-theme", marker = "extra == 'dev'" },
     { name = "titanfp", specifier = "==0.1.2" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "z3-solver", specifier = ">=4.13" },
+    { name = "z3-solver", specifier = "==5.3.3.0" },
 ]
 provides-extras = ["dev"]
 

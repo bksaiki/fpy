@@ -7,7 +7,7 @@ compiled, differing C++ named, and only the table and the figure written.
 
 import json
 
-from report import main, numbers, queries, summary
+from report import macros, main, numbers, queries, summary
 
 
 def _ok(seconds, solver, sha, queries=10, degraded=0):
@@ -59,6 +59,19 @@ def test_the_summary_names_what_differs():
     assert '10 queries, 1 degraded' in text
 
 
+def test_the_macros_cite_solver_time():
+    # design `a` alone: solver 4 s of 10 under z3, 2 of 8 under z3-opt, 6 of 12 under cvc5
+    assert macros(numbers(RECORDS)).splitlines() == [
+        '\\newcommand{\\zthreebintime}{4\\,s}',
+        '\\newcommand{\\zthreebinshare}{40\\%}',
+        '\\newcommand{\\cvctime}{6\\,s}',
+        '\\newcommand{\\cvcshare}{50\\%}',
+        '\\newcommand{\\zthreeopttime}{2\\,s}',
+        '\\newcommand{\\zthreeoptshare}{25\\%}',
+        '\\newcommand{\\solverslowdown}{0.5--1.5$\\times$}',
+    ]
+
+
 def test_it_writes_every_output(tmp_path):
     (tmp_path / 'sensitivity-run.json').write_text(json.dumps(
         {'designs': ['a', 'b']}))
@@ -69,7 +82,8 @@ def test_it_writes_every_output(tmp_path):
     assert (tmp_path / 'notes.md').read_text() == 'mine'
     made = {p.name for p in tmp_path.iterdir() if p.name.startswith('sensitivity-')}
     assert made == {'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
-                    'sensitivity-table.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
+                    'sensitivity-table.tex', 'sensitivity-macros.tex', 'sensitivity-paper.json',
+                    'sensitivity-summary.txt'}
     paper = json.loads((tmp_path / 'sensitivity-paper.json').read_text())
     assert paper['totals']['z3-opt']['seconds_per_query'] == 0.2
     assert paper['totals']['z3-opt']['method'] == 'Optimize'

@@ -46,6 +46,10 @@ holding files a run did not write is refused) with:
 - `sensitivity-table.tex`: one row per backend, over the designs every
   backend compiled: its method, compile and solver time, the solver's
   share, and solver time per query;
+- `sensitivity-macros.tex`: the numbers the text cites, as macros: each
+  backend's solver time and share (`\zthreebintime`, `\zthreebinshare`,
+  `\zthreeopttime`, `\zthreeoptshare`, `\cvctime`, `\cvcshare`), and the
+  others' solver time over z3's (`\solverslowdown`);
 - `sensitivity-scatter.{pdf,png}`: each query's time against the
   constraints in its component (all a backend sees), a panel per backend,
   log-log;

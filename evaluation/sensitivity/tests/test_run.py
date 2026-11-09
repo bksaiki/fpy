@@ -9,6 +9,7 @@ import json
 import pytest
 from run import _summarize, compile_once, main
 
+
 def test_one_compilation_records_its_solver():
     rec = compile_once('nv.volta.f16.f32', 'z3')
     assert 'cpp_sha256' in rec, rec.get('error')
@@ -34,7 +35,8 @@ def test_one_design_under_every_backend(tmp_path):
     # the run's data, and beside it the report
     assert {p.name for p in out.iterdir() if p.name.startswith('sensitivity-')} == {
         'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
-        'sensitivity-table.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
+        'sensitivity-table.tex', 'sensitivity-macros.tex', 'sensitivity-paper.json',
+        'sensitivity-summary.txt'}
 
 
 def test_the_time_and_the_counts_come_from_one_run():
