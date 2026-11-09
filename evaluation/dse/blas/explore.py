@@ -69,10 +69,7 @@ def to_cpp(d: generator.Design) -> dict:
         # free variables removed, inlined and folded first, as the Triton backend
         # does: the C++ backend refuses the generator's helpers otherwise
         mod = normalize_module(mod.map(lambda _, f: FreeVarElim.apply(f)))
-        mod = mod.map(lambda _, f: ConstFold.apply(f)).map(mm._prepare)
-        compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
-        src = compiler.compile_module(mod)
-        params, result = compiler.signature(mod.public()[0], module=mod)
+        src, sig = mm.compile_module(mod.map(lambda _, f: ConstFold.apply(f)).map(mm._prepare))
         out = {'src': src, 'model': {'name': name, 'file': mm._filename(name),
                                      'namespace': f'fpy_models::{mm._namespace(name)}', **sig}}
     except Exception as e:  # noqa: BLE001 -- a refusal is a result
