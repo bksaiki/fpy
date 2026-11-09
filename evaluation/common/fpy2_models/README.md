@@ -3,8 +3,7 @@
 FPy's compiled MMA-Sim designs as Torch operators. Each design becomes
 `torch.ops.fpy2_models.<op>(a, b, c[, alphas, betas])`, with the interface of
 MMA-Sim's `dpa`: operands of shape `(..., K)`, one accumulator per row in `c`,
-and, for block-scaled designs, scales of shape `(..., S)`. Its rows split over
-PyTorch's intra-op threads (`torch.set_num_threads`).
+and, for block-scaled designs, scales of shape `(..., S)`.
 
 Each design also becomes
 `torch.ops.fpy2_models.<op>_gemm(A, Bt, I, J[, alphas, betas])`, the
