@@ -87,8 +87,8 @@ def _cvt_index(val: Value):
 def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
     # opaque payloads (e.g. an `rng`) cross back to Python
     arg = unwrap_foreign(arg)
-    if ty is int:
-        # convert to int
+    if ty is int or (ty == int | None and arg is not None):
+        # convert to int (an optional `int`, e.g., `num_randbits`, may be `None`)
         val = _cvt_float(arg)
         if not val.is_integer():
             raise ValueError(f'expected an integer argument for `{name}={arg}`')
@@ -1263,7 +1263,7 @@ class BytecodeInterpreter(Interpreter):
             args.append(Argument(name, AnyTypeAnn(loc), loc))
 
         body = StmtBlock([ReturnStmt(expr, loc)])
-        meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
+        meta = FuncMeta(set(), None, None, None, {}, ForeignEnv.default())
         ast = FuncDef(name='<expr>', args=args, body=body, meta=meta, loc=loc)
         return ast, names
 

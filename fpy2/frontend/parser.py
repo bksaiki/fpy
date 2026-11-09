@@ -819,10 +819,32 @@ class Parser:
         args = self._parse_arguments(pos_args)
         block = self._parse_statements(body)
 
-        # return AST and decorator list
-        meta = FuncMeta(set(), None, None, {}, env)
+        # return AST and decorator properties
+        meta = FuncMeta(set(), None, None, None, {}, env)
         func = FuncDef(f.name, args, block, meta, loc=loc)
-        return func, f.decorator_list
+        return func, self._parse_decorator_props(f)
+
+    def _parse_decorator_props(self, f: ast.FunctionDef):
+        """
+        Parses the `pre` and `spec` keyword arguments of the decorator of `f`
+        written as inline `lambda`s.
+        """
+        props: dict[str, Expr] = {}
+        for dec in f.decorator_list:
+            match dec:
+                case ast.Call(keywords=keywords):
+                    for kw in keywords:
+                        if kw.arg in ('pre', 'spec') and isinstance(kw.value, ast.Lambda):
+                            props[kw.arg] = self._parse_prop_lambda(kw.value, f)
+        return props
+
+    def _parse_prop_lambda(self, e: ast.Lambda, f: ast.FunctionDef):
+        """Parses a `lambda` over the arguments of `f` as an FPy expression."""
+        args = [arg.arg for arg in e.args.posonlyargs + e.args.args]
+        expect = [arg.arg for arg in f.args.posonlyargs + f.args.args]
+        if args != expect or e.args.vararg or e.args.kwonlyargs or e.args.kwarg or e.args.defaults:
+            raise self._parse_error(f'expected a `lambda` over the arguments of `{f.name}`', e)
+        return self._parse_expr(e.body)
 
     def _start_parse(self):
         src = ''.join(self.lines)

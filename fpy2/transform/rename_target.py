@@ -83,7 +83,7 @@ class _RenameTargetInstance(DefaultTransformVisitor):
 
         free_vars = { self.rename.get(arg, arg) for arg in func.free_vars }
         body, _ = self._visit_block(func.body, ctx)
-        meta = FuncMeta(free_vars, func.meta.ctx, func.meta.spec, func.meta.props, func.meta.env)
+        meta = FuncMeta(free_vars, func.meta.ctx, func.meta.pre, func.meta.spec, func.meta.props, func.meta.env)
         return FuncDef(func.name, args, body, meta, loc=func.loc)
 
 

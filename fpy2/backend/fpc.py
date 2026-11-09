@@ -832,9 +832,10 @@ class _FPCoreCompileInstance(Visitor):
                 ]
                 for op, rhs in zip(ops, args[2:]):
                     prev_op, prev_args = groups[-1]
-                    if op == prev_op:
+                    if op == prev_op and op != CompareOp.NE:
                         # FPCore's comparisons are n-ary, so a run of one
-                        # operator is a single call
+                        # operator is a single call (except `!=`, which
+                        # compares all pairs in FPCore but adjacent ones in FPy)
                         prev_args.append(rhs)
                     else:
                         # a new run starts at the operand the two share
@@ -1269,6 +1270,10 @@ class _FPCoreCompileInstance(Visitor):
                 return tuple(self._visit_data(d) for d in data)
             case Expr():
                 return self._visit_expr(data, None)
+            case Function() | FuncDef():
+                # a property over the arguments: the body of its function
+                fd = _apply_fpc_passes(data.ast if isinstance(data, Function) else data)
+                return _FPCoreCompileInstance(fd, DefineUse.analyze(fd), self.unsafe_int_cast).compile().e
             case _:
                 raise NotImplementedError(repr(data))
 
@@ -1346,6 +1351,10 @@ class _FPCoreCompileInstance(Visitor):
             props = {}
         else:
             props = func.meta.props.copy()
+            # `:pre` and `:spec` are properties in FPCore
+            for k, v in (('pre', func.meta.pre), ('spec', func.meta.spec)):
+                if v is not None:
+                    props[k] = v
 
         # context properties
         if func.ctx is not None:

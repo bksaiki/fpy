@@ -207,7 +207,7 @@ class FPCoreContext:
                     return FixedContext(True, int(nbits), int(scale), _round_mode_to_fpy(rnd), _overflow_mode_to_fpc(ov))
                 # integer context
                 case 'integer':
-                    return INTEGER.with_params(rm=_round_mode_to_fpy(rnd))
+                    return INTEGER
                 # real context
                 case 'real':
                     return REAL

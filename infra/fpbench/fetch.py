@@ -1,6 +1,19 @@
 from pathlib import Path
 from titanfp.fpbench.fpcast import FPCore
-from titanfp.fpbench.fpcparser import compfile, FPCoreParserError
+from titanfp.fpbench.fpcparser import Visitor, compfile, parse, FPCoreParserError
+
+class _Visitor(Visitor):
+    """
+    titanfp's FPCore visitor, except that it skips `:alt`,
+    which FPCore allows to repeat but titanfp does not.
+    """
+
+    def _parse_props(self, props):
+        return super()._parse_props([prop for prop in props if prop.name.text != ':alt'])
+
+def read_cores(f: Path) -> list[FPCore]:
+    """Reads the FPCores in the file `f`, without `:alt`."""
+    return _Visitor().visit(parse(f.read_text()))
 
 def read_file(f: Path) -> list[FPCore]:
     try:

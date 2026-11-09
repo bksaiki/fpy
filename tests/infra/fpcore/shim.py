@@ -1,13 +1,13 @@
 import types
 
-from fpy2 import Float, IEEEContext, RoundingMode, nearbyint
+from fpy2 import Float, IEEEContext, RoundingMode, fmax, fmin, nearbyint, pow as fpy_pow
 from fractions import Fraction
 
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
-from titanfp.fpbench.fpcast import Nearbyint
-from titanfp.titanic import ndarray
+from titanfp.fpbench.fpcast import Fmax, Fmin, Nearbyint, Pow
+from titanfp.titanic import ndarray, utils
 
 def fpy_to_mpmf(x: bool | Float | list):
     match x:
@@ -86,6 +86,27 @@ def _eval_nearbyint(rt: Interpreter, e: Nearbyint, ctx: EvalCtx):
     result = fpy_to_mpmf(v)
     return [v], result
 
+def _eval_fmax(rt: Interpreter, e: Fmax, ctx: EvalCtx):
+    in0, in1 = (rt.evaluate(child, ctx) for child in e.children)
+    v = fmax(mpmf_to_fpy(in0), mpmf_to_fpy(in1), ctx=to_fpy_context(ctx))
+    return [in0, in1], fpy_to_mpmf(v)
+
+def _eval_fmin(rt: Interpreter, e: Fmin, ctx: EvalCtx):
+    in0, in1 = (rt.evaluate(child, ctx) for child in e.children)
+    v = fmin(mpmf_to_fpy(in0), mpmf_to_fpy(in1), ctx=to_fpy_context(ctx))
+    return [in0, in1], fpy_to_mpmf(v)
+
+def _eval_pow(rt: Interpreter, e: Pow, ctx: EvalCtx):
+    in0, in1 = (rt.evaluate(child, ctx) for child in e.children)
+    if in1.isinf or in1.isnan:
+        v = fpy_to_mpmf(fpy_pow(mpmf_to_fpy(in0), mpmf_to_fpy(in1), ctx=to_fpy_context(ctx)))
+    else:
+        v = in0.pow(in1, ctx=ctx)
+    return [in0, in1], v
+
+def _is_even_for_rounding(c: int, exp: int):
+    return c & 1 == 0
+
 def make_check_offset(check_offset):
     def _check_offset(data, shape, start, strides):
         # bail for empty tensors
@@ -102,9 +123,21 @@ def mpmf_interpreter():
 
     - fixes `nearbyint` to use FPy's implementation;
     Titanic's `nearbyint` is hopeless broken.
+    - fixes `fmax` and `fmin` to use FPy's implementation;
+    Titanic's are Python's `max` and `min`, which ignore NaN
+    only as the second argument.
+    - fixes `pow` with an infinite or NaN exponent to use FPy's implementation;
+    Titanic's treats them as zero, e.g., `pow(2, inf) = 1`.
+    - fixes ties to even when the significand has one bit, as at the
+    bottom of an IEEE format; Titanic decides by the exponent,
+    e.g., `3 * 2**-1074 / 2 = 2**-1074`.
     - fixes ndarray `check_offset` for empty tensors
     """
     rt = Interpreter()
     rt._eval_nearbyint = types.MethodType(_eval_nearbyint, rt)
+    rt._eval_fmax = types.MethodType(_eval_fmax, rt)
+    rt._eval_fmin = types.MethodType(_eval_fmin, rt)
+    rt._eval_pow = types.MethodType(_eval_pow, rt)
+    utils.is_even_for_rounding = _is_even_for_rounding
     ndarray.check_offset = make_check_offset(ndarray.check_offset)
     return rt

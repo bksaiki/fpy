@@ -79,6 +79,7 @@ class FreeVarElim:
         meta = FuncMeta(
             func.free_vars - bound,
             func.meta.ctx,
+            func.meta.pre,
             func.meta.spec,
             func.meta.props,
             func.env,

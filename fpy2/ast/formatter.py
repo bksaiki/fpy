@@ -380,9 +380,12 @@ class _FormatterInstance(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _format_data(self, data, arg_str: str):
+        import fpy2
         if isinstance(data, Expr):
             e = self._visit_expr(data, 0)
             return f'lambda {arg_str}: {e}'
+        elif isinstance(data, FuncDef | fpy2.Function):
+            return data.name
         elif isinstance(data, Context) and (name := _context_name(data)) is not None:
             return self._fpy_qualified(name)
         else:
@@ -390,11 +393,12 @@ class _FormatterInstance(Visitor):
 
     def _format_decorator(self, arg_str: str, fmeta: FuncMeta, ctx: _Ctx):
         rctx = fmeta.ctx
+        pre = fmeta.pre
         spec = fmeta.spec
         meta = fmeta.props
 
         name = self._fpy_qualified('fpy')
-        if not (rctx or spec or meta):
+        if not (rctx or pre or spec or meta):
             # no keyword arguments: emit the bare decorator without `(...)`
             self._add_line(f'@{name}', ctx)
         else:
@@ -402,6 +406,9 @@ class _FormatterInstance(Visitor):
             if rctx:
                 v = self._format_data(rctx, arg_str)
                 self._add_line(f'ctx={v},', ctx + 1)
+            if pre:
+                v = self._format_data(pre, arg_str)
+                self._add_line(f'pre={v},', ctx + 1)
             if spec:
                 v = self._format_data(spec, arg_str)
                 self._add_line(f'spec={v},', ctx + 1)
