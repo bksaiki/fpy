@@ -23,6 +23,10 @@ from .shim import fpy_to_mpmf, mpmf_interpreter, mpmf_to_fpy
 # `_rand_real` draws an argument without a bound from `[-_REAL_RANGE, _REAL_RANGE]`
 _REAL_RANGE = 1024
 
+# `_rand_int` draws an argument without a bound from `[-_INT_RANGE, _INT_RANGE]`;
+# integer arguments often count loop iterations
+_INT_RANGE = 100
+
 # seconds an input may take before it is skipped (loops may not terminate)
 _INPUT_TIME = 5.0
 
@@ -89,6 +93,15 @@ def _rand_subnormal(lo: Fraction | None, hi: Fraction | None, ctx: fp.Context, r
     return ctx.round(rng.gauss(0.0, 1.0) * 2.0 ** ctx.emin)
 
 GENS = [_rand_bits, _rand_edge, _rand_real, _rand_subnormal]
+
+def _rand_int(lo: Fraction | None, hi: Fraction | None, rng: random.Random):
+    """
+    an integer in `[lo - 1, hi + 1]`, for an `integer` argument;
+    FPCore leaves non-integers undefined
+    """
+    a = -_INT_RANGE if lo is None else math.ceil(lo) - 1
+    b = _INT_RANGE if hi is None else math.floor(hi) + 1
+    return fp.Float.from_int(rng.randint(a, b))
 
 ###########################################################
 # Evaluation
@@ -170,6 +183,7 @@ def _test_core(path: Path, index: int, trials: int, budget: float, seed: int):
     port = getattr(importlib.import_module(f'examples.fpbench.benchmarks.{module_name(path)}'), name)
     ctx = port.ast.ctx or fp.FP64
     names = [arg for arg, _, _ in core.inputs]
+    ints = {arg for arg, props, _ in core.inputs if str(props.get('precision')) == 'integer'}
     bounds = _bounds(core.pre, names)
     rng = random.Random(f'{seed}:{path.name}:{name}')
 
@@ -181,7 +195,10 @@ def _test_core(path: Path, index: int, trials: int, budget: float, seed: int):
             break
 
         gen = GENS[i % len(GENS)]
-        args = [gen(*bounds[arg], ctx, rng) for arg in names]
+        args = [
+            _rand_int(*bounds[arg], rng) if arg in ints else gen(*bounds[arg], ctx, rng)
+            for arg in names
+        ]
         signal.setitimer(signal.ITIMER_REAL, min(remaining, _INPUT_TIME))
         try:
             sat, mismatch = _compare(_rt, core, port, args, ctx)

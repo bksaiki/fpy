@@ -3,7 +3,7 @@ import types
 from fpy2 import Float, IEEEContext, RoundingMode, fmax, fmin, nearbyint, pow as fpy_pow
 from fractions import Fraction
 
-from titanfp.arithmetic.evalctx import EvalCtx, FixedCtx, RM
+from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
 from titanfp.fpbench.fpcast import Fmax, Fmin, Nearbyint, Pow
@@ -131,8 +131,6 @@ def mpmf_interpreter():
     - fixes ties to even when the significand has one bit, as at the
     bottom of an IEEE format; Titanic decides by the exponent,
     e.g., `3 * 2**-1074 / 2 = 2**-1074`.
-    - fixes the default rounding mode of fixed-point contexts, e.g.,
-    `integer`, to FPCore's `nearestEven`; Titanic's is `toNegative`.
     - fixes ndarray `check_offset` for empty tensors
     """
     rt = Interpreter()
@@ -141,6 +139,5 @@ def mpmf_interpreter():
     rt._eval_fmin = types.MethodType(_eval_fmin, rt)
     rt._eval_pow = types.MethodType(_eval_pow, rt)
     utils.is_even_for_rounding = _is_even_for_rounding
-    FixedCtx.rm = RM.RNE
     ndarray.check_offset = make_check_offset(ndarray.check_offset)
     return rt

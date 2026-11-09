@@ -11,7 +11,7 @@ from fpy2 import *
     ctx=FP64,
 )
 def _arclength_of_a_wiggly_function_pre(n):
-    with MPFixedContext(nmin=-1, rm=RoundingMode.RNE, num_randbits=0, rng=None, enable_nan=False, enable_inf=False, enable_neg_zero=False, nan_value=None, inf_value=None):
+    with INTEGER:
         n = round(n)
     return n >= round(0)
 
@@ -27,7 +27,7 @@ def _arclength_of_a_wiggly_function_pre(n):
     }
 )
 def arclength_of_a_wiggly_function(n):
-    with MPFixedContext(nmin=-1, rm=RoundingMode.RNE, num_randbits=0, rng=None, enable_nan=False, enable_inf=False, enable_neg_zero=False, nan_value=None, inf_value=None):
+    with INTEGER:
         n = round(n)
     dppi = const_pi()
     h = (dppi / n)
@@ -35,7 +35,7 @@ def arclength_of_a_wiggly_function(n):
     t2 = round(0)
     s1 = round(0)
     t0 = t1
-    with MPFixedContext(nmin=-1, rm=RoundingMode.RNE, num_randbits=0, rng=None, enable_nan=False, enable_inf=False, enable_neg_zero=False, nan_value=None, inf_value=None):
+    with INTEGER:
         t = round(1)
     i = t
     while i <= n:
@@ -44,7 +44,7 @@ def arclength_of_a_wiggly_function(n):
             t3 = round(1)
         d1 = t3
         t4 = x
-        with MPFixedContext(nmin=-1, rm=RoundingMode.RNE, num_randbits=0, rng=None, enable_nan=False, enable_inf=False, enable_neg_zero=False, nan_value=None, inf_value=None):
+        with INTEGER:
             t5 = round(1)
         k = t5
         while k <= round(5):
@@ -52,7 +52,7 @@ def arclength_of_a_wiggly_function(n):
                 t6 = (d1 * round(2))
             d1 = t6
             t4 = (t4 + (sin((d1 * x)) / d1))
-            with MPFixedContext(nmin=-1, rm=RoundingMode.RNE, num_randbits=0, rng=None, enable_nan=False, enable_inf=False, enable_neg_zero=False, nan_value=None, inf_value=None):
+            with INTEGER:
                 t7 = (k + round(1))
             k = t7
         t2 = t4
@@ -61,7 +61,7 @@ def arclength_of_a_wiggly_function(n):
             t8 = (s1 + s0)
         s1 = t8
         t0 = t2
-        with MPFixedContext(nmin=-1, rm=RoundingMode.RNE, num_randbits=0, rng=None, enable_nan=False, enable_inf=False, enable_neg_zero=False, nan_value=None, inf_value=None):
+        with INTEGER:
             t9 = (i + round(1))
         i = t9
     return s1
