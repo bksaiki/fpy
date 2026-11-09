@@ -44,7 +44,7 @@ holding files a run did not write is refused) with:
   compiled a design only where every repeat did;
 - `sensitivity-run.json`: the run's settings, and whether each backend
   bisects;
-- `sensitivity-totals.tex`: one row per backend, over the designs every
+- `sensitivity-table.tex`: one row per backend, over the designs every
   backend compiled: its method, compile and solver time, the solver's
   share, and solver time per query;
 - `sensitivity-scatter.{pdf,png}`: each query's time against the

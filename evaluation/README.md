@@ -52,7 +52,7 @@ Hugging Face on first use.
 
 ```
 results/analysis/  precision-*.tex, precision-slack.pdf, precision-paper.json
-results/sensitivity/  sensitivity-totals.tex, sensitivity-scatter.pdf, sensitivity-paper.json
+results/sensitivity/  sensitivity-table.tex, sensitivity-scatter.pdf, sensitivity-paper.json
 results/blas/      blas-grid.csv, plots/k.pdf
 results/gsm8k/     gsm8k-speed.tex, gsm8k-speed.json
 results/llm/       sweep/sweep-grid-Qwen3.5-0.8B.csv, plots/sweep-grid-Qwen3.5-0.8B.pdf

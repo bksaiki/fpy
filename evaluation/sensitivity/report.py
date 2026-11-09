@@ -4,7 +4,7 @@ The sensitivity evaluation's table and figure, from `run.py`'s results;
 
     python evaluation/sensitivity/report.py evaluation/results/sensitivity
 
-Writes `sensitivity-totals.tex`, `sensitivity-scatter.{pdf,png}`,
+Writes `sensitivity-table.tex`, `sensitivity-scatter.{pdf,png}`,
 `sensitivity-paper.json` and `sensitivity-summary.txt` beside the data,
 overwriting only those; the README says what each holds.
 """
@@ -21,13 +21,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-NAMES = {'z3': 'z3', 'z3-opt': 'z3 (Optimize)', 'cvc5': 'cvc5'}
+NAMES = {'z3': 'Z3 (Binary search)', 'z3-opt': 'Z3 (Optimize)', 'cvc5': 'cvc5'}
 """Each backend's label."""
 
 METHODS = {True: 'Binary search', False: 'Optimize'}
 """How a backend finds a maximum, by `sensitivity-run.json`'s `bisects`."""
 
-ROW_NAMES = {**NAMES, 'z3-opt': 'z3'}
+ROW_NAMES = {**NAMES, 'z3': 'Z3', 'z3-opt': 'Z3'}
 """Each backend's label in the table, whose method column tells the two z3
 rows apart."""
 
@@ -185,7 +185,7 @@ def summary(nums: dict[str, Any]) -> str:
               f'compared below (reference {NAMES.get(ref, ref)})')]
     for b, t in nums['totals'].items():
         lines.append(
-            f'{NAMES.get(b, b):>13}: compile {t["compile_seconds"]:8.1f}s  '
+            f'{NAMES.get(b, b):>18}: compile {t["compile_seconds"]:8.1f}s  '
             f'solver {t["solver_seconds"]:8.1f}s ({100 * t["solver_share"]:.0f}% of compile)  '
             f'{t["queries"]} queries, {t["degraded"]} degraded')
     for b, ds in nums['cpp_differs'].items():
@@ -208,7 +208,7 @@ def main(argv: list[str]) -> int:
     if not records:
         ap.error(f'no results in {out}')
     nums = numbers(records, json.loads((out / 'sensitivity-run.json').read_text())['bisects'])
-    (out / 'sensitivity-totals.tex').write_text(totals_latex(nums))
+    (out / 'sensitivity-table.tex').write_text(totals_latex(nums))
     figure(records, out / 'sensitivity-scatter')
     (out / 'sensitivity-paper.json').write_text(json.dumps(nums, indent=1) + '\n')
     text = summary(nums)

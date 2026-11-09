@@ -45,7 +45,7 @@ def test_a_partly_compiled_design_is_a_failure_and_says_how_much():
     nums = numbers(records, BISECTS)
     assert nums['compared'] == 0
     assert nums['failed']['z3-opt'] == {'a': 'timeout, 2 of 3 compiled'}
-    assert 'not compiled under z3 (Optimize): a (timeout, 2 of 3 compiled)' in summary(nums)
+    assert 'not compiled under Z3 (Optimize): a (timeout, 2 of 3 compiled)' in summary(nums)
 
 
 def test_the_method_comes_from_the_run():
@@ -56,8 +56,8 @@ def test_the_method_comes_from_the_run():
 
 def test_the_summary_names_what_differs():
     text = summary(numbers(RECORDS, BISECTS))
-    assert 'C++ differs from z3 under z3 (Optimize): a' in text
-    assert 'not compiled under z3 (Optimize): b (timeout)' in text
+    assert 'C++ differs from Z3 (Binary search) under Z3 (Optimize): a' in text
+    assert 'not compiled under Z3 (Optimize): b (timeout)' in text
     assert '10 queries, 1 degraded' in text
 
 
@@ -71,14 +71,14 @@ def test_it_writes_every_output(tmp_path):
     assert (tmp_path / 'notes.md').read_text() == 'mine'
     made = {p.name for p in tmp_path.iterdir() if p.name.startswith('sensitivity-')}
     assert made == {'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
-                    'sensitivity-totals.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
+                    'sensitivity-table.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
     paper = json.loads((tmp_path / 'sensitivity-paper.json').read_text())
     assert paper['totals']['z3-opt']['seconds_per_query'] == 0.2
     assert paper['totals']['z3-opt']['method'] == 'Optimize'
     assert '1 compiled by every backend' in (tmp_path / 'sensitivity-summary.txt').read_text()
-    totals = (tmp_path / 'sensitivity-totals.tex').read_text()
+    totals = (tmp_path / 'sensitivity-table.tex').read_text()
     # design `a` alone: every backend compiled it
-    assert 'z3 & Optimize & 8\\,s & 2\\,s & 25\\% & 200.0\\,ms' in totals
+    assert 'Z3 & Optimize & 8\\,s & 2\\,s & 25\\% & 200.0\\,ms' in totals
     assert 'Constraints' not in totals and 'Queries' not in totals
 
 

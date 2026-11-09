@@ -35,7 +35,7 @@ def test_one_design_under_every_backend(tmp_path):
     # the run's data, and beside it the report
     assert {p.name for p in out.iterdir() if p.name.startswith('sensitivity-')} == {
         'sensitivity-run.json', 'sensitivity-scatter.pdf', 'sensitivity-scatter.png',
-        'sensitivity-totals.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
+        'sensitivity-table.tex', 'sensitivity-paper.json', 'sensitivity-summary.txt'}
 
 
 def test_the_time_and_the_counts_come_from_one_run():
@@ -61,7 +61,7 @@ def test_a_design_compiles_only_where_every_repeat_did():
 
 def test_a_run_replaces_the_last(tmp_path):
     (tmp_path / 'stale.json').write_text('{}')
-    (tmp_path / 'sensitivity-totals.tex').write_text('')
+    (tmp_path / 'sensitivity-table.tex').write_text('')
     assert main(['-o', str(tmp_path), '-b', 'z3', '-r', '1', 'fp32 (fma)']) == 0
     assert not (tmp_path / 'stale.json').exists()
     assert (tmp_path / 'fp32_fma.json').exists()
