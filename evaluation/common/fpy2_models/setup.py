@@ -39,10 +39,11 @@ setup(
             extra_compile_args={
                 "cxx": [
                     "-O3",
-                    # The models set rounding modes with `fesetround` and must
-                    # round every operation as written: no folding or moving
-                    # arithmetic across a mode change, and no FMA contraction.
-                    # GCC and Clang both accept these.
+                    # The models must round every operation as written: no
+                    # FMA contraction. They run in the default rounding mode
+                    # (`compile.py` compiles them with `enable_fenv=False`),
+                    # so `-frounding-math` dates from when they called
+                    # `fesetround`. GCC and Clang both accept these.
                     "-frounding-math",
                     "-ffp-contract=off",
                     # The torch::stable ABI version the operators target.

@@ -49,7 +49,7 @@ from fpy2.transform import FreeVarElim
 from fpy2.transform.const_fold import ConstFold
 
 RESULTS = ROOT / 'evaluation' / 'results'
-# fpy2_models' flags (setup.py)
+# fpy2_models' flags (setup.py): every operation rounds as written, no FMA contraction
 CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
             '-DTORCH_TARGET_VERSION=0x020a000000000000']
 FP32_UN = 2.0 ** -126
