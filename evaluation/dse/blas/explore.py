@@ -49,7 +49,7 @@ from fpy2.transform import FreeVarElim
 from fpy2.transform.const_fold import ConstFold
 
 RESULTS = ROOT / 'evaluation' / 'results'
-# fpy2_models' flags (setup.py): the models set rounding modes with `fesetround`
+# fpy2_models' flags (setup.py)
 CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
             '-DTORCH_TARGET_VERSION=0x020a000000000000']
 FP32_UN = 2.0 ** -126
@@ -70,7 +70,7 @@ def to_cpp(d: generator.Design) -> dict:
         # does: the C++ backend refuses the generator's helpers otherwise
         mod = normalize_module(mod.map(lambda _, f: FreeVarElim.apply(f)))
         mod = mod.map(lambda _, f: ConstFold.apply(f)).map(mm._prepare)
-        compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS)
+        compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
         src = compiler.compile_module(mod)
         params, result = compiler.signature(mod.public()[0], module=mod)
         out = {'src': src, 'model': {'name': name, 'file': mm._filename(name),

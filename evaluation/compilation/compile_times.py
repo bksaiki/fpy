@@ -44,7 +44,8 @@ def generate_cpp(build) -> str:
     func, arg_types = build()
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
-    return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS).compile_module(mod.map(_prepare))
+    compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
+    return compiler.compile_module(mod.map(_prepare))
 
 
 def generate(job: tuple[str, str]) -> dict:

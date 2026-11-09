@@ -4,7 +4,8 @@
 // interface of MMA-Sim's `dpa`: operands a and b of shape (..., K), one
 // accumulator per row in c, of shape (...), and, for block-scaled models,
 // scales alphas and betas of shape (..., S). Each returns the new
-// accumulators, shaped like c.
+// accumulators, shaped like c. The rows split over Torch's intra-op threads
+// (`torch.set_num_threads`).
 //
 // The GEMM runners chain a model along rows instead: entry p is row I[p] of A
 // dotted with row J[p] of Bt, K elements per call, from 0. With every (i, j),
@@ -15,6 +16,7 @@
 #include <torch/csrc/stable/tensor.h>
 #include <torch/headeronly/core/ScalarType.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -50,6 +52,11 @@ inline void check_rows(const Tensor& t, const char* name, const Tensor& c,
   }
 }
 
+// Fewest rows per thread. Most models take at least 60 ns a row, so a thread
+// gets at least as much work as waking it costs (~13 us on an M3 Pro). The
+// FMA and CDNA2 models take 1.5-5 ns a row, and run slower threaded.
+constexpr int64_t kGrainRows = 256;
+
 template <typename T, std::size_t K, auto Model>
 Tensor run_dpa(const Tensor& a, const Tensor& b, const Tensor& c) {
   check_rows(a, "a", c, K);
@@ -65,11 +72,14 @@ Tensor run_dpa(const Tensor& a, const Tensor& b, const Tensor& c) {
   const T* c_ptr = c_contig.const_data_ptr<T>();
   T* output_ptr = output.mutable_data_ptr<T>();
 
-  for (int64_t batch = 0; batch < c.numel(); ++batch) {
-    const auto& a_values = unsafe_array_view<T, K>(a_ptr + batch * K);
-    const auto& b_values = unsafe_array_view<T, K>(b_ptr + batch * K);
-    output_ptr[batch] = Model(a_values, b_values, c_ptr[batch]);
-  }
+  torch::stable::parallel_for(
+      0, c.numel(), kGrainRows, [=](int64_t lo, int64_t hi) {
+        for (int64_t batch = lo; batch < hi; ++batch) {
+          const auto& a_values = unsafe_array_view<T, K>(a_ptr + batch * K);
+          const auto& b_values = unsafe_array_view<T, K>(b_ptr + batch * K);
+          output_ptr[batch] = Model(a_values, b_values, c_ptr[batch]);
+        }
+      });
 
   return output;
 }
@@ -98,29 +108,31 @@ Tensor run_scaled_dpa(const Tensor& a, const Tensor& b, const Tensor& c,
   const T* betas_ptr = betas_contig.const_data_ptr<T>();
   T* output_ptr = output.mutable_data_ptr<T>();
 
-  for (int64_t batch = 0; batch < c.numel(); ++batch) {
-    const auto& a_values = unsafe_array_view<T, K>(a_ptr + batch * K);
-    const auto& b_values = unsafe_array_view<T, K>(b_ptr + batch * K);
-    if constexpr (ScaleK == 1) {
-      output_ptr[batch] = Model(a_values, b_values, c_ptr[batch],
-                                alphas_ptr[batch], betas_ptr[batch]);
-    } else {
-      const auto& alpha_values =
-          unsafe_array_view<T, ScaleK>(alphas_ptr + batch * ScaleK);
-      const auto& beta_values =
-          unsafe_array_view<T, ScaleK>(betas_ptr + batch * ScaleK);
-      output_ptr[batch] =
-          Model(a_values, b_values, c_ptr[batch], alpha_values, beta_values);
-    }
-  }
+  torch::stable::parallel_for(
+      0, c.numel(), kGrainRows, [=](int64_t lo, int64_t hi) {
+        for (int64_t batch = lo; batch < hi; ++batch) {
+          const auto& a_values = unsafe_array_view<T, K>(a_ptr + batch * K);
+          const auto& b_values = unsafe_array_view<T, K>(b_ptr + batch * K);
+          if constexpr (ScaleK == 1) {
+            output_ptr[batch] = Model(a_values, b_values, c_ptr[batch],
+                                      alphas_ptr[batch], betas_ptr[batch]);
+          } else {
+            const auto& alpha_values =
+                unsafe_array_view<T, ScaleK>(alphas_ptr + batch * ScaleK);
+            const auto& beta_values =
+                unsafe_array_view<T, ScaleK>(betas_ptr + batch * ScaleK);
+            output_ptr[batch] = Model(a_values, b_values, c_ptr[batch],
+                                      alpha_values, beta_values);
+          }
+        }
+      });
 
   return output;
 }
 
 // The entries of A Bt^T at (I[p], J[p]): each chains call(i, j, chunk, acc)
 // over the chunks of K in a row. The entries split over Torch's intra-op
-// threads (torch.set_num_threads); the models restore any rounding mode they
-// set, so reusing Torch's threads leaves Torch's own arithmetic as it was.
+// threads (torch.set_num_threads), each thread at least kGrainRows calls.
 template <typename T, std::size_t K, typename Call>
 Tensor gemm(const Tensor& A, const Tensor& Bt, const Tensor& I, const Tensor& J,
             Call call) {
@@ -146,7 +158,8 @@ Tensor gemm(const Tensor& A, const Tensor& Bt, const Tensor& I, const Tensor& J,
     }
   };
 
-  torch::stable::parallel_for(0, I.numel(), 1, range);
+  torch::stable::parallel_for(
+      0, I.numel(), std::max<int64_t>(1, kGrainRows / chunks), range);
   return output;
 }
 
