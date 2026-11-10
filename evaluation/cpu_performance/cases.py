@@ -54,6 +54,9 @@ def _import_mmasim() -> tuple[Any, Any, Any, str]:
 
 amd, nv_ptx, truncate_fp32_to_tf32, MMASIM_CXX = _import_mmasim()
 
+# after MMA-Sim, whose FMA helper compiles on import
+import no_sync
+
 # Operand formats without a torch dtype.  MMA-Sim takes TF32 operands as FP32
 # and truncates them itself; FP6 and E2M1 (FP4) operands as FP16 values, which
 # its group-scaled model unpacks E2M1 to, their PTX types giving their exponent
@@ -274,6 +277,8 @@ def prepare(case: Case, batch: int, seed: int, length: int = 1024, compiled: boo
         return dot
 
     mm = (case.accumulator, a_mm, b_mm, *scales)
+    if compiled:
+        no_sync.compilable()
     return Prepared(
         fpy=chain(getattr(torch.ops.fpy2_models, case.op).default, case.compute,
                   a_fpy, b_fpy, *(s.to(case.compute) for s in scales)),

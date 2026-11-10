@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 import generator
-import mmasim_nosync
+import no_sync
 import torch
 from core import kernels, quant, swap
 from generator.catalog import CATALOG
@@ -59,11 +59,11 @@ output is copied out of it."""
 
 def tune(on: bool = True) -> None:
     """Make MMA-Sim the tuned baseline, or as released: tuned, its
-    arithmetic never waits for the GPU (`mmasim_nosync`), and in decode
+    arithmetic never waits for the GPU (`no_sync`), and in decode
     (:func:`replaying`) each call shape is captured once as a CUDA graph and
     replayed, as LLM servers do.  Bit for bit the same."""
     global TUNED
-    mmasim_nosync.install(on)
+    no_sync.install(on)
     TUNED = on
     GRAPHLESS.clear()
     release_graphs()
