@@ -32,7 +32,7 @@ def test_a_named_schemes_designs_keep_it(design: str) -> None:
     ('nv.hopper.e5m2.f32', 'e5m2-row'), ('nv.hopper.e4m3.e5m2.f16', 'e4m3.e5m2-row'),
     ('nv.blackwell.e2m1.f32', 'e2m1-row'), ('amd.cdna3.bf8', 'e5m2fnuz-row'),
     ('amd.cdna3.fp8.bf8', 'e4m3fnuz.e5m2fnuz-row'), ('nv.blackwell.mx.e5m2', 'mx-e5m2'),
-    ('nv.blackwell.mx.e4m3.e2m1', 'mx-e4m3.e2m1'),
+    ('nv.blackwell.mx.e3m2.e2m3', 'mx-e3m2.e2m3'), ('nv.blackwell.e2m3.f16', 'e2m3-row'),
     ('nv.hopper.bf16.f32', 'bf16'), ('nv.ada.e4m3.f16', 'fp8-row'), ('amd.cdna3.fp8', 'fp8-row:fnuz'),
     ('nv.blackwell.mx.e4m3', 'mxfp8'), ('nv.blackwell.nvfp4', 'nvfp4'),
 ])
@@ -55,3 +55,15 @@ def test_e2m1_per_row() -> None:
     assert torch.equal(q.scales[:, 0], torch.tensor([0.5, 0.1]))
     assert q.elements.abs().amax(1).tolist() == [6.0, 6.0]
     assert set(q.elements.abs().flatten().tolist()) <= {0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0}
+
+
+@pytest.mark.parametrize('ctx', [fp.MX_E3M2, fp.MX_E2M3])
+def test_fp6_per_row(ctx: fp.Context) -> None:
+    """Each row scaled to the format's largest value, every element one of its
+    values: FP6 is rounded, not cast (torch has no FP6)."""
+    op = quant.Operand(ctx, quant.Scaling(fp.FP32, None))
+    t = torch.randn(4, 64, generator=torch.Generator().manual_seed(0))
+    q = quant.quantize(t, op)
+    top = float(ctx.maxval())
+    assert q.elements.abs().amax(1).tolist() == [top] * 4
+    assert all(float(ctx.round(x)) == x for x in q.elements.flatten().tolist())

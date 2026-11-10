@@ -28,8 +28,9 @@ from ...analysis.storage_infer import (
     StorageSelectionError,
     join,
     of_bound,
+    without_absent,
 )
-from ...analysis.value_class import ClassBound
+from ...analysis.value_class import ClassBound, ValueClass
 from ...ast.fpyast import Var
 from ...number import (
     FP32,
@@ -120,19 +121,30 @@ def exact_integer_bits(ty: CppScalar) -> int | None:
     return int(_ABSTRACT[ty].prec) if ty.is_float() else None
 
 
-def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:
+def bound_fits_in_scalar(
+    bound: FormatBound, ty: CppScalar, cls: ValueClass | None = None,
+) -> bool:
     """Is every value *bound* admits representable in *ty*?
 
     A question about values, where :func:`scalar_fits_in` asks about types --
     and the two disagree, because a bound picks the *smallest* type holding it:
     ``1`` stores as ``uint8_t``, which does not nest into ``int8_t``.
+
+    *cls* rules out the special values it proves absent, as storage selection
+    does (:func:`~fpy2.analysis.storage_infer.without_absent`): a slot chosen
+    for a finite class holds no NaN, so a value of that class fits it even
+    where its format admits one.
     """
     if ty is CppScalar.BOOL:
         return False
     if not isinstance(bound, AbstractableFormat | SetFormat):
         return False
     af = _to_abstract(bound)
-    return af is not None and af <= _ABSTRACT[ty]
+    if af is None:
+        return False
+    if cls is not None:
+        af = without_absent(af, cls)
+    return af <= _ABSTRACT[ty]
 
 
 def choose_storage_scalar(bound: FormatBound) -> CppScalar:

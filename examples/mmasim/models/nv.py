@@ -35,30 +35,30 @@ When K exceeds the FDPA arity `L`, FDPAs are chained
 to TF32 (`RZ_TF32`) before the dot product.
 
 T-FDPA / ST-FDPA parameters by architecture (paper Table 4; `e_zero`
-from the MMA-Sim reference implementation, keyed by the accumulator
-type: FP32 / FP16):
+from the MMA-Sim reference implementation, 2.1.1, keyed by the
+accumulator type: FP32 / FP16):
 
     architecture    inputs      output  L     F   rho       e_zero
     ----------------------------------------------------------------
     Volta           FP16        FP32    4     23  RZ_FP32   -131
-    Volta           FP16        FP16    4     23  RNE_FP16  -20
+    Volta           FP16        FP16    4     23  RNE_FP16  -19
     Turing          FP16        FP32    8     24  RZ_FP32   -132
-    Turing          FP16        FP16    8     24  RNE_FP16  -21
+    Turing          FP16        FP16    8     24  RNE_FP16  -20
     Ampere/Ada      TF32        FP32    4     24  RZ_FP32   -132
     Ampere/Ada      BF16/FP16   FP32    8     24  RZ_FP32   -132
-    Ampere/Ada      FP16        FP16    8     24  RNE_FP16  -21
+    Ampere/Ada      FP16        FP16    8     24  RNE_FP16  -20
     Ada             FP8         FP32    16    13  RZ_E8M13  -132
-    Ada             FP8         FP16    16    13  RNE_FP16  -21
+    Ada             FP8         FP16    16    13  RNE_FP16  -20
     Hopper          TF32        FP32    8     25  RZ_FP32   -133
     Hopper          BF16/FP16   FP32    16    25  RZ_FP32   -133
-    Hopper          FP16        FP16    16    25  RNE_FP16  -133 (wgmma) / -22 (mma)
+    Hopper          FP16        FP16    16    25  RNE_FP16  -21
     Hopper          FP8         FP32    32    13  RZ_E8M13  -133
-    Hopper          FP8         FP16    32    13  RNE_FP16  -133
+    Hopper          FP8         FP16    32    13  RNE_FP16  -21
     Blackwell/RTX   TF32        FP32    8     25  RZ_FP32   -133
     Blackwell/RTX   BF16/FP16   FP32    16    25  RZ_FP32   -133
-    Blackwell/RTX   FP16        FP16    16    25  RNE_FP16  -133 (tcgen05) / -22 (mma)
+    Blackwell/RTX   FP16        FP16    16    25  RNE_FP16  -21
     Blackwell/RTX   FP8/6/4     FP32    32    25  RZ_FP32   -133
-    Blackwell/RTX   FP8/6/4     FP16    32    25  RNE_FP16  -133 (tcgen05) / -22 (mma)
+    Blackwell/RTX   FP8/6/4     FP16    32    25  RNE_FP16  -21
     Blackwell/RTX   MXFP8/6/4   FP32    32    25  RZ_FP32   -133  (ST-FDPA)
 
 GST-FDPA parameters (Table 5):
@@ -67,17 +67,19 @@ GST-FDPA parameters (Table 5):
     rho = RZ_FP32, e_zero = -139
 
 `e_zero` is the exponent an exact-zero term reads out of the internal
-alignment datapath. When omitted, the factories derive it as `3 - F`
-for FP16-accumulate `mma`-class instructions and `-108 - F` otherwise
-(`is_mma=False` covers wgmma/tcgen05, whose FP16-accumulate datapath
-is FP32-wide). The derivation tracks each generation's base F, so the
-FP8 instructions (F = 13) must pass the architecture's `e_zero`
-explicitly, per the table above; GST-FDPA defaults to -139.
+alignment datapath. When omitted, the factories derive it as `4 - F`
+for an FP16 accumulator and `-108 - F` for FP32, on every instruction
+class (mma, wgmma, tcgen05). The derivation tracks each generation's
+base F, so the FP8 instructions (F = 13) must pass the architecture's
+`e_zero` explicitly, per the table above; GST-FDPA defaults to -139.
+
+Every T-, ST- and GST-FDPA result that is zero is +0, as in MMA-Sim:
+a negative sum that rounds to zero included (`fdpa_round`).
 """
 
 import fpy2 as fp
 
-from .utils import exp_floor, exponent, fused_sum, join, make_fma_dpa, sum_special_values
+from .utils import exponent, fused_sum, join, make_fma_dpa, sum_special_values
 
 ###########################################################
 # Rounding contexts
@@ -98,27 +100,30 @@ def fdpa_round(s, rho):
     Converts an exact FDPA sum `s` to the output format with `rho`.
 
     Unlike IEEE round-toward-zero, the hardware conversions overflow
-    to infinity, never to the maximum finite value.
+    to infinity, never to the maximum finite value.  A zero result is
+    +0, even of a negative sum.
     """
     if abs(s) >= 2 ** 128:
         return -fp.inf() if fp.signbit(s) else fp.inf()
     with rho:
-        return fp.round(s)
+        r = fp.round(s)
+    if r == 0:
+        r = 0
+    return r
 
 ###########################################################
 # Model factories
 
-def _default_e_zero(c_ctx: fp.EFloatContext, F: int, is_mma: bool) -> int:
+def _default_e_zero(c_ctx: fp.EFloatContext, F: int) -> int:
     """The `e_zero` of the standard (non-FP8, non-GST) instructions."""
     assert c_ctx.emin in (fp.FP16.emin, fp.FP32.emin), \
         'no known e_zero: the accumulator must be FP16 or FP32'
-    if is_mma and c_ctx.emin == fp.FP16.emin:
-        return 3 - F    # mma-class FP16-accumulate datapath
-    return -108 - F     # FP32-wide datapath
+    if c_ctx.emin == fp.FP16.emin:
+        return 4 - F    # FP16-accumulate datapath
+    return -108 - F     # FP32-accumulate datapath
 
 def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
-                F: int, rho: fp.Context,
-                *, e_zero: int | None = None, is_mma: bool = True):
+                F: int, rho: fp.Context, *, e_zero: int | None = None):
     """
     Builds a T-FDPA (Algorithm 7): truncated fused dot-product-add.
 
@@ -127,14 +132,13 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
     per-instruction parameters (see the module docstring).
 
     If `e_zero` is omitted, it is derived from the accumulator format
-    and F (`is_mma=False` selects the wgmma/tcgen05 datapath); the
-    FP8 instructions (F = 13) must pass it explicitly.
+    and F; the FP8 instructions (F = 13) must pass it explicitly.
     """
-    emin_a = exp_floor(a_ctx)
-    emin_b = exp_floor(b_ctx)
+    emin_a = a_ctx.emin
+    emin_b = b_ctx.emin
     emin_c = c_ctx.emin
     if e_zero is None:
-        e_zero = _default_e_zero(c_ctx, F, is_mma)
+        e_zero = _default_e_zero(c_ctx, F)
 
     @fp.fpy(ctx=fp.REAL)
     def t_fdpa(A, B, c):
@@ -169,8 +173,7 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
 
 def make_t_fdpa_chain(L: int,
                       a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
-                      F: int, rho: fp.Context,
-                      *, e_zero: int | None = None, is_mma: bool = True):
+                      F: int, rho: fp.Context, *, e_zero: int | None = None):
     """
     Builds a Phi_FDPA dot-product-accumulate (Algorithm 5): chains
     T-FDPAs over vectors of length K, `L` elements at a time.
@@ -178,7 +181,7 @@ def make_t_fdpa_chain(L: int,
     Assumes `rho` outputs the accumulator format, so `c_ctx` also
     describes the running accumulator.
     """
-    fdpa_op = make_t_fdpa(a_ctx, b_ctx, c_ctx, F, rho, e_zero=e_zero, is_mma=is_mma)
+    fdpa_op = make_t_fdpa(a_ctx, b_ctx, c_ctx, F, rho, e_zero=e_zero)
 
     @fp.fpy(ctx=fp.REAL)
     def t_fdpa_chain(A, B, c):
@@ -202,12 +205,12 @@ def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     with scale factors `alpha` and `beta` (E8M0) applied to the
     products; MXFP8/6/4 MMA instructions. The accumulator is FP32.
     """
-    emin_a = exp_floor(a_ctx)
-    emin_b = exp_floor(b_ctx)
+    emin_a = a_ctx.emin
+    emin_b = b_ctx.emin
     emin_s = scale_ctx.emin
     emin_c = fp.FP32.emin
     if e_zero is None:
-        e_zero = _default_e_zero(fp.FP32, F, False)
+        e_zero = _default_e_zero(fp.FP32, F)
 
     @fp.fpy(ctx=fp.REAL)
     def st_fdpa(A, B, c, alpha, beta):
@@ -360,13 +363,13 @@ def table8_cases():
         ('ada.e5m2.f32',
          dpa(make_t_fdpa_chain(16, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 13, RZ_E8M13, e_zero=-132), 16), 0.0),
         ('hopper.f16.f32 (wgmma)',
-         dpa(make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, is_mma=False), 32), -0.75),
+         dpa(make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32), 32), -0.75),
         ('hopper.e5m2.f32 (wgmma)',
          dpa(make_t_fdpa_chain(32, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 13, RZ_E8M13, e_zero=-133), 32), 0.0),
         ('blackwell.f16.f32 (tcgen05)',
-         dpa(make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, is_mma=False), 32), -0.75),
+         dpa(make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32), 32), -0.75),
         ('blackwell.e5m2.f32 (tcgen05)',
-         dpa(make_t_fdpa_chain(32, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 25, RZ_FP32, is_mma=False), 32), -0.75),
+         dpa(make_t_fdpa_chain(32, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 25, RZ_FP32), 32), -0.75),
         ('blackwell.mxfp8 (st-fdpa)',
          lambda: float(st(pad(a, 32), pad(b, 32), c, 1.0, 1.0)), -0.75),
         ('blackwell.nvfp4 (gst-fdpa)',

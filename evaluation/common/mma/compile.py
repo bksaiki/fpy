@@ -114,11 +114,15 @@ _FP8_PAIRS = [
     ('e5m2', fp.MX_E5M2, fp.MX_E5M2),
     ('e4m3.e5m2', fp.MX_E4M3, fp.MX_E5M2),
 ]
-# FP6 is left out: MMA-Sim has no reference for it
-_F8F6F4_PAIRS = _FP8_PAIRS + [
+_FP6_PAIRS = [
+    ('e3m2', fp.MX_E3M2, fp.MX_E3M2),
+    ('e2m3', fp.MX_E2M3, fp.MX_E2M3),
+    ('e3m2.e2m3', fp.MX_E3M2, fp.MX_E2M3),
+]
+# pairs within a width only: the instructions also take FP8 x FP6, FP8 x FP4
+# and FP6 x FP4, left out
+_F8F6F4_PAIRS = _FP8_PAIRS + _FP6_PAIRS + [
     ('e2m1', fp.MX_E2M1, fp.MX_E2M1),
-    ('e4m3.e2m1', fp.MX_E4M3, fp.MX_E2M1),
-    ('e5m2.e2m1', fp.MX_E5M2, fp.MX_E2M1),
 ]
 _CDNA3_FP8_PAIRS = [
     ('fp8', fp.S1E4M3, fp.S1E4M3),
@@ -141,29 +145,22 @@ DESIGNS = [
     ('nv.ampere.bf16.f32', _t_chain(8, fp.BF16, fp.BF16, fp.FP32, 24, RZ_FP32, 16)),
     *[(f'nv.ada.{tag}.f32', _t_chain(16, a, b, fp.FP32, 13, RZ_E8M13, 16, e_zero=-132))
       for tag, a, b in _FP8_PAIRS],
-    *[(f'nv.ada.{tag}.f16', _t_chain(16, a, b, fp.FP16, 13, RNE_FP16, 16, e_zero=-21))
+    *[(f'nv.ada.{tag}.f16', _t_chain(16, a, b, fp.FP16, 13, RNE_FP16, 16, e_zero=-20))
       for tag, a, b in _FP8_PAIRS],
     # also Blackwell, RTX Blackwell
     ('nv.hopper.tf32.f32', _t_chain(8, fp.TF32, fp.TF32, fp.FP32, 25, RZ_FP32, 16)),
     ('nv.hopper.bf16.f32', _t_chain(16, fp.BF16, fp.BF16, fp.FP32, 25, RZ_FP32, 32)),
-    ('nv.hopper.f16.f32', _t_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, 32,
-                                   is_mma=False)),
-    # also Blackwell tcgen05
-    ('nv.hopper.f16.f16.wgmma', _t_chain(16, fp.FP16, fp.FP16, fp.FP16, 25, RNE_FP16, 32,
-                                         is_mma=False)),
-    # also Blackwell, RTX Blackwell
-    ('nv.hopper.f16.f16.mma', _t_chain(16, fp.FP16, fp.FP16, fp.FP16, 25, RNE_FP16, 32)),
+    ('nv.hopper.f16.f32', _t_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, 32)),
+    # wgmma and mma; also Blackwell tcgen05, Blackwell and RTX Blackwell mma
+    ('nv.hopper.f16.f16', _t_chain(16, fp.FP16, fp.FP16, fp.FP16, 25, RNE_FP16, 32)),
     *[(f'nv.hopper.{tag}.f32', _t_chain(32, a, b, fp.FP32, 13, RZ_E8M13, 32, e_zero=-133))
       for tag, a, b in _FP8_PAIRS],
-    *[(f'nv.hopper.{tag}.f16', _t_chain(32, a, b, fp.FP16, 13, RNE_FP16, 32, e_zero=-133))
+    *[(f'nv.hopper.{tag}.f16', _t_chain(32, a, b, fp.FP16, 13, RNE_FP16, 32, e_zero=-21))
       for tag, a, b in _FP8_PAIRS],
     # Blackwell tcgen05, also RTX Blackwell mma
     *[(f'nv.blackwell.{tag}.f32', _t_chain(32, a, b, fp.FP32, 25, RZ_FP32, 32))
       for tag, a, b in _F8F6F4_PAIRS],
-    *[(f'nv.blackwell.{tag}.f16.tcgen05', _t_chain(32, a, b, fp.FP16, 25, RNE_FP16, 32,
-                                                   is_mma=False))
-      for tag, a, b in _F8F6F4_PAIRS],
-    *[(f'nv.rtx_blackwell.{tag}.f16.mma', _t_chain(32, a, b, fp.FP16, 25, RNE_FP16, 32))
+    *[(f'nv.blackwell.{tag}.f16', _t_chain(32, a, b, fp.FP16, 25, RNE_FP16, 32))
       for tag, a, b in _F8F6F4_PAIRS],
     # also RTX Blackwell
     *[(f'nv.blackwell.mx.{tag}', lambda a=a, b=b: (

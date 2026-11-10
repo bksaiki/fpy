@@ -394,6 +394,25 @@ class TestAListStoresAtItsElements:
         assert 'std::array<float, 8>' in out
         assert 'std::array<int8_t' not in out
 
+    def test_an_element_wider_by_type_still_stores_by_value(self):
+        """The store into a slot asks the same question storage selection did.
+
+        The element joins a ``-21`` (``int8_t``) and a ``logb`` (``uint8_t``),
+        whose storages join at ``int16_t``; the list, chosen from the joined
+        bound narrowed by class, holds ``int8_t``.  The store is exact only by
+        value, and only once the class rules out what the format admits: the
+        zero test removes ``logb(0)``'s ``-inf``, and E2M1 has no other
+        special.  Asked of the bare format, it was refused as narrowing.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            es = [-21 if x == 0 else max(fp.logb(x), 0) for x in xs]
+            return max(es)
+
+        out = CppCompiler().compile(q, arg_types=[ListType(RealType(fp.MX_E2M1), 4)])
+        assert 'std::array<int8_t, 4> es' in out
+        assert 'static_cast<int8_t>(' in out
+
 
 class TestMinMax:
     """``_emit_ieee_min_max``: IEEE ``minimum`` propagates a NaN."""

@@ -6,4 +6,4 @@
 #
 # mmasim pulls in torch; CPU torch is sufficient:
 #   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
-mmasim @ git+https://github.com/microsoft/MMA-Sim@2e57de2bb8e120409b00bfc2fd7bc59227631712#subdirectory=src/mmasim
+mmasim==2.1.1

@@ -29,18 +29,15 @@ CATALOG: dict[str, Design] = {
     'nv.ampere.tf32.f32': _t(4, fp.TF32, fp.TF32, fp.FP32, 24, RZ_FP32, 8),
     'nv.ampere.bf16.f32': _t(8, fp.BF16, fp.BF16, fp.FP32, 24, RZ_FP32, 16),
     **{f'nv.ada.{tag}.f32': _t(16, a, b, fp.FP32, 13, RZ_E8M13, 16, -132) for tag, a, b in _FP8_PAIRS},
-    **{f'nv.ada.{tag}.f16': _t(16, a, b, fp.FP16, 13, RNE_FP16, 16, -21) for tag, a, b in _FP8_PAIRS},
+    **{f'nv.ada.{tag}.f16': _t(16, a, b, fp.FP16, 13, RNE_FP16, 16, -20) for tag, a, b in _FP8_PAIRS},
     'nv.hopper.tf32.f32': _t(8, fp.TF32, fp.TF32, fp.FP32, 25, RZ_FP32, 16),
     'nv.hopper.bf16.f32': _t(16, fp.BF16, fp.BF16, fp.FP32, 25, RZ_FP32, 32),
     'nv.hopper.f16.f32': _t(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, 32),
-    'nv.hopper.f16.f16.wgmma': _t(16, fp.FP16, fp.FP16, fp.FP16, 25, RNE_FP16, 32, -133),
-    'nv.hopper.f16.f16.mma': _t(16, fp.FP16, fp.FP16, fp.FP16, 25, RNE_FP16, 32),
+    'nv.hopper.f16.f16': _t(16, fp.FP16, fp.FP16, fp.FP16, 25, RNE_FP16, 32),
     **{f'nv.hopper.{tag}.f32': _t(32, a, b, fp.FP32, 13, RZ_E8M13, 32, -133) for tag, a, b in _FP8_PAIRS},
-    **{f'nv.hopper.{tag}.f16': _t(32, a, b, fp.FP16, 13, RNE_FP16, 32, -133) for tag, a, b in _FP8_PAIRS},
+    **{f'nv.hopper.{tag}.f16': _t(32, a, b, fp.FP16, 13, RNE_FP16, 32, -21) for tag, a, b in _FP8_PAIRS},
     **{f'nv.blackwell.{tag}.f32': _t(32, a, b, fp.FP32, 25, RZ_FP32, 32) for tag, a, b in _F8F6F4_PAIRS},
-    **{f'nv.blackwell.{tag}.f16.tcgen05': _t(32, a, b, fp.FP16, 25, RNE_FP16, 32, -133)
-       for tag, a, b in _F8F6F4_PAIRS},
-    **{f'nv.rtx_blackwell.{tag}.f16.mma': _t(32, a, b, fp.FP16, 25, RNE_FP16, 32)
+    **{f'nv.blackwell.{tag}.f16': _t(32, a, b, fp.FP16, 25, RNE_FP16, 32)
        for tag, a, b in _F8F6F4_PAIRS},
     **{f'nv.blackwell.mx.{tag}': replace(_t(32, a, b, fp.FP32, 25, RZ_FP32, 32), scales=fp.MX_E8M0)
        for tag, a, b in _F8F6F4_PAIRS},

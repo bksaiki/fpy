@@ -1313,6 +1313,7 @@ class CppEmitter(Visitor):
 
     def _value_fits(
         self, bound: FormatBound, src: CppScalar, want: CppScalar,
+        cls: ValueClass | None = None,
     ) -> bool:
         """Can a value bounded by *bound*, emitted as *src*, live in *want*?
 
@@ -1325,9 +1326,11 @@ class CppEmitter(Visitor):
         bits, which a ``float`` holds exactly.
 
         Takes the *bound* rather than the expression, since a list element has
-        no expression of its own; see `docs/todos/backend-cpp.md`.
+        no expression of its own; see `docs/todos/backend-cpp.md`.  *cls*, where
+        there is an expression, narrows the bound by the special values it
+        rules out (:func:`bound_fits_in_scalar`).
         """
-        return scalar_fits_in(src, want) or bound_fits_in_scalar(bound, want)
+        return scalar_fits_in(src, want) or bound_fits_in_scalar(bound, want, cls)
 
     def _bound_of(self, e: Expr | None) -> FormatBound:
         """What format inference proved about *e*."""
@@ -1345,7 +1348,9 @@ class CppEmitter(Visitor):
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
-        if self._value_fits(self._bound_of(at), src, want):
+        # The slot's storage was chosen for its values narrowed by class, so
+        # the value is asked the same question.
+        if self._value_fits(self._bound_of(at), src, want, self._value_class(at)):
             return
         raise CppEmitError(
             f'unsupported: storing a `{src.format()}` into a slot of '

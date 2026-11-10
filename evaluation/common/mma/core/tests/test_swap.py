@@ -120,8 +120,8 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
 
 @pytest.mark.parametrize('design', [
     'nv.volta.f16.f16', 'nv.hopper.tf32.f32', 'fp64 (fma)', 'amd.cdna2.f16',
-    'nv.blackwell.e4m3.e5m2.f32', 'nv.blackwell.e4m3.e2m1.f32', 'amd.cdna3.bf8',
-    'nv.blackwell.mx.e5m2', 'nv.blackwell.mx.e4m3.e2m1',
+    'nv.blackwell.e4m3.e5m2.f32', 'nv.blackwell.e3m2.e2m3.f32', 'amd.cdna3.bf8',
+    'nv.blackwell.mx.e5m2', 'nv.blackwell.mx.e3m2.e2m3',
 ])
 def test_a_design_runs_under_its_scheme(
     design: str, model: torch.nn.Module, tokens: torch.Tensor,
