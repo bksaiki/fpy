@@ -7,7 +7,7 @@ same bits on a repeat call, on one thread or many, and batched or one row at a
 time; every configuration, both FPy and tuned MMA-Sim, to agree with MMA-Sim
 as released bit for bit.
 
-    python evaluation/cpu_performance/run.py                # every design, about 1.5 h (M3 Pro)
+    python evaluation/cpu_performance/run.py                # every design
     python evaluation/cpu_performance/run.py --smoke        # one batch and length, briefly
     python evaluation/cpu_performance/run.py --designs hopper blackwell.mx -j 1
 

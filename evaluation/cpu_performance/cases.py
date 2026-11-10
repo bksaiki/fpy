@@ -363,7 +363,7 @@ def check(case: Case) -> str | None:
 
 
 def validate(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
-    """FPy's output against eager MMA-Sim's, *want* if already computed."""
+    """FPy's output against MMA-Sim's as released, *want* if already computed."""
     want = p.mmasim() if want is None else want
     got = p.fpy()
     if got.dtype != want.dtype:
@@ -377,12 +377,12 @@ def validate(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
     return compare(got, want, 'fpy')
 
 
-def validate_tuned(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
-    """Tuned MMA-Sim against MMA-Sim as released, *want* if already computed;
-    failing to compile is a result."""
+def validate_tuned(p: Prepared, want: Tensor) -> dict[str, Any]:
+    """Tuned MMA-Sim against MMA-Sim as released, *want*; failing to compile
+    is a result."""
     try:
         got = p.tuned()
     except Exception as e:  # noqa: BLE001 -- a compile failure is a result
         return {'valid': False, 'reason': 'compile or runtime error',
                 'error': f'{type(e).__name__}: {str(e).splitlines()[0][:300]}'}
-    return compare(got, p.mmasim() if want is None else want, 'tuned')
+    return compare(got, want, 'tuned')

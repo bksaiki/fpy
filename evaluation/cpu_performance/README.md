@@ -16,7 +16,7 @@ lengths, replicates and the rest are `config.py`'s `CPU_PERF_*`.
 
 ## Run
 
-From `evaluation/`, about 1.5 hours on an M3 Pro:
+From `evaluation/`:
 
 ```sh
 uv run cpu_performance/run.py

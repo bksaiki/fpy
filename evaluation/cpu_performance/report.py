@@ -1,8 +1,8 @@
 """
 The CPU performance evaluation's figure, table and summary, from `run.py`'s
 `summary.csv`; `run.py` calls it last.  Speedup is FPy's over tuned MMA-Sim
-(`no_sync`'s arithmetic under `torch.compile`), at one batch size and dot length (the largest of each by default): it barely
-varies with the length.
+(`no_sync`'s arithmetic under `torch.compile`), at one batch size and dot
+length (the largest of each by default): it barely varies with the length.
 
     python evaluation/cpu_performance/report.py evaluation/results/cpu_performance
 

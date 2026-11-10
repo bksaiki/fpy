@@ -1,12 +1,11 @@
 """
 MMA-Sim's arithmetic (`mmasim.arithmetic.fdpa`) without host
-synchronizations, for the tuned MMA-Sim baseline (`gsm8k/mmasim_matmul.tune`).
-Each function is MMA-Sim's own, line for line, with its data-dependent
-Python branch (`pow2`) and its boolean-mask updates (`x[mask] = ...`, which
-count the mask on the host) replaced by `torch.where`; the results are bit
-for bit MMA-Sim's.  :func:`install` patches them into the module, where
-MMA-Sim's operations look them up.  :func:`compilable` makes MMA-Sim compile
-under `torch.compile` (`cpu_performance`'s tuned baseline).
+synchronizations, for the tuned MMA-Sim baselines (`gsm8k/mmasim_matmul.tune`,
+`cpu_performance`).  Each function is MMA-Sim's own, line for line, with its
+data-dependent Python branch (`pow2`) and its boolean-mask updates
+(`x[mask] = ...`, which count the mask on the host) replaced by `torch.where`;
+the results are bit for bit MMA-Sim's.  :func:`install` patches them into the
+module, where MMA-Sim's operations look them up.
 
 Adapted from MMA-Sim (https://github.com/microsoft/MMA-Sim),
 Copyright (c) Microsoft Corporation, under the MIT License.
@@ -167,21 +166,16 @@ _FREXP_LOWERINGS = {o: lowering.lowerings[o] for o in torch.ops.aten.frexp.op_ov
                     if o in lowering.lowerings}
 
 
-def compilable(on: bool = True) -> None:
-    """Make MMA-Sim compile under `torch.compile` (or undo it); eager MMA-Sim
-    is unchanged.  Inductor's vectorized CPU `frexp` of FP64 does not compile,
-    so `aten.frexp` falls back to ATen; Dynamo passes stale pointers to
-    MMA-Sim's ctypes FMA (`fma_cpu`), so it runs uncompiled."""
+def install(on: bool = True) -> None:
+    """Patch MMA-Sim's arithmetic with these, and make it compile under
+    `torch.compile` (or restore its own).  Inductor's vectorized CPU `frexp`
+    of FP64 does not compile, so `aten.frexp` falls back to ATen; Dynamo
+    passes stale pointers to MMA-Sim's ctypes FMA (`fma_cpu`), so it runs
+    uncompiled."""
+    for n, f in (_PATCHED if on else _ORIGINAL).items():
+        setattr(fdpa, n, f)
     fma.fma_cpu = _FMA_CPU_UNCOMPILED if on else _FMA_CPU
     if on:
         lowering.make_fallback(torch.ops.aten.frexp)
     else:
         lowering.lowerings.update(_FREXP_LOWERINGS)
-
-
-def install(on: bool = True) -> None:
-    """Patch MMA-Sim's arithmetic with these and make it :func:`compilable`
-    (or restore its own)."""
-    for n, f in (_PATCHED if on else _ORIGINAL).items():
-        setattr(fdpa, n, f)
-    compilable(on)
