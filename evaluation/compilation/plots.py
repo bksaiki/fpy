@@ -51,7 +51,7 @@ def architecture(design: str) -> str:
 
 def input_format(design: str) -> str:
     """*design*'s input format, as the performance evaluation's figure groups
-    them: block-scaled formats together, an FP8-FP4 mix as FP4."""
+    them: block-scaled formats together, an FP8-FP4 mix (older results) as FP4."""
     arch, rest = _parts(design)
     if arch == 'fma':
         return rest[0].upper()
@@ -59,6 +59,8 @@ def input_format(design: str) -> str:
         return 'MX / NVFP4'
     if 'e2m1' in rest:
         return 'FP4'
+    if {'e3m2', 'e2m3'} & set(rest):
+        return 'FP6'
     if {'e4m3', 'e5m2', 'fp8', 'bf8'} & set(rest):
         return 'FP8'
     return {'tf32': 'TF32', 'bf16': 'BF16', 'bf16_1k': 'BF16', 'f16': 'FP16'}[rest[0]]
@@ -91,7 +93,8 @@ COLORINGS: dict[str, tuple[Callable[[str], str], dict[str, str]]] = {
                             'Hopper': '#eb6834', 'Blackwell': '#2a78d6', 'CDNA1': '#e34948',
                             'CDNA2': '#e87ba4', 'CDNA3': '#eda100', 'FMA loop': '#6b6a64'}),
     'format': (input_format, {'FP64': '#2a78d6', 'FP32': '#eb6834', 'TF32': '#1baf7a', 'BF16': '#eda100',
-                              'FP16': '#e87ba4', 'FP8': '#008300', 'FP4': '#6250d6', 'MX / NVFP4': '#e34948'}),
+                              'FP16': '#e87ba4', 'FP8': '#008300', 'FP6': '#0f8fa8', 'FP4': '#6250d6',
+                              'MX / NVFP4': '#e34948'}),
     'models': (arithmetic, {'T-FDPA': '#2a78d6', 'ST-FDPA': '#eb6834', 'GST-FDPA': '#1baf7a',
                             'TR-FDPA': '#eda100', 'GTR-FDPA': '#e87ba4', 'E-FDPA': '#e34948',
                             'FTZ mul-add': '#008300', 'FMA': '#6250d6'}),

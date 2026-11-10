@@ -114,11 +114,15 @@ _FP8_PAIRS = [
     ('e5m2', fp.MX_E5M2, fp.MX_E5M2),
     ('e4m3.e5m2', fp.MX_E4M3, fp.MX_E5M2),
 ]
-# FP6 is left out: MMA-Sim has no reference for it
-_F8F6F4_PAIRS = _FP8_PAIRS + [
+_FP6_PAIRS = [
+    ('e3m2', fp.MX_E3M2, fp.MX_E3M2),
+    ('e2m3', fp.MX_E2M3, fp.MX_E2M3),
+    ('e3m2.e2m3', fp.MX_E3M2, fp.MX_E2M3),
+]
+# pairs within a width only: the instructions also take FP8 x FP6, FP8 x FP4
+# and FP6 x FP4, left out
+_F8F6F4_PAIRS = _FP8_PAIRS + _FP6_PAIRS + [
     ('e2m1', fp.MX_E2M1, fp.MX_E2M1),
-    ('e4m3.e2m1', fp.MX_E4M3, fp.MX_E2M1),
-    ('e5m2.e2m1', fp.MX_E5M2, fp.MX_E2M1),
 ]
 _CDNA3_FP8_PAIRS = [
     ('fp8', fp.S1E4M3, fp.S1E4M3),

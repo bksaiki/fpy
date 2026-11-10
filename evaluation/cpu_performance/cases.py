@@ -16,9 +16,14 @@ from typing import Any, NamedTuple
 
 import torch
 from torch import Tensor
+from torchao.prototype.mx_formats.constants import DTYPE_FP6_E2M3, DTYPE_FP6_E3M2
 from torchao.prototype.mx_formats.kernels import (
     f4_unpacked_to_f32,
+    f6_e2m3_unpacked_to_f32,
+    f6_e3m2_unpacked_to_f32,
     f32_to_f4_unpacked,
+    f32_to_f6_e2m3_unpacked,
+    f32_to_f6_e3m2_unpacked,
     unpack_uint4,
 )
 from torchao.prototype.mx_formats.mx_tensor import to_mx
@@ -50,11 +55,20 @@ def _import_mmasim() -> tuple[Any, Any, Any, str]:
 amd, nv_ptx, truncate_fp32_to_tf32, MMASIM_CXX = _import_mmasim()
 
 # Operand formats without a torch dtype.  MMA-Sim takes TF32 operands as FP32
-# and truncates them itself; E2M1 (FP4) operands only as FP16 values, which
-# its group-scaled model unpacks them to.
+# and truncates them itself; FP6 and E2M1 (FP4) operands as FP16 values, which
+# its group-scaled model unpacks E2M1 to, their PTX types giving their exponent
+# floors.
 TF32 = 'tf32'
-E2M1 = 'e2m1'
+E3M2, E2M3, E2M1 = 'e3m2', 'e2m3', 'e2m1'
 Format = torch.dtype | str
+
+_SUBBYTE: dict[str, tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor], torch.dtype | str]] = {
+    E3M2: (f32_to_f6_e3m2_unpacked, f6_e3m2_unpacked_to_f32, DTYPE_FP6_E3M2),
+    E2M3: (f32_to_f6_e2m3_unpacked, f6_e2m3_unpacked_to_f32, DTYPE_FP6_E2M3),
+    E2M1: (f32_to_f4_unpacked, f4_unpacked_to_f32, torch.float4_e2m1fn_x2),
+}
+"""Each FP6 and FP4 format's TorchAO conversions, to its codes and from them
+to FP32, and the element dtype `to_mx` takes for it."""
 
 
 @dataclass(frozen=True)
@@ -90,10 +104,11 @@ def references() -> dict[str, Reference]:
     """Each design's name to its `Reference`."""
     f16, bf16, f32, f64 = torch.float16, torch.bfloat16, torch.float32, torch.float64
     e8m0, e4m3 = torch.float8_e8m0fnu, torch.float8_e4m3fn
-    nv = {'e4m3': e4m3, 'e5m2': torch.float8_e5m2, 'e2m1': E2M1}
+    nv = {'e4m3': e4m3, 'e5m2': torch.float8_e5m2, 'e3m2': E3M2, 'e2m3': E2M3, 'e2m1': E2M1}
     cdna3 = {'fp8': torch.float8_e4m3fnuz, 'bf8': torch.float8_e5m2fnuz}
     fp8_pairs = [('e4m3', 'e4m3'), ('e5m2', 'e5m2'), ('e4m3', 'e5m2')]
-    f8f6f4_pairs = fp8_pairs + [('e2m1', 'e2m1'), ('e4m3', 'e2m1'), ('e5m2', 'e2m1')]
+    # pairs within a width only, as `compile._F8F6F4_PAIRS`
+    f8f6f4_pairs = fp8_pairs + [('e3m2', 'e3m2'), ('e2m3', 'e2m3'), ('e3m2', 'e2m3'), ('e2m1', 'e2m1')]
 
     def tag(a: str, b: str) -> str:
         return a if a == b else f'{a}.{b}'
@@ -192,8 +207,9 @@ def round_operand(fmt: Format, values: Tensor, compute: torch.dtype) -> tuple[Te
         # FPy's models take operands already TF32; MMA-Sim's truncate FP32 ones
         mm = values.float()
         return mm, truncate_fp32_to_tf32(mm)
-    if fmt == E2M1:
-        fpy = f4_unpacked_to_f32(f32_to_f4_unpacked(values.float().contiguous()))
+    if fmt in _SUBBYTE:
+        to_codes, to_f32, _ = _SUBBYTE[fmt]
+        fpy = to_f32(to_codes(values.float().contiguous()))
         return fpy.half(), fpy
     mm = values.to(fmt)
     return mm, mm.to(compute)
@@ -206,9 +222,11 @@ def quantize_blocks(case: Case, fmt: Format, values: Tensor) -> tuple[Tensor, Te
         # single-level NVFP4: any per-tensor scale lies outside the MMA
         scales, packed = nvfp4_quantize(values, case.scale_block)
     else:
-        scales, packed = to_mx(values, torch.float4_e2m1fn_x2 if fmt == E2M1 else fmt, case.scale_block)
-    if fmt == E2M1:
-        fpy = f4_unpacked_to_f32(unpack_uint4(packed.view(torch.uint8)))
+        scales, packed = to_mx(values, _SUBBYTE[fmt][2] if fmt in _SUBBYTE else fmt, case.scale_block)
+    if fmt in _SUBBYTE:
+        # E2M1 two codes a byte, FP6 one
+        codes = unpack_uint4(packed.view(torch.uint8)) if fmt == E2M1 else packed
+        fpy = _SUBBYTE[fmt][1](codes)
         return fpy.half(), fpy, scales
     return packed, packed.float(), scales
 

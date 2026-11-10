@@ -95,12 +95,13 @@ _RHO = {(32, fp.RM.RTZ): 'RZ-FP32', (22, fp.RM.RTZ): 'RZ-E8M13', (32, fp.RM.RNE)
 """MMA-Sim's name of each output conversion, by width and rounding."""
 
 _PTX = {fp.FP16: 'f16', fp.BF16: 'bf16', fp.TF32: 'tf32', fp.MX_E4M3: 'e4m3', fp.MX_E5M2: 'e5m2',
-        fp.MX_E2M1: 'e2m1'}
+        fp.MX_E3M2: 'e3m2', fp.MX_E2M3: 'e2m3', fp.MX_E2M1: 'e2m1'}
 """Each operand format's PTX type, which MMA-Sim's T- and ST-FDPA take."""
 
-DTYPES = quant.DTYPES | {fp.MX_E2M1: torch.float16, fp.MX_E8M0: torch.float8_e8m0fnu}
-"""Each format's torch dtype as MMA-Sim takes it: E2M1 values in FP16, as
-its tests pass them."""
+DTYPES = quant.DTYPES | {fp.MX_E3M2: torch.float16, fp.MX_E2M3: torch.float16,
+                         fp.MX_E2M1: torch.float16, fp.MX_E8M0: torch.float8_e8m0fnu}
+"""Each format's torch dtype as MMA-Sim takes it: FP6 and E2M1 values in
+FP16, as its tests pass E2M1's; their PTX types give their exponent floors."""
 
 
 def operation(design: str) -> MMAOperation | MMABlockScaleOperation:

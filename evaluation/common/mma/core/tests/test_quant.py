@@ -99,7 +99,12 @@ def test_only_the_software_scaled_fp8_schemes_take_fnuz() -> None:
 def _torchao(t: torch.Tensor, op: quant.Operand) -> quant.Quantized:
     """*t* quantized for *op* by `torchao`'s own quantizers: the reference."""
     from torchao.prototype.mx_formats.config import ScaleCalculationMode
-    from torchao.prototype.mx_formats.kernels import f4_unpacked_to_f32, unpack_uint4
+    from torchao.prototype.mx_formats.kernels import (
+        f4_unpacked_to_f32,
+        f6_e2m3_unpacked_to_f32,
+        f6_e3m2_unpacked_to_f32,
+        unpack_uint4,
+    )
     from torchao.prototype.mx_formats.mx_tensor import MXTensor
     from torchao.prototype.mx_formats.nvfp4_tensor import (
         nvfp4_quantize,
@@ -111,11 +116,14 @@ def _torchao(t: torch.Tensor, op: quant.Operand) -> quant.Quantized:
     def fp4(packed: torch.Tensor) -> torch.Tensor:
         return f4_unpacked_to_f32(unpack_uint4(packed))
 
+    # the sub-byte formats' codes, FP4 two a byte, FP6 one
+    decode = {fp.MX_E2M1: fp4, fp.MX_E3M2: f6_e3m2_unpacked_to_f32,
+              fp.MX_E2M3: f6_e2m3_unpacked_to_f32}
     s, dtype = op.scaling, quant.DTYPES[op.elements]
     if s.fmt == fp.MX_E8M0:
         q = MXTensor.to_mx(t, dtype, s.cols, ScaleCalculationMode.RCEIL)
-        return quant.Quantized(op, fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float(),
-                               q.scale.float())
+        elements = decode[op.elements](q.qdata) if op.elements in decode else q.qdata.float()
+        return quant.Quantized(op, elements, q.scale.float())
     if s.tensor:
         tensor = per_tensor_amax_to_scale(t.abs().amax())
         scales, packed = nvfp4_quantize(t, s.cols, tensor)
@@ -141,11 +149,17 @@ def _hard(r: int, k: int) -> list[torch.Tensor]:
     return [*out, zero, torch.randn(r, k, generator=g) * 1e-39, torch.randn(r, k, generator=g) * 1e37, tie]
 
 
-@pytest.mark.parametrize('name', [n for n in quant.NAMES if n != 'bf16'])
+def _mx_fp6(elements: fp.Context) -> quant.Scheme:
+    """The MX scheme an FP6 design derives: none is named."""
+    return quant.derive(elements, elements, fp.MX_E8M0.format())
+
+
+@pytest.mark.parametrize('name', [n for n in quant.NAMES if n != 'bf16'] + ['mx-e3m2', 'mx-e2m3'])
 @pytest.mark.parametrize('side, shape', [('x', (7, 512)), ('w', (300, 256))])
 def test_quantize_is_torchao_bit_for_bit(name: str, side: str, shape: tuple[int, int]) -> None:
     """Elements, scales and per-tensor scale, every bit (signed zeros too)."""
-    op = getattr(quant.scheme(name), side)
+    fp6 = {'mx-e3m2': fp.MX_E3M2, 'mx-e2m3': fp.MX_E2M3}
+    op = getattr(_mx_fp6(fp6[name]) if name in fp6 else quant.scheme(name), side)
     for t in _hard(*shape):
         got, want = quant.quantize(t, op), _torchao(t, op)
         for a, b in ((got.elements, want.elements), (got.scales, want.scales), (got.tensor, want.tensor)):

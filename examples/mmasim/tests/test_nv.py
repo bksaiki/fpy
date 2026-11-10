@@ -34,10 +34,10 @@ from models import nv
 
 FAILURES = 0
 
-E2M1 = 'e2m1'
-"""Stands in for E2M1, which has no working torch dtype.  The sweep hands the
-reference E2M1 values as FP16 tensors, with E2M1's PTX type, so MMA-Sim reads
-them as it does the ones it decodes."""
+E3M2, E2M3, E2M1 = 'e3m2', 'e2m3', 'e2m1'
+"""Stand in for FP6 and E2M1, which have no working torch dtype.  The sweep
+hands the reference their values as FP16 tensors, with their PTX types, so
+MMA-Sim reads them as it does the ones it decodes."""
 
 def check(name, ok, detail=''):
     global FAILURES
@@ -129,10 +129,23 @@ def run_sweep(trials):
     FP4_VALS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
                 -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
 
+    def every_value(ctx):
+        """Every value of the sub-byte format *ctx*, both zeros included."""
+        top = float(ctx.maxval())
+        step = 2.0 ** (ctx.emin - ctx.pmax + 1)
+        pos = sorted({float(ctx.round(k * step)) for k in range(int(top / step) + 1)})
+        return pos + [-x for x in pos]
+
+    SUBBYTE_VALS = {E3M2: every_value(fp.MX_E3M2), E2M3: every_value(fp.MX_E2M3),
+                    E2M1: FP4_VALS}
+
     def draw(i, n, dtype):
-        """Trial *i*'s *n* inputs; E2M1 as an FP16 tensor (see `E2M1`)."""
-        if dtype == E2M1:
-            vals = [0.0, -0.0, 0.0, 0.5, -0.5] if i % 3 == 2 else FP4_VALS
+        """Trial *i*'s *n* inputs; FP6 and E2M1 as FP16 tensors (see `E2M1`),
+        every third trial zeros and the least subnormal."""
+        if dtype in SUBBYTE_VALS:
+            vals = SUBBYTE_VALS[dtype]
+            tiny = min(x for x in vals if x > 0)
+            vals = [0.0, -0.0, 0.0, tiny, -tiny] if i % 3 == 2 else vals
             return torch.tensor([random.choice(vals) for _ in range(n)], dtype=torch.float16)
         return vc.GENS[i % len(vc.GENS)](n, dtype)
 
@@ -141,10 +154,11 @@ def run_sweep(trials):
     CTX = {torch.float16: fp.FP16, torch.bfloat16: fp.BF16,
            torch.float32: fp.TF32,  # float32 inputs mean TF32 instructions
            torch.float8_e4m3fn: fp.MX_E4M3, torch.float8_e5m2: fp.MX_E5M2,
-           E2M1: fp.MX_E2M1}
+           E3M2: fp.MX_E3M2, E2M3: fp.MX_E2M3, E2M1: fp.MX_E2M1}
     C_CTX = {torch.float16: fp.FP16, torch.float32: fp.FP32}
     PTX = {torch.float16: 'f16', torch.bfloat16: 'bf16', torch.float32: 'tf32',
-           torch.float8_e4m3fn: 'e4m3', torch.float8_e5m2: 'e5m2', E2M1: 'e2m1'}
+           torch.float8_e4m3fn: 'e4m3', torch.float8_e5m2: 'e5m2', E3M2: 'e3m2',
+           E2M3: 'e2m3', E2M1: 'e2m1'}
 
     def run_t_fdpa(name, a_dtype, c_dtype, L, K, F, rho, e_zero, b_dtype=None):
         b_dtype = b_dtype or a_dtype
@@ -228,12 +242,14 @@ def run_sweep(trials):
     run_t_fdpa('hopper.tf32.f32 L8 K16 F25', torch.float32, torch.float32, 8, 16, 25, 'RZ-FP32', -133)
     run_t_fdpa('hopper.bf16.f32 L16 K32 F25', torch.bfloat16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
 
-    # FP8 rows, every (A, B) pair up to swapping
+    # FP8 rows, every (A, B) pair up to swapping; Blackwell's add FP6 and FP4
     e4m3, e5m2 = torch.float8_e4m3fn, torch.float8_e5m2
     fp8_pairs: list[tuple[object, object]] = [(e4m3, e4m3), (e5m2, e5m2), (e4m3, e5m2)]
     f32, f16 = torch.float32, torch.float16
-    f8f6f4_pairs = fp8_pairs + [(E2M1, E2M1), (e4m3, E2M1), (e5m2, E2M1)]
-    tag = {e4m3: 'e4m3', e5m2: 'e5m2', E2M1: 'e2m1', f32: 'f32', f16: 'f16'}
+    # pairs within a width only, as the designs (`compile._F8F6F4_PAIRS`)
+    f8f6f4_pairs = fp8_pairs + [(E3M2, E3M2), (E2M3, E2M3), (E3M2, E2M3), (E2M1, E2M1)]
+    tag = {e4m3: 'e4m3', e5m2: 'e5m2', E3M2: 'e3m2', E2M3: 'e2m3', E2M1: 'e2m1',
+           f32: 'f32', f16: 'f16'}
     fp8_rows = [  # (arch, c dtype, L, F, rho, e_zero, pairs)
         ('ada', f32, 16, 13, 'RZ-E8M13', -132, fp8_pairs),
         ('ada', f16, 16, 13, 'RNE-FP16', -20, fp8_pairs),

@@ -64,18 +64,24 @@ NAMES = (*SCHEMES, 'fp8-row:fnuz')
 
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
-DTYPES = {
+DTYPES: dict[Context, torch.dtype | str] = {
     fp.FP64: torch.float64, fp.FP32: torch.float32, fp.TF32: torch.float32,
     fp.FP16: torch.float16, fp.BF16: torch.bfloat16,
     fp.MX_E4M3: torch.float8_e4m3fn, fp.MX_E5M2: torch.float8_e5m2,
     fp.S1E4M3: torch.float8_e4m3fnuz, fp.S1E5M2: torch.float8_e5m2fnuz,
+    fp.MX_E3M2: 'fp6_e3m2', fp.MX_E2M3: 'fp6_e2m3',
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
 }
-"""Each element format's torch dtype; TF32's holds it in FP32."""
+"""Each element format's torch dtype; TF32's holds it in FP32.  FP6 has
+none: TorchAO's name for it."""
+
+_SUBBYTE = (fp.MX_E3M2, fp.MX_E2M3, fp.MX_E2M1)
+"""The formats :func:`_subbyte` rounds to, held in FP32: torch casts to none
+of them."""
 
 _SHORT = {fp.FP64: 'fp64', fp.FP32: 'fp32', fp.TF32: 'tf32', fp.FP16: 'fp16', fp.BF16: 'bf16',
           fp.MX_E4M3: 'e4m3', fp.MX_E5M2: 'e5m2', fp.S1E4M3: 'e4m3fnuz', fp.S1E5M2: 'e5m2fnuz',
-          fp.MX_E2M1: 'e2m1'}
+          fp.MX_E3M2: 'e3m2', fp.MX_E2M3: 'e2m3', fp.MX_E2M1: 'e2m1'}
 
 
 def describe(s: Scheme) -> str:
@@ -168,11 +174,15 @@ def _tf32(x: torch.Tensor) -> torch.Tensor:
     return ((i + 0xFFF + ((i >> 13) & 1)) & ~0x1FFF).view(torch.float32)
 
 
-def _e2m1(x: torch.Tensor) -> torch.Tensor:
-    """*x*, within ±6, rounded to E2M1 (nearest, ties to even): steps of
-    1/2 below 2, 1 below 4, 2 up to 6."""
+def _subbyte(x: torch.Tensor, ctx: Context) -> torch.Tensor:
+    """*x*, within the largest value of *ctx* (one of :data:`_SUBBYTE`),
+    rounded to it (nearest, ties to even): each binade's step, the subnormals'
+    below `2^emin` (E2M1: 1/2 below 2, 1 below 4, 2 up to 6)."""
+    assert isinstance(ctx, fp.EFloatContext)
     a = x.abs()
-    step = torch.where(a < 2, 0.5, torch.where(a < 4, 1.0, 2.0))
+    # frexp's exponent is exact, where log2's rounds up just below a power of two
+    e = torch.frexp(a).exponent.clamp(min=ctx.emin + 1) - 1
+    step = torch.exp2((e - (ctx.pmax - 1)).float())
     return torch.copysign(torch.round(a / step) * step, x)
 
 
@@ -195,14 +205,14 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
         q = _tf32(t) if op.elements == fp.TF32 else t.to(dtype).float()
         return Quantized(op, t if t.dtype == torch.float32 and torch.equal(q, t) else q)
     r, k = t.shape
-    fp4 = op.elements == fp.MX_E2M1
-    top = 6.0 if fp4 else torch.finfo(dtype).max
+    sub = op.elements in _SUBBYTE
+    top = float(op.elements.maxval()) if sub else torch.finfo(dtype).max
     if s.fmt == fp.MX_E8M0:
         v = t.view(r, k // s.cols, s.cols)
         e = torch.ceil(torch.log2(v.abs().amax(-1, keepdim=True) / top)).clamp(-127, 127) + 127
         rcp = torch.where(e == 0, 1.0, torch.exp2(127 - e))
         v = (v * rcp).clamp(-top, top)
-        elements = _e2m1(v) if fp4 else v.to(dtype).float()
+        elements = _subbyte(v, op.elements) if sub else v.to(dtype).float()
         scales = e[..., 0].to(torch.uint8).view(torch.float8_e8m0fnu).float()
         return Quantized(op, elements.view(r, k), scales)
     if s.tensor:
@@ -211,10 +221,10 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
         tensor = block.amax().float() / (448.0 * 6.0)
         scales = ((block / 6.0) / tensor).clamp(_E4M3_TINY, 448.0).to(torch.float8_e4m3fn).float()
         v = (v * ((1.0 / tensor) / scales)[..., None]).clamp(-6.0, 6.0)
-        return Quantized(op, _e2m1(v).view(r, k), scales, tensor)
+        return Quantized(op, _subbyte(v, op.elements).view(r, k), scales, tensor)
     cols = s.cols or k
     v = t.view(r, k // cols, cols)
     scales = v.abs().amax(-1, keepdim=True).clamp(min=_F32_TINY) / top
     v = (v / scales).clamp(-top, top)
-    elements = (_e2m1(v) if fp4 else v.to(dtype).float()).view(r, k)
+    elements = (_subbyte(v, op.elements) if sub else v.to(dtype).float()).view(r, k)
     return Quantized(op, elements, scales.view(r, k // cols))
