@@ -66,13 +66,15 @@ EVALS = {
         run=lambda d, j, s: [[PY, str(HERE / 'sensitivity' / 'run.py'), '-o', str(d), '-j', '1', *s]],
         plot=lambda d: [[PY, str(HERE / 'sensitivity' / 'report.py'), str(d)]],
         done='sensitivity-paper.json', needs=('matplotlib',)),
+    # `compile_times.py` and `plots.py` add `compilation/` to the root they are given;
+    # one design at a time, so each time is its own
     'compilation': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'compilation' / 'compile_times.py'), '--results', str(d.parent),
-                           '-j', '1']],
+        run=lambda d, j, s: [[PY, str(HERE / 'compilation' / 'compile_times.py'), '--results', str(d.parent),
+                              '-j', '1', *s]],
         plot=lambda d: [[PY, str(HERE / 'compilation' / 'plots.py'), '--results', str(d.parent)]],
         done='compile-times.csv', needs=('matplotlib',)),
     'ablation': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'ablation' / 'run.py'), '-o', str(d), *j]],
+        run=lambda d, j, s: [[PY, str(HERE / 'ablation' / 'run.py'), '-o', str(d), *j]],   # no smoke size
         plot=lambda d: [[PY, str(HERE / 'ablation' / 'report.py'), str(d)]],
         done='ablation-paper.json', needs=()),
     # `explore.py` and `plots.py` add `blas/` to the root they are given
