@@ -9,7 +9,7 @@ varies with the length.
 Writes into the results directory:
 
 - `perf-cpu-speedup.{pdf,png}`: each design's speedup, ascending, colored by
-  its hardware family, block-scaled formats hatched;
+  its hardware family;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup, and all designs';
 - `perf-cpu-macros.tex`: the paper's `EvalCPUPerf...` macros, for its
@@ -42,9 +42,6 @@ generation its own hue, oldest first (Volta and Turing sharing one, as do
 datacenter and RTX Blackwell); AMD's and the FMA chains, not compared across
 generations, grays."""
 
-HATCH = '//////'
-"""Marks block-scaled formats (MX, NVFP4) over their family's color."""
-
 UNSTABLE = 0.10
 """A relative IQR above which a measurement is flagged."""
 
@@ -59,11 +56,6 @@ def family(design: str) -> str:
         return f'AMD {arch.upper()}'
     return {'volta': 'Volta / Turing', 'turing': 'Volta / Turing',
             'rtx_blackwell': 'Blackwell'}.get(arch, arch.capitalize())
-
-
-def block_scaled(design: str) -> bool:
-    """Whether *design* takes MX or NVFP4 operands."""
-    return design.split('.')[2:3] in (['mx'], ['mxfp4'], ['nvfp4'])
 
 
 def load(results: Path) -> list[dict[str, Any]]:
@@ -148,13 +140,7 @@ def figure(values: dict[str, float], out: Path) -> None:
     order = sorted(values, key=values.get)
     heights = [values[d] for d in order]
     fig, ax = plt.subplots(figsize=(7.0, 2.3))
-    bars = ax.bar(range(len(order)), heights, 0.9, color=[FAMILIES[family(d)] for d in order])
-    for bar, d in zip(bars, order):
-        if block_scaled(d):   # its family's color under a darker hatch
-            r, g, b, a = bar.get_facecolor()
-            bar.set_hatch(HATCH)
-            bar.set_hatchcolor((r * 0.6, g * 0.6, b * 0.6, a))
-            bar.set_linewidth(0)
+    ax.bar(range(len(order)), heights, 0.9, color=[FAMILIES[family(d)] for d in order])
     mean = geomean(heights)
     ax.axhline(mean, color='black', linewidth=1.0, linestyle=':')
     ax.annotate(f'geomean {mean:.2f}×', (0, mean), xycoords=ax.get_yaxis_transform(),
@@ -172,12 +158,6 @@ def figure(values: dict[str, float], out: Path) -> None:
     ax.spines[['top', 'right']].set_visible(False)
     shown = [f for f in FAMILIES if f in {family(d) for d in order}]
     handles = [plt.Rectangle((0, 0), 1, 1, color=FAMILIES[f]) for f in shown]
-    if any(map(block_scaled, order)):
-        # an outlined white swatch, which cannot read as another family's color
-        ink = '#52514e'
-        handles.append(plt.Rectangle((0, 0), 1, 1, facecolor='white', edgecolor=ink,
-                                     linewidth=0.6, hatch=HATCH, hatchcolor=ink))
-        shown = [*shown, 'block-scaled (MX / NVFP4)']
     # a grid of two rows, filled column by column
     ax.legend(handles, shown, loc='upper left', ncol=math.ceil(len(shown) / 2), columnspacing=1.0,
               frameon=False, fontsize=7, handlelength=1.4, handleheight=1.0)

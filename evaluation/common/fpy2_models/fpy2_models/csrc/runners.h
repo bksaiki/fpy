@@ -51,11 +51,6 @@ inline void check_rows(const Tensor& t, const char* name, const Tensor& c,
   }
 }
 
-// Fewest rows per thread. Most models take at least 60 ns a row, so a thread
-// gets at least as much work as waking it costs (~13 us on an M3 Pro). The
-// FMA and CDNA2 models take 1.5-5 ns a row, and run slower threaded.
-constexpr int64_t kGrainRows = 256;
-
 template <typename T, std::size_t K, auto Model>
 Tensor run_dpa(const Tensor& a, const Tensor& b, const Tensor& c) {
   check_rows(a, "a", c, K);
@@ -72,7 +67,7 @@ Tensor run_dpa(const Tensor& a, const Tensor& b, const Tensor& c) {
   T* output_ptr = output.mutable_data_ptr<T>();
 
   torch::stable::parallel_for(
-      0, c.numel(), kGrainRows, [=](int64_t lo, int64_t hi) {
+      0, c.numel(), 1, [=](int64_t lo, int64_t hi) {
         for (int64_t batch = lo; batch < hi; ++batch) {
           const auto& a_values = unsafe_array_view<T, K>(a_ptr + batch * K);
           const auto& b_values = unsafe_array_view<T, K>(b_ptr + batch * K);
@@ -108,7 +103,7 @@ Tensor run_scaled_dpa(const Tensor& a, const Tensor& b, const Tensor& c,
   T* output_ptr = output.mutable_data_ptr<T>();
 
   torch::stable::parallel_for(
-      0, c.numel(), kGrainRows, [=](int64_t lo, int64_t hi) {
+      0, c.numel(), 1, [=](int64_t lo, int64_t hi) {
         for (int64_t batch = lo; batch < hi; ++batch) {
           const auto& a_values = unsafe_array_view<T, K>(a_ptr + batch * K);
           const auto& b_values = unsafe_array_view<T, K>(b_ptr + batch * K);

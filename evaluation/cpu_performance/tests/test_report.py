@@ -10,13 +10,6 @@ def test_families():
     assert set(map(report.family, ['nv.hopper.bf16.f32', 'nv.ampere.tf32.f32'])) <= set(report.FAMILIES)
 
 
-def test_block_scaled():
-    assert report.block_scaled('nv.blackwell.mx.e4m3')
-    assert report.block_scaled('nv.blackwell.nvfp4')
-    assert not report.block_scaled('nv.blackwell.e2m1.f32')
-    assert not report.block_scaled('fp64.fma')
-
-
 def test_speedups_and_table():
     rows = [{'design': d, 'implementation': i, 'batch_size': 8, 'dot_length': 64, 'dots_per_second': r}
             for d, i, r in [('fp32.fma', 'fpy', 8.0), ('fp32.fma', 'mmasim', 2.0),

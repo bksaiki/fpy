@@ -1,12 +1,7 @@
-import re
-
 import cases as cs
 import pytest
 import run
 import torch
-
-RUNNERS = run.PACKAGE / 'fpy2_models' / 'csrc' / 'runners.h'
-
 
 def test_every_compiled_design_has_a_reference(manifest, cases):
     assert len(cases) == len(manifest['models'])
@@ -35,9 +30,8 @@ def test_threads_agree(cases):
         pytest.skip('one thread: nothing to compare it with')
     # enough rows that `runners.h` splits them over every thread, the last
     # chunk short
-    grain = int(re.search(r'kGrainRows = (\d+);', RUNNERS.read_text())[1])
     for c in cases:
-        p = cs.prepare(c, grain * threads + 7, 7, 4 * c.k)
+        p = cs.prepare(c, 4 * threads + 7, 7, 4 * c.k)
         many = p.fpy()
         torch.set_num_threads(1)
         try:
