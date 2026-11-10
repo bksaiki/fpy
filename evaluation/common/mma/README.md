@@ -6,6 +6,7 @@ Shared by the evaluations: the MMA designs, built from the FPy models in
 ```
 compile.py        every design (DESIGNS) to C++; reports where each one stops
 compile_triton.py every design to a Triton kernel; -r runs and compares
+designs_table.py  the paper's table of MMA-Sim units, from a compile manifest
 generator/        designs from parameters; catalog.py, DESIGNS as parameters
 core/             runs a model's linear layers through a design's kernels
 bench/            runtime of the Triton kernels, and a hand-written reference
