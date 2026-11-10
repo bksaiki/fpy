@@ -233,21 +233,25 @@ def _prepare(_module, func):
     return func
 
 
-def compile_design(build: Build) -> tuple[str, dict]:
-    """The C++ for one design, and its entry's signature; raises whatever
-    refused it.
-
-    Free variables removed and `zip`s eliminated, then inlined, as the Triton
-    backend does (inlining lowers a `zip` to tuples), then folded and prepared.
-
-    The signature gives the entry's name, and the C++ element type of each
-    parameter and the result, with a `size` for a fixed-size array.
-    """
+def prepare(build: Build) -> fp.Module:
+    """*build*'s module, as the C++ backend takes it: free variables removed and
+    `zip`s eliminated, then inlined, as the Triton backend does (inlining lowers
+    a `zip` to tuples), then folded and prepared."""
     func, arg_types = build()
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
     mod = normalize_module(mod.map(_declinable(FreeVarElim.apply)).map(_declinable(ZipElim.apply)))
-    return compile_module(mod.map(_declinable(ConstFold.apply)).map(_prepare))
+    return mod.map(_declinable(ConstFold.apply)).map(_prepare)
+
+
+def compile_design(build: Build) -> tuple[str, dict]:
+    """The C++ for one design (:func:`prepare`), and its entry's signature;
+    raises whatever refused it.
+
+    The signature gives the entry's name, and the C++ element type of each
+    parameter and the result, with a `size` for a fixed-size array.
+    """
+    return compile_module(prepare(build))
 
 
 def compile_module(mod: fp.Module) -> tuple[str, dict]:

@@ -25,12 +25,11 @@ ROOT = Path(__file__).resolve().parents[2]
 # `common/mma`, for `compile`, `compile_triton` and `core`; `examples/mmasim`, for `models`
 sys.path[:0] = [str(ROOT / 'evaluation' / 'common' / 'mma'), str(ROOT / 'examples' / 'mmasim')]
 
-from compile import DESIGNS, _prepare
+from compile import DESIGNS, prepare
 from compile_triton import compile_matmul
 from core import outputs
 
 import fpy2 as fp
-import fpy2.strategies as st
 
 RESULTS = ROOT / 'evaluation' / 'results'
 BACKENDS = ('cpp', 'triton')
@@ -41,11 +40,8 @@ WARM = 'fp32 (fma)'
 
 def generate_cpp(build) -> str:
     """*build*'s C++, as `compile.compile_design` generates it."""
-    func, arg_types = build()
-    mod = fp.Module()
-    mod.add(st.monomorphize(func, args=arg_types))
     compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
-    return compiler.compile_module(mod.map(_prepare))
+    return compiler.compile_module(prepare(build))
 
 
 def generate(job: tuple[str, str]) -> dict:
