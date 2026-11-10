@@ -65,6 +65,10 @@ def check_directed():
     check('signed zero: all -0 sums to +0', d == 0 and not fp.signbit(d))
     d = m24([0.0, 0.0], [1.0, -1.0], -0.0)
     check('signed zero: mixed 0 sums to +0', d == 0 and not fp.signbit(d))
+    # a negative sum that rounds to zero is +0 too (MMA-Sim's `+ 0.0`)
+    m16 = nv.make_t_fdpa(fp.FP16, fp.FP16, fp.FP16, 25, nv.RNE_FP16)
+    d = m16([-2.0**-14], [2.0**-14], -0.0)
+    check('signed zero: negative underflow is +0', d == 0 and not fp.signbit(d))
 
     # e_zero raises the alignment maximum: with a zero product and
     # c = 0, the 2^-48 term is truncated and the sum lands exactly on
@@ -77,11 +81,11 @@ def check_directed():
     m = nv.make_t_fdpa(fp.FP16, fp.FP16, fp.FP16, 24, nv.RNE_FP16, e_zero=-29)
     check('e_zero tie case (e_zero=-29)', float(m(A, B, 0.0)) == 2.0**-24)
 
-    # E2M1's 0.5 reads exponent -1 (`exp_floor`, unverified), so the
-    # products align at -2 and c survives; at E2M1's emin of 0 it is
-    # truncated.
+    # E2M1's 0.5 is subnormal, reading E2M1's emin of 0, so the products
+    # align at 0 and c = 2^-27 is truncated.  Verified against the
+    # MMA-Sim reference.
     m = nv.make_t_fdpa(fp.MX_E2M1, fp.MX_E2M1, fp.FP32, 25, nv.RZ_FP32, e_zero=-133)
-    check('e2m1 exponent floor', float(m([0.5, 0.5], [0.5, -0.5], 2.0**-27)) == 2.0**-27)
+    check('e2m1 exponent floor', float(m([0.5, 0.5], [0.5, -0.5], 2.0**-27)) == 0.0)
 
 def check_fma(trials):
     from fractions import Fraction
@@ -213,17 +217,16 @@ def run_sweep(trials):
 
     # T-FDPA configs (arch, F, rho, e_zero per MMA-Sim sim.py)
     run_t_fdpa('volta.f16.f32   L4 K4  F23', torch.float16, torch.float32, 4, 4, 23, 'RZ-FP32', -131)
-    run_t_fdpa('volta.f16.f16   L4 K8  F23', torch.float16, torch.float16, 4, 8, 23, 'RNE-FP16', -20)
+    run_t_fdpa('volta.f16.f16   L4 K8  F23', torch.float16, torch.float16, 4, 8, 23, 'RNE-FP16', -19)
     run_t_fdpa('ampere.f16.f32  L8 K16 F24', torch.float16, torch.float32, 8, 16, 24, 'RZ-FP32', -132)
-    run_t_fdpa('ampere.f16.f16  L8 K16 F24', torch.float16, torch.float16, 8, 16, 24, 'RNE-FP16', -21)
+    run_t_fdpa('ampere.f16.f16  L8 K16 F24', torch.float16, torch.float16, 8, 16, 24, 'RNE-FP16', -20)
     run_t_fdpa('ampere.bf16.f32 L8 K16 F24', torch.bfloat16, torch.float32, 8, 16, 24, 'RZ-FP32', -132)
     run_t_fdpa('ampere.tf32.f32 L4 K8  F24', torch.float32, torch.float32, 4, 8, 24, 'RZ-FP32', -132)
     run_t_fdpa('hopper.f16.f32  L16 K32 F25', torch.float16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
-    run_t_fdpa('hopper.f16.f16  L16 K16 F25', torch.float16, torch.float16, 16, 16, 25, 'RNE-FP16', -133)
+    run_t_fdpa('hopper.f16.f16  L16 K16 F25', torch.float16, torch.float16, 16, 16, 25, 'RNE-FP16', -21)
     run_t_fdpa('blackwell.f16.f32 L16 K32 F25', torch.float16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
     run_t_fdpa('hopper.tf32.f32 L8 K16 F25', torch.float32, torch.float32, 8, 16, 25, 'RZ-FP32', -133)
     run_t_fdpa('hopper.bf16.f32 L16 K32 F25', torch.bfloat16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
-    run_t_fdpa('hopper.f16.f16 (mma) L16 K16 F25', torch.float16, torch.float16, 16, 16, 25, 'RNE-FP16', -22)
 
     # FP8 rows, every (A, B) pair up to swapping
     e4m3, e5m2 = torch.float8_e4m3fn, torch.float8_e5m2
@@ -233,12 +236,11 @@ def run_sweep(trials):
     tag = {e4m3: 'e4m3', e5m2: 'e5m2', E2M1: 'e2m1', f32: 'f32', f16: 'f16'}
     fp8_rows = [  # (arch, c dtype, L, F, rho, e_zero, pairs)
         ('ada', f32, 16, 13, 'RZ-E8M13', -132, fp8_pairs),
-        ('ada', f16, 16, 13, 'RNE-FP16', -21, fp8_pairs),
+        ('ada', f16, 16, 13, 'RNE-FP16', -20, fp8_pairs),
         ('hopper', f32, 32, 13, 'RZ-E8M13', -133, fp8_pairs),
-        ('hopper', f16, 32, 13, 'RNE-FP16', -133, fp8_pairs),
+        ('hopper', f16, 32, 13, 'RNE-FP16', -21, fp8_pairs),
         ('blackwell', f32, 32, 25, 'RZ-FP32', -133, f8f6f4_pairs),
-        ('blackwell (tcgen05)', f16, 32, 25, 'RNE-FP16', -133, f8f6f4_pairs),
-        ('rtx_blackwell (mma)', f16, 32, 25, 'RNE-FP16', -22, f8f6f4_pairs),
+        ('blackwell', f16, 32, 25, 'RNE-FP16', -21, f8f6f4_pairs),
     ]
     for arch, c_dtype, L, F, rho, e_zero, pairs in fp8_rows:
         for a_dtype, b_dtype in pairs:

@@ -41,7 +41,6 @@ from typing import Any, Literal
 
 from models import amd, nv
 from models.utils import (
-    exp_floor,
     exponent,
     fused_sum,
     join,
@@ -172,8 +171,8 @@ def zero_exponent(d: Design) -> int:
     if d.join == 'separate':
         return amd._default_e_zero_tr(d.a, d.b)
     if d.scales is not None:
-        return -139 if d.G is not None else nv._default_e_zero(fp.FP32, d.F, False)
-    return nv._default_e_zero(d.c, d.F, True)
+        return -139 if d.G is not None else nv._default_e_zero(fp.FP32, d.F)
+    return nv._default_e_zero(d.c, d.F)
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -283,7 +282,7 @@ class _Parts:
         self.finish = finish = _finish(self, _terms(d))
         CHECK, special = self.check, self.special
         ex, e_zero = self.ex, self.e_zero
-        emin_a, emin_b = exp_floor(d.a), exp_floor(d.b)
+        emin_a, emin_b = d.a.emin, d.b.emin
 
         @fp.fpy(ctx=fp.REAL)
         def exps(terms, A, B, e_s):
