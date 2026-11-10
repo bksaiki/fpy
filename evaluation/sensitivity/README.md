@@ -21,10 +21,11 @@ three objectives.
 ## Run
 
 From `evaluation/`, as part of the whole evaluation (`uv run run.py
-results`, `--disable sensitivity` to skip it) or alone (about 25 minutes):
+results`, `--disable sensitivity` to skip it) or alone (about 25 minutes at `-j 4`):
 
 ```sh
 uv run sensitivity/run.py
+uv run sensitivity/run.py --smoke   # the first 2 designs, once each
 ```
 
 Its defaults (backends, repeats, time limits) are `config.py`'s
@@ -32,8 +33,9 @@ Its defaults (backends, repeats, time limits) are `config.py`'s
 a fresh process, killed past `-t` seconds, and each backend call in it may
 take `-c` seconds (default 60, over the solvers' own 10: a large CDNA3
 design has calls near 10 s, and one that crosses its limit answers loosely
-and sends the analysis down another path).  `-j 1` gives the least noisy
-times; the default, 4, trades some noise for a quarter of the wall time.
+and sends the analysis down another path).  `-j` runs that many at once
+(default 1, the least noisy times); `-j 4` trades some noise for a quarter of
+the wall time.
 
 It replaces `evaluation/results/sensitivity/` (or `-o DIR`; a directory
 holding files a run did not write is refused) with:

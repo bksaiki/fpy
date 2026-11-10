@@ -62,7 +62,8 @@ EVALS = {
         plot=lambda d: [[PY, str(HERE / 'analysis' / 'report.py'), str(d)]],
         done='precision-paper.json', needs=('matplotlib',)),
     'sensitivity': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'sensitivity' / 'run.py'), '-o', str(d), *j]],
+        # one compilation at a time, so each time is its own
+        run=lambda d, j, s: [[PY, str(HERE / 'sensitivity' / 'run.py'), '-o', str(d), '-j', '1', *s]],
         plot=lambda d: [[PY, str(HERE / 'sensitivity' / 'report.py'), str(d)]],
         done='sensitivity-paper.json', needs=('matplotlib',)),
     'compilation': Eval(
@@ -82,7 +83,7 @@ EVALS = {
         done='blas-grid.csv', needs=('torch', 'matplotlib'),
         tools=(os.environ.get('CXX', 'c++'),)),  # as `torch.utils.cpp_extension` picks it
     'cpu_performance': Eval(
-        run=lambda d, j: [[PY, str(HERE / 'cpu_performance' / 'run.py'), '-o', str(d), *j]],
+        run=lambda d, j, s: [[PY, str(HERE / 'cpu_performance' / 'run.py'), '-o', str(d), *j, *s]],
         plot=lambda d: [[PY, str(HERE / 'cpu_performance' / 'report.py'), str(d)]],
         done='summary.csv', needs=('torch', 'torchao', 'mmasim', 'matplotlib'),
         tools=(os.environ.get('CXX', 'c++'),)),

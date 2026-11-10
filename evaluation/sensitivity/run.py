@@ -2,8 +2,9 @@
 Compiles the MMA-Sim designs under each digit-bound solver backend, timing the
 compilation and the solver queries inside it.
 
-    python evaluation/sensitivity/run.py               # everything, about 30 min
+    python evaluation/sensitivity/run.py               # everything, about 30 min at -j 4
     python evaluation/sensitivity/run.py volta -r 1    # matching designs, once each
+    python evaluation/sensitivity/run.py --smoke       # the first 2 designs, once each
 
 Replaces the results directory (`evaluation/results/sensitivity/`, or `-o
 DIR`) with `<design>.json` per design, `sensitivity-run.json`, and
@@ -187,17 +188,22 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-r', '--repeats', type=int, default=config.SENSITIVITY_REPEATS,
                     help='compilations per design and backend; the median is reported '
                          '(default %(default)s)')
-    ap.add_argument('-j', '--jobs', type=int, default=4,
-                    help='compilations at once (default 4); 1 for the least noise')
+    ap.add_argument('-j', '--jobs', type=int, default=1,
+                    help='compilations at once (default %(default)s, the least noise)')
     ap.add_argument('-t', '--timeout', type=float, default=config.SENSITIVITY_TIMEOUT,
                     help='seconds one compilation may take (default %(default)s)')
     ap.add_argument('-c', '--call-timeout', type=float, default=config.SENSITIVITY_CALL_TIMEOUT,
                     help='seconds one backend call may take (default %(default)s; '
                          'the solvers alone default to 10)')
+    ap.add_argument('--smoke', action='store_true', help='the first 2 designs, once each')
     args = ap.parse_args(argv)
+    if args.smoke:
+        args.repeats = 1
 
     names = [name for name, _ in DESIGNS
              if not args.filter or any(f in name for f in args.filter)]
+    if args.smoke:
+        names = names[:2]
     if not names:
         ap.error(f'no design matches {args.filter}')
     if foreign := _foreign(args.out):
