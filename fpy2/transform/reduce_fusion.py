@@ -18,7 +18,7 @@ Unfused, the comprehension materializes the whole list before the reduction
 scans it.  Whether skipping that is a *win* depends on the list's
 representation, and where the length is proven it is a loss -- see "When
 ``ReduceFusion`` pays, and when it costs" in ``docs/todos/backend-cpp.md`` for
-the measurements and why the pass runs anyway.
+the measurements; *sized* says where it is skipped.
 
 ``b`` is bound rather than inlined into ``acc or <elt>``, and the bind is
 load-bearing: FPy's ``or`` short-circuits, so an inlined element would stop

@@ -560,10 +560,9 @@ class CppCompiler(Backend):
             raise CppCompileError(f'specialization failed: {e}') from e
 
         if self._optimize:
-            # After `Specialize`, which proves the lengths it skips: a fused loop
-            # beats a `std::vector<bool>` but loses to a `std::array`; before,
-            # it would also hide a guard's refinement from format inference.
-            # After `Hoistable`, so every reduction has a slot to fuse into.
+            # after `Specialize`, which proves the lengths it leaves alone (a fused
+            # loop beats a `std::vector<bool>`, not a `std::array`), and after
+            # `Hoistable`, so every reduction has a slot to fuse into
             sized = not self._arrays
             specialized = specialized.map(
                 lambda _m, fd: ReduceFusion.apply(Hoistable.apply(fd), sized=sized))

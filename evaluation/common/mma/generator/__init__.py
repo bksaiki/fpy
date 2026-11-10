@@ -228,8 +228,9 @@ class _Parts:
     pre_c: fp.Function
     finish: fp.Function
     tail: fp.Function
-    """From the products, terms, their exponents and `c`: the special values
-    where any is special, else :attr:`finish`."""
+    """From the products, terms, inputs, the scales' exponent and `c`: the special
+    values where any is special, else :attr:`finish` of the terms and the
+    exponents it computes."""
 
     def __init__(self, d: Design) -> None:
         self.d = d

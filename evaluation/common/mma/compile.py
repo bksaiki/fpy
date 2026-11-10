@@ -36,6 +36,7 @@ from models.utils import make_fma_dpa
 
 import fpy2 as fp
 import fpy2.strategies as st
+from fpy2.ast import FuncDef
 from fpy2.backend.cpp.types import CppList
 from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 from fpy2.backend.triton.normalize import normalize_module
@@ -204,33 +205,15 @@ DESIGNS = [
 ]
 
 
-def _declinable(step: Callable) -> Callable:
+def _declinable(step: Callable[[FuncDef], FuncDef]) -> Callable[[Any, FuncDef], FuncDef]:
     """*step* over a module's functions, where declining (nothing to do) is not
     a failure."""
-    def apply(_module, func):
+    def apply(_module: Any, func: FuncDef) -> FuncDef:
         try:
             return step(func)
         except TransformDeclined:
             return func
     return apply
-
-
-def _prepare(_module, func):
-    """Put one function in the shape the backend needs.
-
-    `zip_elim` precedes `comp_to_loop`, as it does in the backend: lowered
-    first, a `zip` becomes a list of tuples, which no analysis reads through.
-    `comp_to_loop` precedes `rescale_fixed`: the latter emits the scale-in and
-    scale-out as statements, which a rounding inside a comprehension has no
-    slot for.  A transform with nothing to do declines, which is not a
-    failure.
-    """
-    for step in (ZipElim.apply, CompToLoop.apply, RescaleFixed.apply, Simplify.apply):
-        try:
-            func = step(func)
-        except TransformDeclined:
-            pass
-    return func
 
 
 def prepare(build: Build) -> fp.Module:
@@ -241,7 +224,16 @@ def prepare(build: Build) -> fp.Module:
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
     mod = normalize_module(mod.map(_declinable(FreeVarElim.apply)).map(_declinable(ZipElim.apply)))
-    return mod.map(_declinable(ConstFold.apply)).map(_prepare)
+    for step in (ConstFold.apply, CompToLoop.apply, RescaleFixed.apply, Simplify.apply):
+        mod = mod.map(_declinable(step))
+    return mod
+
+
+def cpp_compiler() -> fp.CppCompiler:
+    """The designs' C++ compiler: every rounding unfolded and only
+    round-to-nearest-even native (`enable_fenv=False`), so no model calls
+    `fesetround`."""
+    return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
 
 
 def compile_design(build: Build) -> tuple[str, dict]:
@@ -256,12 +248,8 @@ def compile_design(build: Build) -> tuple[str, dict]:
 
 def compile_module(mod: fp.Module) -> tuple[str, dict]:
     """The C++ for prepared module *mod*, and its entry's signature, as
-    :func:`compile_design` gives them.
-
-    Every rounding is unfolded and only round-to-nearest-even stays native
-    (`enable_fenv=False`), so no model calls `fesetround`.
-    """
-    compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
+    :func:`compile_design` gives them."""
+    compiler = cpp_compiler()
     src = compiler.compile_module(mod)
     entry = mod.public()[0]
     params, result = compiler.signature(entry, module=mod)
