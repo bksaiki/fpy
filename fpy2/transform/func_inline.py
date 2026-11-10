@@ -158,11 +158,10 @@ class _FuncInline(SiteRewriter):
                 # first time we see this callee, inline it and cache the result
                 ast = FuncInline.apply(e.fn.ast, recursive=True)
                 self.inlined[e.fn.ast] = ast
-
-            def_use = DefineUse.analyze(ast)
-            self.gensym.reserve(*def_use.names())
         else:
             ast = e.fn.ast
+        # a fresh name must not be one the callee already has
+        self.gensym.reserve(*DefineUse.analyze(ast).names())
 
         # one trailing return, as `_refuses` established of the callee before
         # this site was counted; recursive inlining preserves it

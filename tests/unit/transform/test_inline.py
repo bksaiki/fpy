@@ -85,9 +85,9 @@ class TestFuncInline():
             xs4 = xs
             p5 = p
             with fp.REAL:
-                e, _ = fp.libraries.core.max_e(xs4)
-                n = (e - p5)
-                t = fp.MPFixedContext(n, fp.RM.RTZ)
+                e6, _ = fp.libraries.core.max_e(xs4)
+                n7 = (e6 - p5)
+                t = fp.MPFixedContext(n7, fp.RM.RTZ)
             with t:
                 return [fp.round(x) for x in xs]
 
@@ -159,3 +159,26 @@ class TestFuncInline():
         inlined = fp.transform.FuncInline.apply(uses_comp.ast, recursive=True)
         fn = uses_comp.with_ast(inlined)
         assert repr(fn([2.0, 3.0])) == repr(uses_comp([2.0, 3.0]))
+
+    def test_a_callee_name_is_never_a_fresh_one(self):
+        """Inlined leaves-first, a callee already holds generated names; the
+        names its caller generates stay apart from them."""
+        @fp.fpy
+        def leaf(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def node(x: fp.Real) -> fp.Real:
+            return leaf(x) * leaf(x + 2)
+
+        @fp.fpy
+        def root(x: fp.Real) -> fp.Real:
+            return node(x) + node(x * 3)
+
+        mod = fp.Module()
+        mod.add(root)
+        mod = mod.map(lambda _m, f: fp.transform.FuncInline.apply(f, recursive=False))
+        fn = mod.public()[0]
+        assert _count_fpy_calls(fn.ast) == 0
+        for xv in (0.0, 1.5, -3.0):
+            assert fn(xv) == root(xv)

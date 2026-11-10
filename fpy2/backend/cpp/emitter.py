@@ -29,6 +29,7 @@ from ...analysis import (
     DefineUseAnalysis,
     Definition,
     FormatAnalysis,
+    PartialContext,
     ValueClass,
     ValueClassAnalysis,
 )
@@ -1519,10 +1520,16 @@ class CppEmitter(Visitor):
             return None
         resolved = self._resolve_scope_ctx(scope)
         if resolved is None:
+            # a fixed-point position known only at run time: `unfold` rescales it
+            fixed = (isinstance(scope.ctx, PartialContext)
+                     and issubclass(scope.ctx.cls, MPFixedContext | MPBFixedContext))
             raise CppEmitError(
                 'context expression must be a statically-resolvable '
-                f'Context value; got symbolic `{scope.ctx}`',
+                f'Context value; got symbolic `{scope.ctx}`'
+                + ('.  Compile with `unfold=UnfoldMode.ROUNDINGS` to rescale it '
+                   'to a fixed position.' if fixed else ''),
                 at=site,
+                unfold_answers=fixed,
             )
         return resolved
 

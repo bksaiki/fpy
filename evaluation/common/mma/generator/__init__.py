@@ -35,6 +35,7 @@ model does, bit for bit (`tests/test_generator.py`).
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Any, Literal
 
@@ -143,6 +144,8 @@ def build(d: Design) -> tuple[fp.Function, list[Any]]:
         return _chain(d, _fma(d)), vecs
     # an FMA chain has no `_Parts`: an FP64 accumulator has no `e_zero`
     p = _Parts(d)
+    if (d.sum, d.join, d.groups, d.scales) == ('tree', 'inside', 'none', None):
+        return _chain(d, _flat_tree(p)), vecs
     if d.scales is not None:
         scale = _R(d.scales) if d.G is None else _L(_R(d.scales), d.L // d.G)
         return (_scaled(p) if d.G is None else _group_scaled(p)), vecs + [scale, scale]
@@ -225,8 +228,9 @@ class _Parts:
     pre_c: fp.Function
     finish: fp.Function
     tail: fp.Function
-    """From the products, terms, their exponents and `c`: the special values
-    where any is special, else :attr:`finish`."""
+    """From the products, terms, inputs, the scales' exponent and `c`: the special
+    values where any is special, else :attr:`finish` of the terms and the
+    exponents it computes."""
 
     def __init__(self, d: Design) -> None:
         self.d = d
@@ -277,15 +281,45 @@ class _Parts:
                       (True, True): overflowed_rounded}[rule == 'tr', rounded])
         self.pre_c = drop_c if rule == 'gtr' else _same_c
         self.finish = finish = _finish(self, _terms(d))
-        CHECK, special, pre_c = self.check, self.special, self.pre_c
+        CHECK, special = self.check, self.special
+        ex, e_zero = self.ex, self.e_zero
+        emin_a, emin_b = exp_floor(d.a), exp_floor(d.b)
 
         @fp.fpy(ctx=fp.REAL)
-        def tail(ps, terms, es, c):
-            c2 = pre_c(c, es)
-            if CHECK:
+        def exps(terms, A, B, e_s):
+            return [e_zero if t == 0 else ex(a, emin_a) + ex(b, emin_b) + e_s
+                    for t, a, b in zip(terms, A, B)]
+
+        if rule == 'gtr' and d.sum == 'fused':
+            # GTR-FDPA's: the group exponents before the check, which `c` reads
+            rest, N = _gtr_rest(self, _terms(d)), _terms(d)
+
+            @fp.fpy(ctx=fp.REAL)
+            def tail(ps, terms, A, B, e_s, c):
+                es = exps(terms, A, B, e_s)
+                e_even = max([es[i] for i in range(0, N, 2)])
+                e_odd = max([es[i] for i in range(1, N, 2)])
+                c2 = 0 if not fp.isfinite(c) and max(e_even, e_odd) > F else c
                 if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c2):
                     return special(ps, terms, c2)
-            return finish(terms, es, c2)
+                return rest(terms, e_even, e_odd, c2)
+        elif rule == 'gtr':
+            # GTR-FDPA's `c` reads the exponents before the check
+            @fp.fpy(ctx=fp.REAL)
+            def tail(ps, terms, A, B, e_s, c):
+                es = exps(terms, A, B, e_s)
+                c2 = drop_c(c, es)
+                if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c2):
+                    return special(ps, terms, c2)
+                return finish(terms, es, c2)
+        else:
+            # the exponents after the check, of finite inputs
+            @fp.fpy(ctx=fp.REAL)
+            def tail(ps, terms, A, B, e_s, c):
+                if CHECK:
+                    if any([not fp.isfinite(t) for t in terms]) or not fp.isfinite(c):
+                        return special(ps, terms, c)
+                return finish(terms, exps(terms, A, B, e_s), c)
         self.tail = tail
 
 
@@ -344,27 +378,12 @@ def _finish_even_odd(p: _Parts, n: int) -> fp.Function:
     keep_out, tiny_o = p.keep_out, p.tiny_o
     N = n
     if (d.sum, d.join) == ('fused', 'separate'):
-        F2 = d.F2
+        rest = _gtr_rest(p, n)
 
-        # GTR-FDPA's, its sums inline: a fixed-point sum passed through a
-        # call loses its format to the backend
         @fp.fpy(ctx=fp.REAL)
         def gtr(xs, es, c):
-            e_even = max([es[i] for i in range(0, N, 2)])
-            e_odd = max([es[i] for i in range(1, N, 2)])
-            t_even = fused_sum([xs[i] for i in range(0, N, 2)], e_even - F - 1, fp.RM.RTZ)
-            t_odd = fused_sum([xs[i] for i in range(1, N, 2)], e_odd - F - 1, fp.RM.RTZ)
-            e_dot = max(e_even, e_odd)
-            t = round_down_at(t_even, e_dot - F - 1) + round_down_at(t_odd, e_dot - F - 1)
-            e_c = exponent(c, emin_c)
-            e = max(e_dot, e_c)
-            t = round_down_at(t, e - F2 - 2)
-            cr = 0 if e_c < e - F - 1 else round_down_at(c, e - F - 1)
-            s = t + cr
-            s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
-            with rho:
-                r = fp.round(s)
-            return keep_out(r, tiny_o)
+            return rest(xs, max([es[i] for i in range(0, N, 2)]),
+                        max([es[i] for i in range(1, N, 2)]), c)
         return gtr
     s_even, s_odd = _sum(p, (n + 1) // 2), _sum(p, n // 2)
     if (d.sum, d.join) == ('fused', 'inside'):
@@ -398,6 +417,33 @@ def _finish_even_odd(p: _Parts, n: int) -> fp.Function:
     return joined
 
 
+def _gtr_rest(p: _Parts, n: int) -> fp.Function:
+    """GTR-FDPA's fused-separate instruction from its *n* terms, the even and
+    odd terms' exponents and `c`.  Its sums inline: a fixed-point sum passed
+    through a call loses its format to the backend."""
+    d = p.d
+    F, F2, rho, emin_c = d.F, d.F2, d.rho, d.c.emin
+    keep_out, tiny_o = p.keep_out, p.tiny_o
+    N = n
+
+    @fp.fpy(ctx=fp.REAL)
+    def gtr_rest(xs, e_even, e_odd, c):
+        t_even = fused_sum([xs[i] for i in range(0, N, 2)], e_even - F - 1, fp.RM.RTZ)
+        t_odd = fused_sum([xs[i] for i in range(1, N, 2)], e_odd - F - 1, fp.RM.RTZ)
+        e_dot = max(e_even, e_odd)
+        t = round_down_at(t_even, e_dot - F - 1) + round_down_at(t_odd, e_dot - F - 1)
+        e_c = exponent(c, emin_c)
+        e = max(e_dot, e_c)
+        t = round_down_at(t, e - F2 - 2)
+        cr = 0 if e_c < e - F - 1 else round_down_at(c, e - F - 1)
+        s = t + cr
+        s = round_down_at(s, exponent(s, emin_c) - F2 - 1)
+        with rho:
+            r = fp.round(s)
+        return keep_out(r, tiny_o)
+    return gtr_rest
+
+
 def _sum(p: _Parts, n: int) -> fp.Function:
     """The block sum of *n* terms (no `c`), from them and their exponents."""
     d = p.d
@@ -413,12 +459,7 @@ def _sum(p: _Parts, n: int) -> fp.Function:
             return sum(xs)
         return exact
     if d.sum == 'tree':
-        whole = _tree(add, 0, n)
-
-        @fp.fpy(ctx=fp.REAL)
-        def tree(xs, es):
-            return whole(xs)
-        return tree
+        return _tree(add, _term_at, 0, n)
 
     REST = n - 1
 
@@ -432,22 +473,28 @@ def _sum(p: _Parts, n: int) -> fp.Function:
     return chain
 
 
-def _tree(add: fp.Function, off: int, n: int) -> fp.Function:
-    """A pairwise tree over *n* terms from *off*: halves at the largest power of
-    two below *n*, adjacent pairs for a power of two."""
-    if n == 1:
-        OFF = off
-
-        @fp.fpy(ctx=fp.REAL)
-        def leaf(xs):
-            return xs[OFF]
-        return leaf
-    h = 1 << ((n - 1).bit_length() - 1)
-    left, right = _tree(add, off, h), _tree(add, off + h, n - h)
+def _term_at(off: int) -> fp.Function:
+    """A tree leaf: term *off* of `xs` (`es` unread)."""
+    OFF = off
 
     @fp.fpy(ctx=fp.REAL)
-    def node(xs):
-        return add(left(xs), right(xs))
+    def leaf(xs, es):
+        return xs[OFF]
+    return leaf
+
+
+def _tree(add: fp.Function, leaf: Callable[[int], fp.Function], off: int, n: int) -> fp.Function:
+    """A pairwise tree over *n* leaves from *off*, each `leaf(i)` of the tree's
+    two arguments: halves at the largest power of two below *n*, adjacent pairs
+    for a power of two."""
+    if n == 1:
+        return leaf(off)
+    h = 1 << ((n - 1).bit_length() - 1)
+    left, right = _tree(add, leaf, off, h), _tree(add, leaf, off + h, n - h)
+
+    @fp.fpy(ctx=fp.REAL)
+    def node(x, y):
+        return add(left(x, y), right(x, y))
     return node
 
 
@@ -526,17 +573,34 @@ def _chain(d: Design, block: fp.Function) -> fp.Function:
 def _flat(p: _Parts) -> fp.Function:
     """An unscaled instruction: its products, each a term aligned at its
     inputs' exponents (a product not 0 has neither input flushed)."""
-    d = p.d
-    keep_in, tiny_a, tiny_b, term, ex = p.keep_in, p.tiny_a, p.tiny_b, p.term, p.ex
-    emin_a, emin_b, e_zero, tail = exp_floor(d.a), exp_floor(d.b), p.e_zero, p.tail
+    keep_in, tiny_a, tiny_b, term, tail = p.keep_in, p.tiny_a, p.tiny_b, p.term, p.tail
 
     @fp.fpy(ctx=fp.REAL)
     def flat(A, B, c):
         ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
         terms = [term(x) for x in ps]
-        es = [e_zero if t == 0 else ex(a, emin_a) + ex(b, emin_b) for t, a, b in zip(terms, A, B)]
-        return tail(ps, terms, es, c)
+        return tail(ps, terms, A, B, 0, c)
     return flat
+
+
+def _flat_tree(p: _Parts) -> fp.Function:
+    """An unscaled tree joined inside, each leaf the term of the inputs it
+    indexes: no list, which would keep a Triton kernel from tiling its rows."""
+    keep_in, tiny_a, tiny_b, term, add = p.keep_in, p.tiny_a, p.tiny_b, p.term, p.add
+
+    def product(off: int) -> fp.Function:
+        OFF = off
+
+        @fp.fpy(ctx=fp.REAL)
+        def leaf(A, B):
+            return term(keep_in(A[OFF], tiny_a) * keep_in(B[OFF], tiny_b))
+        return leaf
+    whole = _tree(add, product, 0, p.d.L)
+
+    @fp.fpy(ctx=fp.REAL)
+    def flat_tree(A, B, c):
+        return add(c, whole(A, B))
+    return flat_tree
 
 
 def _scaled(p: _Parts) -> fp.Function:
@@ -544,20 +608,18 @@ def _scaled(p: _Parts) -> fp.Function:
     inputs' and the scales' exponents (ST-FDPA)."""
     d = p.d
     assert d.scales is not None
-    keep_in, tiny_a, tiny_b, tiny_c, term, ex = p.keep_in, p.tiny_a, p.tiny_b, p.tiny_c, p.term, p.ex
-    emin_a, emin_b, emin_s, e_zero = exp_floor(d.a), exp_floor(d.b), d.scales.emin, p.e_zero
-    tail = p.tail
+    keep_in, tiny_a, tiny_b, tiny_c, term = p.keep_in, p.tiny_a, p.tiny_b, p.tiny_c, p.term
+    emin_s, tail = d.scales.emin, p.tail
 
     @fp.fpy(ctx=fp.REAL)
     def scaled(A, B, c, alpha, beta):
         if fp.isnan(alpha) or fp.isnan(beta):
             return fp.nan()
         ps = [keep_in(a, tiny_a) * keep_in(b, tiny_b) for a, b in zip(A, B)]
-        terms = [term(x * alpha * beta) for x in ps]
-        es = [e_zero if t == 0 else
-              ex(a, emin_a) + ex(b, emin_b) + exponent(alpha, emin_s) + exponent(beta, emin_s)
-              for t, a, b in zip(terms, A, B)]
-        return tail(ps, terms, es, keep_in(c, tiny_c))
+        scale = alpha * beta
+        terms = [term(x * scale) for x in ps]
+        e_s = exponent(alpha, emin_s) + exponent(beta, emin_s)
+        return tail(ps, terms, A, B, e_s, keep_in(c, tiny_c))
     return scaled
 
 

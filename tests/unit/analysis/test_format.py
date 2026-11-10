@@ -439,6 +439,16 @@ class TestAbstractFormat():
 
         assert (fmt1 <= fmt2) == all_contained, f"format containment mismatch: {fmt1} <= {fmt2} should be {all_contained}"
 
+    def test_a_join_of_zero_only_formats(self):
+        """A format of zero alone needs no digits, yet a join of a fixed shape
+        with a float one, taking each side's effective precision, must still
+        give a positive one."""
+        zero = fp.RealFloat.from_int(0)
+        fixed = AbstractFormat(float('inf'), 0, zero, has_pos_inf=True, has_neg_inf=True)
+        flt = AbstractFormat(1, 0, zero)
+        joined = fixed | flt
+        assert fixed <= joined and flt <= joined
+
     def test_effective_prec(self):
         """Testing effective precision calculation."""
         precs: list[int | float] = [2, 4, 8, float('inf')]

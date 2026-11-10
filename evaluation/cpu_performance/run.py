@@ -1,8 +1,10 @@
 """
 Times FPy's C++ for every MMA-Sim design against MMA-Sim itself, on the CPU:
 batches of dot products, each chained one K-wide call at a time from Python,
-by `torch.ops.fpy2_models.<op>` and by MMA-Sim's `dpa`.  Every configuration
-is first checked to agree with MMA-Sim bit for bit.
+by `torch.ops.fpy2_models.<op>` and by MMA-Sim's `dpa`.  Each operator is first
+checked to give the same bits on a repeat call, on one thread or many, and
+batched or one row at a time; every configuration, to agree with MMA-Sim bit
+for bit.
 
     python evaluation/cpu_performance/run.py                # every design, about 1.5 h (M3 Pro)
     python evaluation/cpu_performance/run.py --smoke        # one batch and length, briefly
@@ -20,7 +22,8 @@ lengths other than `config.py`'s -- writes into
 `evaluation/results/cpu_performance-partial/` instead, so as not to replace a
 full run's.  `summary.csv` comes last, only once every configuration agrees
 with MMA-Sim: `evaluation/run.py` takes it to mean the run is finished.
-Exits 1, without it, if any configuration disagrees.
+Exits 1, without it, if an operator fails its checks or any configuration
+disagrees.
 """
 
 import argparse
@@ -144,6 +147,10 @@ def main(argv: list[str]) -> int:
     import cases as cs  # MMA-Sim, compiling its FMA helper, after the designs' build
     import report
     cases = cs.select(cs.cases(manifest), args.designs)
+    if broken := {c.name: why for c in cases if (why := cs.check(c)) is not None}:
+        for name, why in broken.items():
+            print(f'BROKEN  {name}: {why}', flush=True)
+        return 1
 
     started = time.monotonic()
     validations = [{'design': n, 'status': 'unsupported', 'reason': r}

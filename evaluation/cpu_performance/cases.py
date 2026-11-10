@@ -159,6 +159,8 @@ def cases(manifest: dict[str, Any]) -> list[Case]:
         out.append(Case(name, r.simulator, r.a_format, r.b_format, r.accumulator, m['k'], m['op'],
                         torch.float64 if m['compute'] == 'double' else torch.float32,
                         r.scale_block, r.scale_dtype))
+    if len({c.name for c in out}) != len(out) or len({c.op for c in out}) != len(out):
+        sys.exit('two designs share a name or an operator')
     return out
 
 
@@ -283,6 +285,48 @@ def compare(got: Tensor, want: Tensor, name: str) -> dict[str, Any]:
     return {'valid': False, 'reason': 'output bit mismatch', 'mismatches': int(differ.sum()),
             'first_difference': i, f'{name}_value': float(got.flatten()[i]),
             'mmasim_value': float(want.flatten()[i])}
+
+
+def _identical(x: Tensor, y: Tensor) -> bool:
+    """Bit for bit, NaNs included."""
+    return x.dtype == y.dtype and torch.equal(x.contiguous().view(BITS[x.dtype]),
+                                              y.contiguous().view(BITS[y.dtype]))
+
+
+def check(case: Case) -> str | None:
+    """What is wrong with *case*'s operator, or `None`: repeat calls must agree,
+    one thread with all of them, and a batched call with one row at a time."""
+    p = prepare(case, 2, 123, 2 * case.k)
+    if not (_identical(p.fpy(), p.fpy()) and _identical(p.mmasim(), p.mmasim())):
+        return 'repeat calls differ'
+
+    threads = torch.get_num_threads()
+    # enough rows that `runners.h` splits them over every thread, the last chunk short
+    p = prepare(case, 4 * threads + 7, 7, 4 * case.k)
+    many = p.fpy()
+    torch.set_num_threads(1)
+    try:
+        one = p.fpy()
+    finally:
+        torch.set_num_threads(threads)
+    if not _identical(many, one):
+        return f'{threads} threads and one differ'
+
+    # distinct rows, accumulators and scales catch row offsets, and rows sharing
+    # an accumulator or scale
+    a = torch.arange(3 * case.k, dtype=case.compute).reshape(3, case.k) / 128
+    b = torch.full_like(a, 0.5)
+    acc = torch.tensor([0.0, 1.0, -2.0], dtype=case.compute)
+    scales: tuple[Tensor, ...] = ()
+    if case.scale_block:
+        e = torch.arange(3 * (case.k // case.scale_block)).reshape(3, -1) % 5 - 2
+        scales = tuple(s.to(case.compute) for s in (2.0 ** e, 2.0 ** e.flip(-1)))
+    dpa = getattr(torch.ops.fpy2_models, case.op)
+    batched = dpa(a, b, acc, *scales)
+    for row in range(3):
+        if not _identical(batched[row], dpa(a[row], b[row], acc[row], *(s[row] for s in scales))):
+            return f'row {row} of a batched call differs from it alone'
+    return None
 
 
 def validate(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:

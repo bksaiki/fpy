@@ -77,7 +77,7 @@ explicitly, per the table above; GST-FDPA defaults to -139.
 
 import fpy2 as fp
 
-from .utils import dpa_special_values, exp_floor, exponent, fused_sum, join, make_fma_dpa
+from .utils import exp_floor, exponent, fused_sum, join, make_fma_dpa, sum_special_values
 
 ###########################################################
 # Rounding contexts
@@ -153,7 +153,7 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
         # (an exact product is nonfinite iff one of its factors is)
         prods = [a * b for a, b in zip(A, B)]
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return dpa_special_values(A, B, c)
+            return sum_special_values(prods, c)
 
         es = [e_zero if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
               for p, a, b in zip(prods, A, B)]
@@ -225,10 +225,12 @@ def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
 
         # Step 1: exact scaled products and their exponent-field sums
         # (an exact product is nonfinite iff one of its factors is)
-        prods = [a * b * alpha * beta for a, b in zip(A, B)]
-        if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return dpa_special_values(A, B, c)
+        ps = [a * b for a, b in zip(A, B)]
+        if any([not fp.isfinite(p) for p in ps]) or not fp.isfinite(c):
+            return sum_special_values(ps, c)
 
+        scale = alpha * beta
+        prods = [p * scale for p in ps]
         e_s = exponent(alpha, emin_s) + exponent(beta, emin_s)
 
         es = [e_zero if p == 0 else
@@ -287,7 +289,7 @@ def make_gst_fdpa(G: int, scale_ctx: fp.EFloatContext | fp.ExpContext,
         # (an exact product is nonfinite iff one of its factors is)
         prods = [a * b for a, b in zip(A, B)]
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
-            return dpa_special_values(A, B, c)
+            return sum_special_values(prods, c)
 
         # Step 1: exact dot product per group, scaled
         ts = fp.empty(n_groups)

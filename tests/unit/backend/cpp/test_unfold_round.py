@@ -128,6 +128,14 @@ class TestRounding:
 
         assert _kinds(f) == [UnfoldKind.FIXED_ROUND]
 
+    def test_a_fixed_context_at_a_run_time_position(self):
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(n, fp.RoundingMode.RTZ):
+                return fp.round(x)
+
+        assert _kinds(f) == [UnfoldKind.FIXED_ROUND]
+
     def test_a_fixed_context_at_position_zero_is_not_a_site(self):
         """`_emit_integral_round` lowers it as it stands, so the ladder has
         nothing to do — even though storage selection still refuses this
@@ -160,10 +168,11 @@ class TestTheLadder:
         assert _kinds(mono) == [UnfoldKind.FLOAT_ROUND]
         assert _refuses(mono)
 
-        # `float_to_fixed` trades the float row for the fixed one: the digits
-        # land away from position zero, which is `rescale_fixed`'s job.
+        # `float_to_fixed` trades the float row for two fixed ones, subnormal
+        # and normal (its position known only at run time): the digits land
+        # away from position zero, which is `rescale_fixed`'s job.
         fixed = st.float_to_fixed(st.unfold_overflow(st.unfold_special(mono)))
-        assert _kinds(fixed) == [UnfoldKind.FIXED_ROUND]
+        assert _kinds(fixed) == [UnfoldKind.FIXED_ROUND, UnfoldKind.FIXED_ROUND]
 
         low = st.simplify(st.rescale_fixed(fixed))
         assert _kinds(low) == []

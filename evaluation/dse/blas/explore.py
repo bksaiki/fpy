@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -42,12 +43,6 @@ import generator
 from core import outputs, quant
 from generator.catalog import CATALOG
 
-import fpy2 as fp
-import fpy2.strategies as st
-from fpy2.backend.triton.normalize import normalize_module
-from fpy2.transform import FreeVarElim
-from fpy2.transform.const_fold import ConstFold
-
 RESULTS = ROOT / 'evaluation' / 'results'
 # fpy2_models' flags (setup.py): every operation rounds as written, no FMA contraction
 CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
@@ -63,13 +58,7 @@ def to_cpp(d: generator.Design) -> dict:
     name = generator.name(d)
     t0 = time.perf_counter()
     try:
-        func, arg_types = generator.build(d)
-        mod = fp.Module()
-        mod.add(st.monomorphize(func, args=arg_types))
-        # free variables removed, inlined and folded first, as the Triton backend
-        # does: the C++ backend refuses the generator's helpers otherwise
-        mod = normalize_module(mod.map(lambda _, f: FreeVarElim.apply(f)))
-        src, sig = mm.compile_module(mod.map(lambda _, f: ConstFold.apply(f)).map(mm._prepare))
+        src, sig = mm.compile_design(partial(generator.build, d))
         out = {'src': src, 'model': {'name': name, 'file': mm._filename(name),
                                      'namespace': f'fpy_models::{mm._namespace(name)}', **sig}}
     except Exception as e:  # noqa: BLE001 -- a refusal is a result

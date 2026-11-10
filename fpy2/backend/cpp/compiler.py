@@ -546,9 +546,6 @@ class CppCompiler(Backend):
             # `zip` is still in an iterable position
             module = module.map(lambda _m, fd: EnumerateElim.apply(fd))
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
-            # after both, so a `zip`/`enumerate` comp is already an indexed comp,
-            # and after `Hoistable`, so every reduction has a slot to fuse into
-            module = module.map(lambda _m, fd: ReduceFusion.apply(Hoistable.apply(fd)))
 
         # `size_key`: a spec per distinct argument-length vector, so a proven
         # length crosses the call edge as the callee's annotation and both ends
@@ -561,6 +558,14 @@ class CppCompiler(Backend):
             )
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
+
+        if self._optimize:
+            # after `Specialize`, which proves the lengths it leaves alone (a fused
+            # loop beats a `std::vector<bool>`, not a `std::array`), and after
+            # `Hoistable`, so every reduction has a slot to fuse into
+            sized = not self._arrays
+            specialized = specialized.map(
+                lambda _m, fd: ReduceFusion.apply(Hoistable.apply(fd), sized=sized))
 
         # Before `RoundElim`, whose hoist is suppressed in two of the positions
         # this gives a slot.

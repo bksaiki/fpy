@@ -210,7 +210,7 @@ class _Eliminator(DefaultTransformVisitor):
         else:
             # visit statements
             stmts: list[Stmt] = []
-            for stmt in block.stmts:
+            for i, stmt in enumerate(block.stmts):
                 s, _ = self._visit_statement(stmt, ctx)
                 match s:
                     case None:
@@ -221,6 +221,11 @@ class _Eliminator(DefaultTransformVisitor):
                         stmts.extend(s.stmts)
                     case _:
                         raise RuntimeError(f'unexpected: {s}')
+                if stmts and isinstance(stmts[-1], ReturnStmt) and i + 1 < len(block.stmts):
+                    # a folded `if True: ... return` leaves the rest unreachable,
+                    # where every name reads as unbound
+                    self.eliminated = True
+                    break
 
             # empty block -> add a pass statement
             if len(stmts) == 0:
