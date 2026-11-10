@@ -192,6 +192,3 @@ CPU_PERF_REPLICATES = 3
 
 CPU_PERF_MIN_RUN_TIME = 0.25
 """Seconds each timing lasts at least."""
-
-CPU_PERF_COMPILE = False
-"""Whether to time MMA-Sim under `torch.compile` too."""

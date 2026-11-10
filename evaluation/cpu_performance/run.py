@@ -1,10 +1,11 @@
 """
 Times FPy's C++ for every MMA-Sim design against MMA-Sim itself, on the CPU:
 batches of dot products, each chained one K-wide call at a time from Python,
-by `torch.ops.fpy2_models.<op>` and by MMA-Sim's `dpa`.  Each operator is first
-checked to give the same bits on a repeat call, on one thread or many, and
-batched or one row at a time; every configuration, to agree with MMA-Sim bit
-for bit.
+by `torch.ops.fpy2_models.<op>` and by MMA-Sim's `dpa` tuned (`no_sync`'s
+arithmetic under `torch.compile`).  Each operator is first checked to give the
+same bits on a repeat call, on one thread or many, and batched or one row at a
+time; every configuration, both FPy and tuned MMA-Sim, to agree with MMA-Sim
+as released bit for bit.
 
     python evaluation/cpu_performance/run.py                # every design, about 1.5 h (M3 Pro)
     python evaluation/cpu_performance/run.py --smoke        # one batch and length, briefly
@@ -121,8 +122,6 @@ def main(argv: list[str]) -> int:
                     help='only the designs whose names contain one of these')
     ap.add_argument('--batches', type=int, nargs='+', default=config.CPU_PERF_BATCHES)
     ap.add_argument('--lengths', type=int, nargs='+', default=config.CPU_PERF_LENGTHS)
-    ap.add_argument('--compile', action='store_true', default=config.CPU_PERF_COMPILE,
-                    help="also time MMA-Sim under default torch.compile")
     ap.add_argument('--smoke', action='store_true', help='one small batch and length, briefly')
     args = ap.parse_args(argv)
     if args.smoke:
@@ -163,25 +162,20 @@ def main(argv: list[str]) -> int:
         # `--designs` run draws a full run's inputs
         seed = config.CPU_PERF_SEED + zlib.crc32(c.name.encode()) * 1_000_003 + batch
         torch._dynamo.reset()   # compiled from scratch each time, as in a fresh process
-        p = cs.prepare(c, batch, seed, length, args.compile, config.CPU_PERF_DISTRIBUTION)
-        want = p.mmasim()   # once: eager MMA-Sim is the slowest call of all
+        p = cs.prepare(c, batch, seed, length, config.CPU_PERF_DISTRIBUTION)
+        want = p.mmasim()   # once: MMA-Sim as released is the slowest call of all
+        checks = {'fpy': cs.validate(p, want), 'mmasim-tuned': cs.validate_tuned(p, want)}
         v = {'design': c.name, 'batch_size': batch, 'dot_length': length, 'seed': seed,
-             **cs.validate(p, want)}
-        impls = {'fpy': p.fpy, 'mmasim': p.mmasim}
-        if args.compile:
-            v['mmasim_compiled'] = cs.validate_compiled(p, want)
-            if v['mmasim_compiled']['valid']:
-                impls['mmasim-compiled'] = p.mmasim_compiled
-            else:
-                print(f'COMPILE {label}: {v["mmasim_compiled"]["reason"]}', flush=True)
+             'valid': all(r['valid'] for r in checks.values()), **checks}
         validations.append(v)
         if not v['valid']:
-            print(f'INVALID {label}: {v["reason"]}', flush=True)
+            why = '; '.join(f'{k}: {r["reason"]}' for k, r in checks.items() if not r['valid'])
+            print(f'INVALID {label}: {why}', flush=True)
             continue
         # warmed up by validation, which ran each once (compiling MMA-Sim);
         # each timed once per replicate, in a shuffled order so that none is
         # always first
-        order = list(impls.items())
+        order = [('fpy', p.fpy), ('mmasim-tuned', p.tuned)]
         for rep in range(replicates):
             rng.shuffle(order)
             for impl, fn in order:
@@ -203,7 +197,7 @@ def main(argv: list[str]) -> int:
         'threads': threads, 'replicates': replicates, 'min_run_time': min_run_time,
         'distribution': cs.DISTRIBUTIONS[config.CPU_PERF_DISTRIBUTION], 'seed': config.CPU_PERF_SEED,
         'designs': args.designs, 'batches': args.batches, 'lengths': args.lengths,
-        'compile': args.compile, 'smoke': args.smoke,
+        'smoke': args.smoke,
         'elapsed_seconds': time.monotonic() - started, 'invalid_configurations': invalid})
     if invalid:
         print(f'{invalid} configurations disagree with MMA-Sim: no summary.csv', flush=True)

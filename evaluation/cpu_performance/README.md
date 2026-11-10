@@ -4,9 +4,11 @@ How fast FPy's C++ for each MMA-Sim design (`common/mma/compile.py`'s
 `DESIGNS`, as `common/fpy2_models`' operators) runs against MMA-Sim itself on
 the CPU.  Each configuration is a batch of dot products, chained one K-wide
 call at a time from Python as MMA-Sim's `dpa` is: by
-`torch.ops.fpy2_models.<op>` and by MMA-Sim.  Both run on PyTorch's intra-op
+`torch.ops.fpy2_models.<op>` and by MMA-Sim tuned, `common/mma/no_sync.py`'s
+arithmetic under default `torch.compile`.  Both run on PyTorch's intra-op
 threads, as many as `-j` (default: PyTorch's, the performance cores).
-Every configuration is first checked to agree with MMA-Sim bit for bit.
+Every configuration, both FPy and tuned MMA-Sim, is first checked to agree
+with MMA-Sim as released bit for bit.
 
 Operands are drawn from normal(0, 0.5) and rounded to each design's formats;
 MX and NVFP4 operands are block-quantized by TorchAO.  Batch sizes, dot
@@ -26,8 +28,7 @@ The designs compile first, as the `common/fpy2_models` package (its
 `setup.py`, about a minute), rebuilt every run so that no stale build is
 timed.  On macOS, MMA-Sim's FMA
 helper needs OpenMP, which Apple's clang lacks: it compiles with Homebrew's
-LLVM (`brew install llvm`) unless `$CXX` is set.  `--compile` also times
-MMA-Sim under default `torch.compile`.
+LLVM (`brew install llvm`) unless `$CXX` is set.
 
 It writes into `evaluation/results/cpu_performance/` (or `-o DIR`):
 
@@ -49,7 +50,7 @@ and `evaluation/run.py` reruns it next time.
 `report.py RESULTS` redraws, at the largest batch size and dot length (or
 `--batch`, `--length`):
 
-- `perf-cpu-speedup.{pdf,png}`: each design's speedup over eager MMA-Sim,
+- `perf-cpu-speedup.{pdf,png}`: each design's speedup over tuned MMA-Sim,
   colored by hardware family;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup;

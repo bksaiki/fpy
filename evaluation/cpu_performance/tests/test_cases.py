@@ -16,7 +16,7 @@ def test_summary_separates_lengths():
 def test_validation_keeps_signed_zero_and_reports_first_mismatch(dtype):
     got = torch.tensor([1.0, 0.0], dtype=dtype)
     want = torch.tensor([1.0, -0.0], dtype=dtype)
-    v = cs.validate(cs.Prepared(lambda: got, lambda: want))
+    v = cs.validate(cs.Prepared(lambda: got, lambda: want, lambda: want))
     assert not v['valid']
     assert v['reason'] == 'output bit mismatch'
     assert v['mismatches'] == 1
