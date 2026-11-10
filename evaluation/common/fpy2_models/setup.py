@@ -21,8 +21,16 @@ class GeneratedBuildExtension(BuildExtension):
     def run(self):
         subprocess.run([sys.executable, str(GENERATOR), str(GENERATED)], check=True)
         sources = [CSRC / "torch_ops.cpp", *sorted(GENERATED.glob("*.cpp"))]
+        sets_mode = any("fesetround" in model.read_text()
+                        for model in (GENERATED / "models").glob("*.cpp"))
         for extension in self.extensions:
             extension.sources = [str(path) for path in sources]
+            if sets_mode:
+                # The models set rounding modes with `fesetround` and must
+                # round every operation as written: no folding or moving
+                # arithmetic across a mode change, and no FMA contraction.
+                # GCC and Clang both accept these.
+                extension.extra_compile_args["cxx"].append("-frounding-math")
         super().run()
 
 
@@ -39,11 +47,6 @@ setup(
             extra_compile_args={
                 "cxx": [
                     "-O3",
-                    # The models set rounding modes with `fesetround` and must
-                    # round every operation as written: no folding or moving
-                    # arithmetic across a mode change, and no FMA contraction.
-                    # GCC and Clang both accept these.
-                    "-frounding-math",
                     "-ffp-contract=off",
                     # The torch::stable ABI version the operators target.
                     "-DTORCH_TARGET_VERSION=0x020a000000000000",
