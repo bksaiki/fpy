@@ -234,11 +234,21 @@ def compile_design(build: Build) -> tuple[str, dict]:
     func, arg_types = build()
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
-    mod = mod.map(_prepare)
+    return compile_module(mod.map(_prepare))
+
+
+def compile_module(mod: fp.Module) -> tuple[str, dict]:
+    """The C++ for prepared module *mod*, and its entry's signature, as
+    :func:`compile_design` gives them.
+
+    Every rounding is unfolded and only round-to-nearest-even stays native
+    (`enable_fenv=False`), so no model calls `fesetround`.
+    """
     compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
     src = compiler.compile_module(mod)
-    params, result = compiler.signature(mod.public()[0], module=mod)
-    sig = {'entry': func.name, 'params': [_cpp_type(p) for p in params],
+    entry = mod.public()[0]
+    params, result = compiler.signature(entry, module=mod)
+    sig = {'entry': entry.name, 'params': [_cpp_type(p) for p in params],
            'result': _cpp_type(result)}
     return src, sig
 

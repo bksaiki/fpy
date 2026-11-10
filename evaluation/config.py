@@ -170,3 +170,28 @@ GSM8K_SAMPLE_STEPS = (4, 16)
 GSM8K_SAMPLE_CI = 0.01
 """The sample stops adding decode steps once their mean's 95% confidence
 interval is within this fraction of it."""
+
+
+# ---------------------------------------------------------------------------
+# `cpu_performance`
+
+CPU_PERF_BATCHES = (1024, 4096, 16384)
+"""Dot products per call."""
+
+CPU_PERF_LENGTHS = (1024, 4096, 16384)
+"""Terms per dot product."""
+
+CPU_PERF_DISTRIBUTION = 'normal'
+"""The operands' distribution (`cases.DISTRIBUTIONS`), before rounding to each
+design's formats."""
+
+CPU_PERF_SEED = 20260928
+
+CPU_PERF_REPLICATES = 3
+"""Times each configuration's implementations are timed, in shuffled order."""
+
+CPU_PERF_MIN_RUN_TIME = 0.25
+"""Seconds each timing lasts at least."""
+
+CPU_PERF_COMPILE = False
+"""Whether to time MMA-Sim under `torch.compile` too."""

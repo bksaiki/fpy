@@ -49,7 +49,7 @@ from fpy2.transform import FreeVarElim
 from fpy2.transform.const_fold import ConstFold
 
 RESULTS = ROOT / 'evaluation' / 'results'
-# fpy2_models' flags (setup.py)
+# fpy2_models' flags (setup.py): every operation rounds as written, no FMA contraction
 CXXFLAGS = ['-O3', '-frounding-math', '-ffp-contract=off',
             '-DTORCH_TARGET_VERSION=0x020a000000000000']
 FP32_UN = 2.0 ** -126
@@ -69,15 +69,9 @@ def to_cpp(d: generator.Design) -> dict:
         # free variables removed, inlined and folded first, as the Triton backend
         # does: the C++ backend refuses the generator's helpers otherwise
         mod = normalize_module(mod.map(lambda _, f: FreeVarElim.apply(f)))
-        mod = mod.map(lambda _, f: ConstFold.apply(f)).map(mm._prepare)
-        compiler = fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS, enable_fenv=False)
-        src = compiler.compile_module(mod)
-        params, result = compiler.signature(mod.public()[0], module=mod)
+        src, sig = mm.compile_module(mod.map(lambda _, f: ConstFold.apply(f)).map(mm._prepare))
         out = {'src': src, 'model': {'name': name, 'file': mm._filename(name),
-                                     'namespace': f'fpy_models::{mm._namespace(name)}',
-                                     'entry': func.name,
-                                     'params': [mm._cpp_type(p) for p in params],
-                                     'result': mm._cpp_type(result)}}
+                                     'namespace': f'fpy_models::{mm._namespace(name)}', **sig}}
     except Exception as e:  # noqa: BLE001 -- a refusal is a result
         out = {'reason': f'{type(e).__name__}: {e}'.splitlines()[0][:300]}
     return out | {'seconds': time.perf_counter() - t0}
