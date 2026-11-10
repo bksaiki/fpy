@@ -50,6 +50,6 @@ class TestBothGuardsAskOneQuestion:
         assert CppCompiler().compile(f, ctx=ctx, arg_types=args)
 
         monkeypatch.setattr(
-            CppEmitter, '_value_fits', lambda self, bound, src, want: False)
+            CppEmitter, '_value_fits', lambda self, bound, src, want, cls=None: False)
         with pytest.raises(Exception, match='lossy|narrow'):
             CppCompiler().compile(f, ctx=ctx, arg_types=args)

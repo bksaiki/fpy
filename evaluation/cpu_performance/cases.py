@@ -108,8 +108,7 @@ def references() -> dict[str, Reference]:
         'nv.hopper.tf32.f32': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k8.f32.tf32.tf32'), TF32, TF32, f32),
         'nv.hopper.bf16.f32': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f32.bf16.bf16'), bf16, bf16, f32),
         'nv.hopper.f16.f32': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f32.f16.f16'), f16, f16, f32),
-        'nv.hopper.f16.f16.wgmma': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f16.f16.f16'), f16, f16, f16),
-        'nv.hopper.f16.f16.mma': Reference(nv_ptx.MMA('Hopper', 'm16n8k16.f16.f16.f16.f16'), f16, f16, f16),
+        'nv.hopper.f16.f16': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f16.f16.f16'), f16, f16, f16),
         'nv.blackwell.nvfp4': Reference(
             nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.kind::mxf4nvf4.block16.f32.e2m1.e2m1.ue4m3'),
             E2M1, E2M1, f32, 16, e4m3),
@@ -134,10 +133,8 @@ def references() -> dict[str, Reference]:
     for a, b in f8f6f4_pairs:
         out[f'nv.blackwell.{tag(a, b)}.f32'] = Reference(
             nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.kind::f8f6f4.f32.{a}.{b}'), nv[a], nv[b], f32)
-        out[f'nv.blackwell.{tag(a, b)}.f16.tcgen05'] = Reference(
+        out[f'nv.blackwell.{tag(a, b)}.f16'] = Reference(
             nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.kind::f8f6f4.f16.{a}.{b}'), nv[a], nv[b], f16)
-        out[f'nv.rtx_blackwell.{tag(a, b)}.f16.mma'] = Reference(
-            nv_ptx.MMA('RTX Blackwell', f'm16n8k32.kind::f8f6f4.f16.{a}.{b}.f16'), nv[a], nv[b], f16)
         out[f'nv.blackwell.mx.{tag(a, b)}'] = Reference(
             nv_ptx.TCGen05MMABlockScale('Blackwell', f'm128n8k32.kind::mxf8f6f4.block32.f32.{a}.{b}.ue8m0'),
             nv[a], nv[b], f32, 32, e8m0)
