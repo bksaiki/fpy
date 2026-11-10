@@ -38,7 +38,7 @@ def test_smoke_layers(tiny: Path, tmp_path: Path):
     """Two designs of different schemes; MMA-Sim predicted per layer, one
     design also sampled in the model."""
     out = tmp_path / 'results'
-    assert run.main([D, E, '--smoke', '--backends', 'fpy', 'mmasim', '--sampled', E,
+    assert run.main([D, E, '--smoke', '--backends', 'fpy', 'mmasim', '--sampled', E, '--full',
                      '--model', str(tiny), '-o', str(out)]) == 0
     records = _records(out, [f'{d}-{b}' for d in (D, E) for b in ('fpy', 'mmasim')])
     for d in (D, E):
@@ -76,7 +76,8 @@ def test_smoke_full(tiny: Path, tmp_path: Path):
 
 
 def test_reuse(tiny: Path, tmp_path: Path):
-    """A tuned run that takes FPy's record from an earlier one, as it was."""
+    """A tuned run that takes FPy's record from an earlier one, as it was;
+    Hopper's MMA-Sim run measured end to end, by default (`--full`)."""
     first, second = tmp_path / 'first', tmp_path / 'second'
     assert run.main([D, '--smoke', '--backends', 'fpy', '--model', str(tiny), '-o', str(first)]) == 0
     assert run.main([D, '--smoke', '--backends', 'fpy', 'mmasim', '--sampled', D, '--reuse', str(first),
@@ -84,7 +85,8 @@ def test_reuse(tiny: Path, tmp_path: Path):
     old, new = (json.loads((d / f'{D}-fpy.json').read_text()) for d in (first, second))
     assert new == old
     m = json.loads((second / f'{D}-mmasim.json').read_text())
-    assert m['baseline'] == 'tuned' and m['check']['differing'] == 0
+    assert m['baseline'] == 'tuned' and m['method'] == 'full' and m['tokens'] == old['tokens']
+    assert m['check']['differing'] == 0 and m['layers']['decode'] > 0
     assert m['in_model']['check']['differing'] == 0
 
 
