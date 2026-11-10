@@ -65,21 +65,23 @@ def ldexp_and_normalize(s: torch.Tensor, e: torch.Tensor, rho: str) -> torch.Ten
 
 
 def t_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, rho: str,
-           e_zero: int) -> torch.Tensor:
-    s_a, e_a = frexp_and_normalize(a)
-    s_b, e_b = frexp_and_normalize(b)
+           e_zero: int, e_subnormal_a: int | None = None,
+           e_subnormal_b: int | None = None) -> torch.Tensor:
+    s_a, e_a = frexp_and_normalize(a, e_subnormal_a)
+    s_b, e_b = frexp_and_normalize(b, e_subnormal_b)
     s_c, e_c = frexp_and_normalize(c)
     s = torch.cat([s_a * s_b, s_c.unsqueeze(-1)], dim=-1)
     e = torch.cat([e_a + e_b, e_c.unsqueeze(-1)], dim=-1)
     e = torch.where(s == 0.0, e_zero, e)
     sum, e_max = fdpa.truncated_fused_sum(s, e, F)
-    return ldexp_and_normalize(sum, e_max, rho)
+    return ldexp_and_normalize(sum, e_max, rho) + 0.0  # -0.0 to +0.0
 
 
 def st_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, alpha: torch.Tensor, beta: torch.Tensor,
-            F: int, rho: str, e_zero: int) -> torch.Tensor:
-    s_a, e_a = frexp_and_normalize(a)
-    s_b, e_b = frexp_and_normalize(b)
+            F: int, rho: str, e_zero: int, e_subnormal_a: int | None = None,
+            e_subnormal_b: int | None = None) -> torch.Tensor:
+    s_a, e_a = frexp_and_normalize(a, e_subnormal_a)
+    s_b, e_b = frexp_and_normalize(b, e_subnormal_b)
     s_c, e_c = frexp_and_normalize(c)
     s_alpha, e_alpha = frexp_and_normalize(alpha)
     s_beta, e_beta = frexp_and_normalize(beta)
@@ -87,7 +89,7 @@ def st_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, alpha: torch.Tens
     e = torch.cat([e_a + e_b + e_alpha + e_beta, e_c.unsqueeze(-1)], dim=-1)
     e = torch.where(s == 0.0, e_zero, e)
     sum, e_max = fdpa.truncated_fused_sum(s, e, F)
-    return ldexp_and_normalize(sum, e_max, rho)
+    return ldexp_and_normalize(sum, e_max, rho) + 0.0  # -0.0 to +0.0
 
 
 def gst_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, alpha: torch.Tensor, beta: torch.Tensor,
@@ -109,7 +111,7 @@ def gst_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, alpha: torch.Ten
     s = torch.cat([p * s_scale, s_c.unsqueeze(-1)], dim=-1)
     e = torch.cat([e_scale, e_c.unsqueeze(-1)], dim=-1)
     sum, e_max = fdpa.truncated_fused_sum(s, e, F)
-    return ldexp_and_normalize(sum, e_max, rho)
+    return ldexp_and_normalize(sum, e_max, rho) + 0.0  # -0.0 to +0.0
 
 
 def tr_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, F2: int,

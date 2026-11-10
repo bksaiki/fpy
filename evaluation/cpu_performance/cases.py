@@ -111,10 +111,10 @@ def references() -> dict[str, Reference]:
         'nv.hopper.f16.f16.wgmma': Reference(nv_ptx.WGMMA('Hopper', 'm64n8k16.f16.f16.f16'), f16, f16, f16),
         'nv.hopper.f16.f16.mma': Reference(nv_ptx.MMA('Hopper', 'm16n8k16.f16.f16.f16.f16'), f16, f16, f16),
         'nv.blackwell.nvfp4': Reference(
-            nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.block16.f32.e2m1.e2m1.ue4m3'),
+            nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.kind::mxf4nvf4.block16.f32.e2m1.e2m1.ue4m3'),
             E2M1, E2M1, f32, 16, e4m3),
         'nv.blackwell.mxfp4': Reference(
-            nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.block16.f32.e2m1.e2m1.ue8m0'),
+            nv_ptx.TCGen05MMABlockScale('Blackwell', 'm128n8k64.kind::mxf4nvf4.block16.f32.e2m1.e2m1.ue8m0'),
             E2M1, E2M1, f32, 16, e8m0),
         'amd.cdna2.bf16': Reference(amd.MFMA('CDNA2', 'f32_32x32x4bf16'), bf16, bf16, f32),
         'amd.cdna2.bf16_1k': Reference(amd.MFMA('CDNA2', 'f32_32x32x8bf16_1k'), bf16, bf16, f32),
@@ -133,13 +133,13 @@ def references() -> dict[str, Reference]:
                 nv_ptx.WGMMA('Hopper', f'm64n8k32.{acc}.{a}.{b}'), nv[a], nv[b], dtype)
     for a, b in f8f6f4_pairs:
         out[f'nv.blackwell.{tag(a, b)}.f32'] = Reference(
-            nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.f32.{a}.{b}'), nv[a], nv[b], f32)
+            nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.kind::f8f6f4.f32.{a}.{b}'), nv[a], nv[b], f32)
         out[f'nv.blackwell.{tag(a, b)}.f16.tcgen05'] = Reference(
-            nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.f16.{a}.{b}'), nv[a], nv[b], f16)
+            nv_ptx.TCGen05MMA('Blackwell', f'm128n8k32.kind::f8f6f4.f16.{a}.{b}'), nv[a], nv[b], f16)
         out[f'nv.rtx_blackwell.{tag(a, b)}.f16.mma'] = Reference(
-            nv_ptx.MMA('RTX Blackwell', f'm16n8k32.f16.{a}.{b}.f16'), nv[a], nv[b], f16)
+            nv_ptx.MMA('RTX Blackwell', f'm16n8k32.kind::f8f6f4.f16.{a}.{b}.f16'), nv[a], nv[b], f16)
         out[f'nv.blackwell.mx.{tag(a, b)}'] = Reference(
-            nv_ptx.TCGen05MMABlockScale('Blackwell', f'm128n8k32.block32.f32.{a}.{b}.ue8m0'),
+            nv_ptx.TCGen05MMABlockScale('Blackwell', f'm128n8k32.kind::mxf8f6f4.block32.f32.{a}.{b}.ue8m0'),
             nv[a], nv[b], f32, 32, e8m0)
     for a, b in (('fp8', 'fp8'), ('bf8', 'bf8'), ('fp8', 'bf8')):
         out[f'amd.cdna3.{tag(a, b)}'] = Reference(

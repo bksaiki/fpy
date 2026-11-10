@@ -35,9 +35,9 @@ from models import nv
 FAILURES = 0
 
 E2M1 = 'e2m1'
-"""Stands in for E2M1, which has no working torch dtype.  MMA-Sim has no E2M1
-T-FDPA or ST-FDPA, so the sweep hands the reference FP16 tensors: its rows check
-the model against `exp_floor`'s assumption, not against hardware."""
+"""Stands in for E2M1, which has no working torch dtype.  The sweep hands the
+reference E2M1 values as FP16 tensors, with E2M1's PTX type, so MMA-Sim reads
+them as it does the ones it decodes."""
 
 def check(name, ok, detail=''):
     global FAILURES
@@ -116,7 +116,8 @@ def check_fma(trials):
 def run_sweep(trials):
     import torch  # type: ignore[import-not-found]
     from mmasim.arithmetic import fdpa  # type: ignore[import-not-found]
-    from mmasim.arithmetic.helper import truncate_e4m3_to_ue4m3  # type: ignore[import-not-found]
+    from mmasim.arithmetic.helper import (  # type: ignore[import-not-found]
+        fp6_fp4_subnormal_exponent, truncate_e4m3_to_ue4m3)
     import common as vc
 
     torch.manual_seed(0)
@@ -138,10 +139,12 @@ def run_sweep(trials):
            torch.float8_e4m3fn: fp.MX_E4M3, torch.float8_e5m2: fp.MX_E5M2,
            E2M1: fp.MX_E2M1}
     C_CTX = {torch.float16: fp.FP16, torch.float32: fp.FP32}
+    PTX = {torch.float16: 'f16', torch.bfloat16: 'bf16', torch.float32: 'tf32',
+           torch.float8_e4m3fn: 'e4m3', torch.float8_e5m2: 'e5m2', E2M1: 'e2m1'}
 
     def run_t_fdpa(name, a_dtype, c_dtype, L, K, F, rho, e_zero, b_dtype=None):
         b_dtype = b_dtype or a_dtype
-        op = fdpa.MMA_T_FDPA(F, rho, L, e_zero)
+        op = fdpa.MMA_T_FDPA(F, rho, L, e_zero, PTX[a_dtype], PTX[b_dtype])
         model = nv.make_t_fdpa_chain(L, CTX[a_dtype], CTX[b_dtype], C_CTX[c_dtype],
                                      F, RHO[rho], e_zero=e_zero)
         fails = 0
@@ -168,7 +171,9 @@ def run_sweep(trials):
             alpha = vc.rand_bits(1, torch.float8_e8m0fnu)
             beta = vc.rand_bits(1, torch.float8_e8m0fnu)
             ref = fdpa.st_fdpa(a.clone(), b.clone(), c.clone(),
-                               alpha.clone(), beta.clone(), F, rho, e_zero)
+                               alpha.clone(), beta.clone(), F, rho, e_zero,
+                               fp6_fp4_subnormal_exponent.get(PTX[a_dtype]),
+                               fp6_fp4_subnormal_exponent.get(PTX[b_dtype]))
             mine = model(a.float().tolist(), b.float().tolist(), float(c.float()),
                          float(alpha.float()[0]), float(beta.float()[0]))
             if not vc.same(ref, mine):

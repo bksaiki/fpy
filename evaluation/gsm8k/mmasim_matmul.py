@@ -94,6 +94,10 @@ _RHO = {(32, fp.RM.RTZ): 'RZ-FP32', (22, fp.RM.RTZ): 'RZ-E8M13', (32, fp.RM.RNE)
         (16, fp.RM.RNE): 'RNE-FP16'}
 """MMA-Sim's name of each output conversion, by width and rounding."""
 
+_PTX = {fp.FP16: 'f16', fp.BF16: 'bf16', fp.TF32: 'tf32', fp.MX_E4M3: 'e4m3', fp.MX_E5M2: 'e5m2',
+        fp.MX_E2M1: 'e2m1'}
+"""Each operand format's PTX type, which MMA-Sim's T- and ST-FDPA take."""
+
 DTYPES = quant.DTYPES | {fp.MX_E2M1: torch.float16, fp.MX_E8M0: torch.float8_e8m0fnu}
 """Each format's torch dtype as MMA-Sim takes it: E2M1 values in FP16, as
 its tests pass them."""
@@ -116,8 +120,8 @@ def operation(design: str) -> MMAOperation | MMABlockScaleOperation:
     if d.G is not None:
         return fdpa.MMA_GST_FDPA(d.G, d.F, rho, d.L, e_zero)
     if d.scales is not None:
-        return fdpa.MMA_ST_FDPA(d.F, rho, d.L, e_zero)
-    return fdpa.MMA_T_FDPA(d.F, rho, d.L, e_zero)
+        return fdpa.MMA_ST_FDPA(d.F, rho, d.L, e_zero, _PTX[d.a], _PTX[d.b])
+    return fdpa.MMA_T_FDPA(d.F, rho, d.L, e_zero, _PTX[d.a], _PTX[d.b])
 
 
 def output(design: str) -> torch.dtype:

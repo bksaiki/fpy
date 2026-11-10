@@ -13,7 +13,7 @@ dependencies = [
   "matplotlib==3.11.2",
   "torchao==0.18.0",          # the block-scaled formats' quantizers (cpu_performance)
   # the reference the GSM8K and CPU performance evaluations run against
-  "mmasim @ git+https://github.com/microsoft/MMA-Sim@2e57de2bb8e120409b00bfc2fd7bc59227631712#subdirectory=src/mmasim",
+  "mmasim==2.1.1",
 ]
 
 [dependency-groups]
