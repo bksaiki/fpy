@@ -197,6 +197,8 @@ class SolverStats:
     degraded: int = 0
     """Queries with an answer loosened because the backend could not decide: a timeout or an
     unknown."""
+    constraints: int = 0
+    """Calls to :meth:`Solver.assume`."""
 
     def __add__(self, other: 'SolverStats') -> 'SolverStats':
         return SolverStats(*(a + b for a, b in zip(astuple(self), astuple(other))))
@@ -355,6 +357,7 @@ class _ComponentSolver(Generic[_S]):
         assert named, f'constraint over no variable: {constraint}'
         root = self._union(named)
         self._group.setdefault(root, []).append(constraint)
+        self.stats.constraints += 1
         # the backends are incremental: state it into the live solvers rather
         # than discarding ones that have already learned from their neighbours
         for opt in (False, True):
