@@ -52,6 +52,8 @@ and `evaluation/run.py` reruns it next time.
 
 - `perf-cpu-speedup.{pdf,png}`: each design's speedup over tuned MMA-Sim,
   colored by hardware family;
+- `plots/perf-cpu-speedup-b<batch>-n<length>.{pdf,png}`: the same, at every
+  configuration measured;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup;
 - `perf-cpu-macros.tex`: the paper's `\EvalCPUPerf...` macros (speedups,

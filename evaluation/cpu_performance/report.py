@@ -10,6 +10,8 @@ Writes into the results directory:
 
 - `perf-cpu-speedup.{pdf,png}`: each design's speedup, ascending, colored by
   its hardware family;
+- `plots/perf-cpu-speedup-b<batch>-n<length>.{pdf,png}`: the same, at every
+  configuration measured;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup, and all designs';
 - `perf-cpu-macros.tex`: the paper's `EvalCPUPerf...` macros, for its
@@ -144,6 +146,8 @@ def main(argv: list[str]) -> int:
     if not ups:
         sys.exit(f'no design was timed at batch={batch} length={length}')
     speedup_figure([ups], args.results / f'{PREFIX}speedup')
+    for b, n in sorted({(r['batch_size'], r['dot_length']) for r in rows}):
+        speedup_figure([headline(rows, b, n)], args.results / 'plots' / f'{PREFIX}speedup-b{b}-n{n}')
     (args.results / f'{PREFIX}speedup.tex').write_text(latex(table(ups)))
     threads = next(r['threads'] for r in rows if (r['batch_size'], r['dot_length']) == (batch, length))
     (args.results / f'{PREFIX}macros.tex').write_text(macros(ups, batch, length, threads))

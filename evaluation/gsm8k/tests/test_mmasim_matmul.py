@@ -10,6 +10,7 @@ import mmasim_matmul
 import pytest
 import torch
 from core import kernels, quant, swap
+from mmasim.arithmetic import fma
 
 import fpy2 as fp
 
@@ -153,3 +154,14 @@ def test_tuned_is_bit_for_bit(design: str, compiled: None):
         mmasim_matmul.tune(False)
     assert all(bool(mmasim_matmul.same(t, r).all()) for t, r in zip(tuned, released, strict=True))
     assert not bool(mmasim_matmul.same(*released).all())
+
+
+def test_same_equates_signed_zeros_and_nans():
+    y = torch.tensor([0.0, float('nan'), 1.0], dtype=torch.float16)
+    z = torch.tensor([-0.0, -float('nan'), -1.0], dtype=torch.float16)
+    assert mmasim_matmul.same(y, z).tolist() == [True, True, False]
+
+
+def test_fma_keeps_subnormals():
+    x = torch.tensor([2.0 ** -70], device='cuda')
+    assert fma.fma(x, x, torch.zeros_like(x)).item() == 2.0 ** -140

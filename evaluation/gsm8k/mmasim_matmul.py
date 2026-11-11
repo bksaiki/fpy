@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import generator
 import no_sync
 import torch
+import triton
 from core import kernels, quant, swap
 from generator.catalog import CATALOG
 from mmasim import MMABlockScaleOperation, MMAOperation
@@ -46,6 +47,20 @@ torch._dynamo.config.fail_on_recompile_limit_hit = True   # never fall back to e
 torch._inductor.config.emulate_precision_casts = True
 torch._inductor.config.eager_numerics.division_rounding = True
 torch._inductor.config.eager_numerics.disable_ftz = True
+
+
+def _fma_gpu(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    """MMA-Sim's `fma_gpu`, but IEEE: Triton's libdevice flushes FP32
+    subnormals by default, MMA-Sim's CPU FMA does not."""
+    a, b, c = a.contiguous(), b.contiguous(), c.contiguous()
+    out = torch.empty_like(a)
+    n = a.numel()
+    fma.fma_gpu_kernel[lambda meta: (triton.cdiv(n, meta['BLOCK']),)](
+        a, b, c, out, n, BLOCK=1024, enable_reflect_ftz=False)
+    return out
+
+
+fma.fma_gpu = _fma_gpu   # released and tuned alike
 
 
 def tune(on: bool = True) -> None:
@@ -291,10 +306,12 @@ _BITS = {torch.float16: torch.int16, torch.float32: torch.int32, torch.float64: 
 
 
 def same(y: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-    """Where *y* and *z* are the same bits, or both NaN; of one dtype."""
+    """Where *y* and *z* are the same bits, both zero (FPy's semantics
+    leaves zero unsigned), or both NaN; of one dtype."""
     if y.dtype != z.dtype:
         raise ValueError(f'{y.dtype} and {z.dtype}')
-    return (y.view(_BITS[y.dtype]) == z.view(_BITS[z.dtype])) | (y.isnan() & z.isnan())
+    return ((y.view(_BITS[y.dtype]) == z.view(_BITS[z.dtype])) | ((y == 0) & (z == 0))
+            | (y.isnan() & z.isnan()))
 
 
 def _extend(run: swap.Run) -> Run:

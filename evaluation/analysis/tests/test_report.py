@@ -54,8 +54,8 @@ def test_tightness_is_observed_over_allowed():
 def test_paper_table_has_a_column_per_architecture():
     tex = paper_latex(table([_VOLTA, _FMA]), tightness([_VOLTA, _FMA]))
     assert ' & Volta & FMA & Total \\\\' in tex
-    assert 'Sites & 3 & 1 & 4 \\\\' in tex
-    assert "$p'/p$ & 98\\% & -- & 98\\% \\\\" in tex   # FMA's site never ran
+    assert 'Assignments & 3 & 1 & 4 \\\\' in tex
+    assert "$p' / p$ & 98\\% & -- & 98\\% \\\\" in tex   # FMA's site never ran
 
 
 def test_writes_tables_and_figure(tmp_path):

@@ -306,12 +306,14 @@ BITS = {torch.float16: torch.int16, torch.float32: torch.int32, torch.float64: t
 
 
 def compare(got: Tensor, want: Tensor, name: str) -> dict[str, Any]:
-    """*got* against MMA-Sim's *want*, bit for bit."""
+    """*got* against MMA-Sim's *want*, bit for bit, but zeros of either sign
+    equal (FPy's semantics leaves zero unsigned)."""
     if got.shape != want.shape or got.dtype != want.dtype:
         return {'valid': False, 'reason': 'shape or dtype mismatch',
                 f'{name}_shape': list(got.shape), 'mmasim_shape': list(want.shape),
                 f'{name}_dtype': str(got.dtype), 'mmasim_dtype': str(want.dtype)}
-    differ = (got.contiguous().view(BITS[got.dtype]) != want.contiguous().view(BITS[want.dtype]))
+    differ = ((got.contiguous().view(BITS[got.dtype]) != want.contiguous().view(BITS[want.dtype]))
+              & ~((got == 0) & (want == 0)))
     if not differ.any():
         return {'valid': True}
     i = int(differ.flatten().nonzero()[0])

@@ -187,27 +187,28 @@ def tightness_latex(rows: list[tuple[str, int, dict[str, float]]]) -> str:
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 
-PAPER = {'digits': "$p'/p$", 'lsb': "$2^{exp}/2^{exp'}$", 'mag': "$b'/b$"}
+PAPER = {'digits': "$p' / p$", 'lsb': "$2^{exp} / 2^{exp'}$", 'mag': "$b' / b$"}
 """Each parameter's row in the paper's table."""
 
 
 def paper_latex(rows: list[Row], tight: list[tuple[str, int, dict[str, float]]]) -> str:
     """The paper's Table 1 from `table`'s *rows* and `tightness`' *tight*:
-    a column per architecture, then the total."""
+    a column per architecture, then the total, set apart (`\\R` is the
+    paper's macro for the reals)."""
     means = {label: m for label, _, m in tight}
 
     def pct(label: str, c: str) -> str:
         return f'{100 * means[label][c]:.0f}\\%' if label in means else '--'
 
-    body = [('Designs', [str(r.designs) for r in rows]), ('Sites', [str(r.sites) for r in rows]),
-            (r'$\mathbb{R}^*$ sites (FI)', [str(r.top_format) for r in rows]),
+    body = [('Designs', [str(r.designs) for r in rows]), ('Assignments', [str(r.sites) for r in rows]),
+            (r'Only $\R^*$ (FI)', [str(r.top_format) for r in rows]),
             *((head, [pct(r.label, c) for r in rows]) for c, head in PAPER.items())]
     heads = ['FMA' if r.label == 'FMA chain' else r.label for r in rows]
     return '\n'.join([
-        r'\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}l' + 'r' * len(rows) + '}', r'\toprule',
+        r'\begin{tabular}{@{}l*{' + str(len(rows) - 1) + r'}{r}@{\hspace{1em}}r@{}}', r'\toprule',
         ' & ' + ' & '.join(heads) + r' \\', r'\midrule',
         *(f'{head} & {" & ".join(cells)} \\\\' for head, cells in body),
-        r'\bottomrule', r'\end{tabular*}', ''])
+        r'\bottomrule', r'\end{tabular}', ''])
 
 
 def _bin(v: float) -> int:
