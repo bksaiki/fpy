@@ -1,19 +1,20 @@
 """
 MMA-Sim's arithmetic (`mmasim.arithmetic.fdpa`) without host
-synchronizations, for the tuned MMA-Sim baseline (`mmasim_matmul.tune`).
-Each function is MMA-Sim's own, line for line, with its data-dependent
-Python branch (`pow2`) and its boolean-mask updates (`x[mask] = ...`, which
-count the mask on the host) replaced by `torch.where`; the results are bit
-for bit MMA-Sim's.  :func:`install` patches them into the module, where
-MMA-Sim's operations look them up.
+synchronizations, for the tuned MMA-Sim baselines (`gsm8k/mmasim_matmul.tune`,
+`cpu_performance`).  Each function is MMA-Sim's own, line for line, with its
+data-dependent Python branch (`pow2`) and its boolean-mask updates
+(`x[mask] = ...`, which count the mask on the host) replaced by `torch.where`;
+the results are bit for bit MMA-Sim's.  :func:`install` patches them into the
+module, where MMA-Sim's operations look them up.
 
 Adapted from MMA-Sim (https://github.com/microsoft/MMA-Sim),
 Copyright (c) Microsoft Corporation, under the MIT License.
 """
 
 import torch
-from mmasim.arithmetic import fdpa
+from mmasim.arithmetic import fdpa, fma
 from mmasim.arithmetic.helper import dtype_subnormal_exponent
+from torch._inductor import lowering
 
 _ORIGINAL = {n: getattr(fdpa, n) for n in ('pow2', 'frexp_and_normalize', 'ldexp_and_normalize', 't_fdpa',
                                            'st_fdpa', 'gst_fdpa', 'tr_fdpa', 'gtr_fdpa')}
@@ -158,9 +159,23 @@ def gtr_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, F2: int,
 
 
 _PATCHED = {n: globals()[n] for n in _ORIGINAL}
+_FMA_CPU = fma.fma_cpu
+# one wrapper, so that reinstalling does not fail Dynamo's guard on `fma_cpu`
+_FMA_CPU_UNCOMPILED = torch.compiler.disable(_FMA_CPU)
+_FREXP_LOWERINGS = {o: lowering.lowerings[o] for o in torch.ops.aten.frexp.op_overloads()
+                    if o in lowering.lowerings}
 
 
 def install(on: bool = True) -> None:
-    """Patch MMA-Sim's arithmetic with these (or restore its own)."""
+    """Patch MMA-Sim's arithmetic with these, and make it compile under
+    `torch.compile` (or restore its own).  Inductor's vectorized CPU `frexp`
+    of FP64 does not compile, so `aten.frexp` falls back to ATen; Dynamo
+    passes stale pointers to MMA-Sim's ctypes FMA (`fma_cpu`), so it runs
+    uncompiled."""
     for n, f in (_PATCHED if on else _ORIGINAL).items():
         setattr(fdpa, n, f)
+    fma.fma_cpu = _FMA_CPU_UNCOMPILED if on else _FMA_CPU
+    if on:
+        lowering.make_fallback(torch.ops.aten.frexp)
+    else:
+        lowering.lowerings.update(_FREXP_LOWERINGS)

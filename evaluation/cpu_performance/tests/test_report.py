@@ -12,9 +12,9 @@ def test_families():
 
 def test_speedups_and_table():
     rows = [{'design': d, 'implementation': i, 'batch_size': 8, 'dot_length': 64, 'dots_per_second': r}
-            for d, i, r in [('fp32.fma', 'fpy', 8.0), ('fp32.fma', 'mmasim', 2.0),
-                            ('amd.cdna3.fp8', 'fpy', 3.0), ('amd.cdna3.fp8', 'mmasim', 3.0)]]
-    ups = report.speedups(rows)['mmasim']
+            for d, i, r in [('fp32.fma', 'fpy', 8.0), ('fp32.fma', 'mmasim-tuned', 2.0),
+                            ('amd.cdna3.fp8', 'fpy', 3.0), ('amd.cdna3.fp8', 'mmasim-tuned', 3.0)]]
+    ups = report.speedups(rows)
     assert ups == {('fp32.fma', 8, 64): 4.0, ('amd.cdna3.fp8', 8, 64): 1.0}
     t = report.table({d: x for (d, _, _), x in ups.items()})
     assert [r['family'] for r in t] == ['AMD CDNA3', 'FMA chain', 'All']

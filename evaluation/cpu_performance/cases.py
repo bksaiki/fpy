@@ -54,6 +54,12 @@ def _import_mmasim() -> tuple[Any, Any, Any, str]:
 
 amd, nv_ptx, truncate_fp32_to_tf32, MMASIM_CXX = _import_mmasim()
 
+# after MMA-Sim, whose FMA helper compiles on import.  Installed throughout:
+# `Prepared.mmasim` alone runs MMA-Sim as released
+import no_sync
+
+no_sync.install()
+
 # Operand formats without a torch dtype.  MMA-Sim takes TF32 operands as FP32
 # and truncates them itself; FP6 and E2M1 (FP4) operands as FP16 values, which
 # its group-scaled model unpacks E2M1 to, their PTX types giving their exponent
@@ -236,15 +242,27 @@ class Prepared:
     """Functions of no arguments, each computing the batch of dot products."""
     fpy: Callable[[], Tensor]
     mmasim: Callable[[], Tensor]
-    mmasim_compiled: Callable[[], Tensor] | None = None
+    """MMA-Sim as released: the reference, untimed."""
+    tuned: Callable[[], Tensor]
+    """MMA-Sim tuned, the baseline: `no_sync`'s arithmetic under default
+    `torch.compile`, which compiles on its first call."""
 
 
-def prepare(case: Case, batch: int, seed: int, length: int = 1024, compiled: bool = False,
+def _released(f: Callable[[], Tensor]) -> Callable[[], Tensor]:
+    """*f* on MMA-Sim's arithmetic as released."""
+    def call() -> Tensor:
+        no_sync.install(False)
+        try:
+            return f()
+        finally:
+            no_sync.install()
+    return call
+
+
+def prepare(case: Case, batch: int, seed: int, length: int = 1024,
             distribution: str = 'normal') -> Prepared:
     """*batch* dot products of *length* terms, each from a zero accumulator, by
-    each implementation; their inputs built here, outside any timing.  With
-    *compiled*, also MMA-Sim's model under default `torch.compile`, which
-    compiles on its first call."""
+    each implementation; their inputs built here, outside any timing."""
     if length <= 0 or length % case.k:
         raise ValueError(f'length must be a positive multiple of {case.k}')
     a_values = sample(batch, length, seed, distribution)
@@ -277,8 +295,8 @@ def prepare(case: Case, batch: int, seed: int, length: int = 1024, compiled: boo
     return Prepared(
         fpy=chain(getattr(torch.ops.fpy2_models, case.op).default, case.compute,
                   a_fpy, b_fpy, *(s.to(case.compute) for s in scales)),
-        mmasim=chain(case.reference.dpa, *mm),
-        mmasim_compiled=chain(torch.compile(case.reference.dpa), *mm) if compiled else None)
+        mmasim=_released(chain(case.reference.dpa, *mm)),
+        tuned=chain(torch.compile(case.reference.dpa), *mm))
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +363,7 @@ def check(case: Case) -> str | None:
 
 
 def validate(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
-    """FPy's output against eager MMA-Sim's, *want* if already computed."""
+    """FPy's output against MMA-Sim's as released, *want* if already computed."""
     want = p.mmasim() if want is None else want
     got = p.fpy()
     if got.dtype != want.dtype:
@@ -359,12 +377,12 @@ def validate(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
     return compare(got, want, 'fpy')
 
 
-def validate_compiled(p: Prepared, want: Tensor | None = None) -> dict[str, Any]:
-    """`torch.compile`'d MMA-Sim against eager, *want* if already computed;
-    failing to compile is a result."""
+def validate_tuned(p: Prepared, want: Tensor) -> dict[str, Any]:
+    """Tuned MMA-Sim against MMA-Sim as released, *want*; failing to compile
+    is a result."""
     try:
-        got = p.mmasim_compiled()
+        got = p.tuned()
     except Exception as e:  # noqa: BLE001 -- a compile failure is a result
         return {'valid': False, 'reason': 'compile or runtime error',
                 'error': f'{type(e).__name__}: {str(e).splitlines()[0][:300]}'}
-    return compare(got, p.mmasim() if want is None else want, 'compiled')
+    return compare(got, want, 'tuned')
