@@ -12,7 +12,7 @@ Copyright (c) Microsoft Corporation, under the MIT License.
 """
 
 import torch
-from mmasim.arithmetic import fdpa, fma
+from mmasim.arithmetic import fdpa, fma, ftz_mul_add
 from mmasim.arithmetic.helper import dtype_subnormal_exponent
 from torch._inductor import lowering
 
@@ -158,7 +158,17 @@ def gtr_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, F2: int,
     return ldexp_and_normalize(s_dot, e_max, rho)
 
 
+def ftz_mul(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    # MMA-Sim's, without its FP16/BF16-only assert: BF16 values held in FP32
+    # flush below the same 2^-126, so give the same results
+    assert x.dtype == y.dtype
+    x = ftz_mul_add.flush_subnormal(x, keep_sign=False)
+    y = ftz_mul_add.flush_subnormal(y, keep_sign=False)
+    return ftz_mul_add.flush_subnormal(x.float() * y.float(), keep_sign=True)
+
+
 _PATCHED = {n: globals()[n] for n in _ORIGINAL}
+_FTZ_MUL = ftz_mul_add.ftz_mul
 _FMA_CPU = fma.fma_cpu
 # one wrapper, so that reinstalling does not fail Dynamo's guard on `fma_cpu`
 _FMA_CPU_UNCOMPILED = torch.compiler.disable(_FMA_CPU)
@@ -174,6 +184,7 @@ def install(on: bool = True) -> None:
     uncompiled."""
     for n, f in (_PATCHED if on else _ORIGINAL).items():
         setattr(fdpa, n, f)
+    ftz_mul_add.ftz_mul = ftz_mul if on else _FTZ_MUL
     fma.fma_cpu = _FMA_CPU_UNCOMPILED if on else _FMA_CPU
     if on:
         lowering.make_fallback(torch.ops.aten.frexp)

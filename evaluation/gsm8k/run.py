@@ -19,7 +19,6 @@ differs from FPy's kernel.
 """
 
 import argparse
-import contextlib
 import dataclasses
 import json
 import platform
@@ -66,17 +65,17 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     eos = generate.stop_tokens(model, tok)
     prompts = encode(tok, problems)
     warmup = time.perf_counter()
-    # tuned MMA-Sim captures decode's graphs in its first timed step, so prefill runs without
-    # them, as in its prediction
-    decoding = (mmasim_matmul.replaying if backend == 'mmasim' and mmasim_matmul.TUNED
-                else contextlib.nullcontext)
-    if backend != 'mmasim':   # Triton's JIT and CUDA's start-up, outside the timing
+    # Triton's JIT, CUDA's start-up and tuned MMA-Sim's compilation, outside the timing;
+    # MMA-Sim on 2 prompts, as more take long (1 would compile its calls for 1 row)
+    if backend != 'mmasim':
         batched.generate(model, prompts[:batch], 2, eos)
+    elif mmasim_matmul.TUNED:
+        batched.generate(model, prompts[:2], 2, eos)
     warmup = time.perf_counter() - warmup
     tokens: list[list[int]] = []
     batches = []
     for i in range(0, len(prompts), batch):
-        g = batched.generate(model, prompts[i:i + batch], max_new, eos, decoding)
+        g = batched.generate(model, prompts[i:i + batch], max_new, eos)
         tokens += g.tokens
         batches.append({'first': i, 'shared': batched.shared(prompts[i:i + batch]),
                         **{k: v for k, v in dataclasses.asdict(g).items() if k != 'tokens'}})
@@ -107,7 +106,6 @@ def mmasim(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     way, and the in-model sample if *sampled*.  *fpy* is FPy's record."""
     if method == 'full':
         r = measure(model, run, tok, problems, 'mmasim', design, max_new, batch)
-        r['graphless'] = sample.graphless(design)
     else:
         r = {'backend': 'mmasim', 'design': design, 'model': model.config.name_or_path,
              'scheme': run.scheme.name, 'baseline': _baseline(), 'problems': fpy['problems'],
@@ -175,7 +173,7 @@ def main(argv: list[str]) -> int:
                     help="MMA-Sim's time for every design: predicted per layer, or measured over "
                          'the whole run (default %(default)s; --full measures only some)')
     ap.add_argument('--mmasim-as', choices=('tuned', 'released'), default='tuned',
-                    help='MMA-Sim tuned (no host waits, CUDA graphs; same bits), or as released '
+                    help='MMA-Sim tuned (no host waits, torch.compile; same bits), or as released '
                          '(default %(default)s)')
     ap.add_argument('--reuse', metavar='DIR', type=Path,
                     help="take `torch`'s and `fpy`'s records from DIR where there, rather than run them")

@@ -22,6 +22,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from common.plot import ACCENT, LARGE, ROW, save, tidy
+
 NAMES = {'z3': 'Z3 (Binary search)', 'z3-opt': 'Z3 (Optimize)', 'cvc5': 'cvc5'}
 """Each backend's label."""
 
@@ -36,8 +40,6 @@ MACROS = {'z3': 'zthreebin', 'z3-opt': 'zthreeopt', 'cvc5': 'cvc'}
 """Each backend's prefix in the paper's macros: letters only, as a LaTeX
 command name must be."""
 
-COLORS = {'z3': '#1f1f1e', 'z3-opt': '#8a5cc7', 'cvc5': '#2a78d6'}
-INK, GRID = '#1f1f1e', '#e4e3dc'
 
 
 def load(out: Path) -> list[dict[str, Any]]:
@@ -86,21 +88,18 @@ def figure(records: list[dict[str, Any]], path: Path) -> None:
     overlap until only the last drawn shows."""
     bs = backends_of(records)
     cols = max(len(bs), 1)
-    fig, axes = plt.subplots(1, cols, figsize=(3.4 * cols, 2.8),
-                             sharex=True, sharey=True, squeeze=False)
+    fig, axes = plt.subplots(1, cols, figsize=ROW, sharex=True, sharey=True, squeeze=False,
+                             layout='constrained')
     shown = 0
     for ax, b in zip(axes.flat, bs):
         xs, secs = queries(records, b)
         shown += len(xs)
         ys = [1000 * s for s in secs]
         # rasterized: a vector PDF of this many points is slow to open
-        ax.scatter(xs, ys, s=3, color=COLORS.get(b, INK), alpha=0.25,
+        ax.scatter(xs, ys, s=1, color=ACCENT, alpha=0.25,
                    linewidths=0, rasterized=True)
-        ax.set_title(NAMES.get(b, b), color=INK, fontsize=10)
-        ax.grid(True, color=GRID, linewidth=0.6)
-        ax.set_axisbelow(True)
-        for side in ('top', 'right'):
-            ax.spines[side].set_visible(False)
+        ax.set_title(NAMES.get(b, b), loc='left', **LARGE)
+        tidy(ax, 'both')
     ax0 = axes.flat[0]
     if shown:   # a log axis over no point is an error
         ax0.set_xscale('log')
@@ -109,12 +108,9 @@ def figure(records: list[dict[str, Any]], path: Path) -> None:
         plain = FuncFormatter(lambda v, _: f'{v:,.10g}')
         ax0.xaxis.set_major_formatter(plain)
         ax0.yaxis.set_major_formatter(plain)
-    fig.supxlabel('Constraints in the queried component', color=INK, fontsize=10)
-    fig.supylabel('Query time (ms)', color=INK, fontsize=10)
-    fig.tight_layout()
-    fig.savefig(path.with_suffix('.pdf'))
-    fig.savefig(path.with_suffix('.png'), dpi=200)
-    plt.close(fig)
+    fig.supxlabel('Constraints in the queried component', **LARGE)
+    fig.supylabel('Query time (ms)', **LARGE)
+    save(fig, path)
 
 
 def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -171,14 +167,14 @@ def totals_latex(nums: dict[str, Any]) -> str:
     lines = [
         '\\begin{tabular}{llrrrr}',
         '\\toprule',
-        'Backend & Solver method & Compile & Solver & Solver share & Time/query \\\\',
+        'Backend & Solver method & Compile (s) & Solver (s) & Solver share & Time/query (ms) \\\\',
         '\\midrule',
     ]
     for b, t in nums['totals'].items():
         per_query = 1000 * t['seconds_per_query']
         lines.append(
-            f'{ROW_NAMES.get(b, b)} & {t["method"]} & {t["compile_seconds"]:.0f}\\,s & {t["solver_seconds"]:.0f}\\,s & '
-            f'{100 * t["solver_share"]:.0f}\\% & {per_query:.1f}\\,ms \\\\')
+            f'{ROW_NAMES.get(b, b)} & {t["method"]} & {t["compile_seconds"]:.0f} & {t["solver_seconds"]:.0f} & '
+            f'{100 * t["solver_share"]:.0f}\\% & {per_query:.1f} \\\\')
     lines += ['\\bottomrule', '\\end{tabular}', '']
     return '\n'.join(lines)
 

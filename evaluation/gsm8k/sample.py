@@ -12,9 +12,9 @@ Both ways below start from FPy's prefill of the first batch, recording the
 linear calls of 3 questions' prefills (the shortest, median and longest)
 and of one decode step:
 
-- :func:`layers`: MMA-Sim runs each distinct layer shape of those passes
-  once, on the recorded operands; a pass's time is each shape's times its
-  count.  `step` is the decode pass; `prefill` is the line through the 3
+- :func:`layers`: MMA-Sim replays each of those passes' linear calls, in
+  order and back to back, on the recorded operands.  `step` is the decode
+  pass; `prefill` is the line through the 3
   questions' passes, which also predicts the prefix.
 - :func:`in_model`: MMA-Sim runs the model itself, timing the 3 questions'
   prefills and decode steps until their mean is known to
@@ -24,7 +24,6 @@ Every call MMA-Sim runs is also compared, accumulator to accumulator, with
 FPy's kernel on the same operands (`mmasim_matmul.Run.check`).
 """
 
-import contextlib
 import math
 import statistics
 from collections import Counter
@@ -132,46 +131,29 @@ def prefilled(model: torch.nn.Module, run: mmasim_matmul.Run, prompts: list[list
     return Prefilled(prompts, pre, n, batched.batch(prompts, caches, firsts), rows, sampled, passes)
 
 
-def graphless(design: str) -> list[list]:
-    """*design*'s call shapes whose graph did not fit: their operands'
-    shapes."""
-    return sorted([[s for s, _ in k[1:]] for k in mmasim_matmul.GRAPHLESS if k[0] == design])
-
-
 def _shape(call: Call) -> tuple[int, int, int]:
     qa, qw = call[0], call[1]
     return qa.elements.shape[0], qw.elements.shape[0], qa.elements.shape[1]
 
 
-def _pass(run: mmasim_matmul.Run, design: str, calls: list[Call], check: Counter[str],
-          decode: bool = False) -> tuple[float, list[dict[str, Any]]]:
-    """*calls*' MMA-Sim time: each distinct `(m, n, k)`'s first call run
-    once untimed (warming the allocator; capturing a decode pass's graphs,
-    all resident then, as in the model's decode), then each once timed,
-    times its count; and per shape, its count, seconds, and whether a graph
-    replayed it.  The timed calls are checked into *check*."""
-    counts = Counter(map(_shape, calls))
-    firsts = {}
-    for c in calls:
-        firsts.setdefault(_shape(c), c)
-    shapes, timed = [], []
-    with mmasim_matmul.replaying() if decode else contextlib.nullcontext():
-        for qa, qw, _, _ in firsts.values():
-            mmasim_matmul.accumulate(design, run.scheme, qa, qw)
-        for shape, (qa, qw, w, _) in firsts.items():
-            t = batched.clock()
-            acc = mmasim_matmul.accumulate(design, run.scheme, qa, qw)
-            t = batched.clock() - t
-            timed.append((qa, qw, w, acc))
-            shapes.append({'m': shape[0], 'n': shape[1], 'k': shape[2], 'count': counts[shape],
-                           'seconds': t, 'graph': mmasim_matmul.graphed(design, run.scheme, qa, qw)})
-    mmasim_matmul.release_graphs()
-    run.calls = timed
+def _pass(run: mmasim_matmul.Run, design: str, calls: list[Call],
+          check: Counter[str]) -> tuple[float, list[dict[str, Any]]]:
+    """*calls*' MMA-Sim time: all of them replayed in order, once untimed
+    (warming the allocator, compiling a tuned call), then once timed, back to
+    back as in the model; and per shape `(m, n, k)`, its count.  The timed
+    calls are checked into *check*."""
+    for qa, qw, _, _ in calls:
+        mmasim_matmul.accumulate(design, run.scheme, qa, qw)
+    t = batched.clock()
+    accs = [mmasim_matmul.accumulate(design, run.scheme, qa, qw) for qa, qw, _, _ in calls]
+    t = batched.clock() - t
+    run.calls = [(qa, qw, w, acc) for (qa, qw, w, _), acc in zip(calls, accs, strict=True)]
     try:
         check.update(run.check())
     finally:
         run.calls = None
-    return sum(s['count'] * s['seconds'] for s in shapes), shapes
+    counts = Counter(map(_shape, calls))
+    return t, [{'m': m, 'n': n, 'k': k, 'count': c} for (m, n, k), c in counts.items()]
 
 
 @torch.no_grad()
@@ -188,13 +170,12 @@ def layers(model: torch.nn.Module, run: mmasim_matmul.Run, design: str, fpy: dic
     run.mode = mmasim_matmul.PREFIX + design
     run.drop_storage()
     check: Counter[str] = Counter()
-    step, step_shapes = _pass(run, design, step_calls, check, decode=True)
+    step, step_shapes = _pass(run, design, step_calls, check)
     questions = [_pass(run, design, p.passes[i], check) for i in p.sampled]
     seconds = [t for t, _ in questions]
     fit = line([p.rows[i] for i in p.sampled], seconds)
     return {
         **predict(fpy, fit, step), 'step': step, 'fit': fit,
-        'graphless': graphless(design),
         'passes': {'step': step_shapes,
                    'questions': [{'question': i, 'rows': p.rows[i], 'seconds': t, 'shapes': s}
                                  for i, (t, s) in zip(p.sampled, questions, strict=True)]},
@@ -219,27 +200,22 @@ def in_model(model: torch.nn.Module, run: mmasim_matmul.Run, design: str, fpy: d
 
     run.mode = mmasim_matmul.PREFIX + design
     run.drop_storage()
+    if mmasim_matmul.TUNED:   # compile prefill's and decode's calls, outside the timing
+        batched.question(model, p.prefix, p.n, p.prompts[p.sampled[0]])
+        p.state.step(model)
     try:
-        run.calls = []   # prefill before any graph, as in a run
+        run.calls = []
         questions = [timed(lambda q=p.prompts[i]: batched.question(model, p.prefix, p.n, q))
                      for i in p.sampled]
-        run.calls = None
-        if mmasim_matmul.TUNED:   # capture decode's graphs, outside the timing
-            with mmasim_matmul.replaying():
-                p.state.step(model)
-        run.calls = []
         steps: list[float] = []
-        with mmasim_matmul.replaying():
-            while not enough(steps):
-                steps.append(timed(lambda: p.state.step(model)))
+        while not enough(steps):
+            steps.append(timed(lambda: p.state.step(model)))
     finally:
         run.calls = None
-        mmasim_matmul.release_graphs()
     fit = line([p.rows[i] for i in p.sampled], questions)
     step = statistics.fmean(steps)
     return {
         **predict(fpy, fit, step), 'step': step, 'fit': fit,
-        'graphless': graphless(design),
         'sample': {'questions': p.sampled, 'rows': [p.rows[i] for i in p.sampled],
                    'question_seconds': questions, 'steps': steps,
                    'half_width': half_width(steps) if len(steps) > 1 else None},

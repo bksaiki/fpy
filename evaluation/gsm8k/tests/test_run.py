@@ -54,7 +54,6 @@ def test_smoke_layers(tiny: Path, tmp_path: Path):
         assert m['prefix'] == pytest.approx(a + b * n)
         assert m['prefill'] == pytest.approx(m['prefix'] + sum(a + b * (k - n) for k in f['prompt_tokens']))
         assert len(lay['passes']['questions']) == 2 and lay['passes']['step']
-        assert all(isinstance(x['graph'], bool) for x in lay['passes']['step'])
         assert m['check']['calls'] > 0 and m['check']['differing'] == 0
     assert records[f'{D}-fpy']['scheme'] == 'bf16' and records[f'{E}-fpy']['scheme'] == 'fp8-row'
     assert 'in_model' not in records[f'{D}-mmasim']

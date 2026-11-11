@@ -24,6 +24,9 @@ It replaces `evaluation/results/analysis/` with:
   over the random inputs alone;
 - `anf/<design>.json`: the same sites with every scalar subexpression named
   (analysis only, for site counts);
+- `precision-table.tex`: the paper's Table 1, a column per architecture:
+  designs, sites, sites bounded only by ℝ* (FI), and each parameter's mean
+  tightness;
 - `precision-tops.tex`: sites bounded only by ℝ*, per architecture, without
   and with digit bounds;
 - `precision-tightness.tex`: each parameter's mean tightness, per

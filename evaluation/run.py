@@ -163,12 +163,17 @@ def main(argv: list[str]) -> int:
             if not _run(ev.run(out, ['-j', str(args.threads)],
                                ['--smoke'] if args.smoke else [])):
                 failed.append(name)
-                continue
-        if (out / ev.done).exists():
-            if not _run(ev.plot(out)):
+        if (out / ev.done).exists():   # plotted even if it failed (e.g. a bit check)
+            if not _run(ev.plot(out)) and name not in failed:
                 failed.append(name)
         elif args.plot:
             print(f'{name}: no results to plot', flush=True)
+    # the CPU and GPU speedups side by side, once both are measured
+    perf = ('cpu_performance', 'gsm8k')
+    if all((args.results / n / EVALS[n].done).exists() for n in perf):
+        print(f'== performance: {args.results.resolve() / "performance"}', flush=True)
+        if not _run([[PY, str(HERE / 'performance' / 'plots.py'), '--results', str(args.results.resolve())]]):
+            failed.append('performance')
     if failed:
         print(f'failed: {", ".join(failed)}', flush=True)
     return 1 if failed else 0
