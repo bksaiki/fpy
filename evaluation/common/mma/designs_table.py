@@ -33,18 +33,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'examples' / 'mmasi
 from compile import DESIGNS
 
 import fpy2 as fp
-from fpy2.ast.visitor import DefaultVisitor
 
 MANIFEST = (Path(__file__).resolve().parents[1]
             / 'fpy2_models' / 'build' / 'generated_models' / 'manifest.json')
 """The manifest the `fpy2_models` build writes."""
 
 _FP8 = ['e4m3', 'e5m2', 'e4m3.e5m2']
-_F8F4 = _FP8 + ['e2m1', 'e4m3.e2m1', 'e5m2.e2m1']
+_F8F6F4 = _FP8 + ['e3m2', 'e2m3', 'e3m2.e2m3', 'e2m1']
 _CDNA3_FP8 = ['fp8', 'bf8', 'fp8.bf8']
 
 _FP64 = ('FP64', 'FP64', 1, ['fp64 (fma)'])
 _FP32 = ('FP32', 'FP32', 1, ['fp32 (fma)'])
+
+# Hopper's, also Blackwell's and RTX Blackwell's
+_HOPPER = [
+    _FP64,
+    ('TF32', 'FP32', 8, ['nv.hopper.tf32.f32']),
+    ('BF16/FP16', 'FP32', 16, ['nv.hopper.bf16.f32', 'nv.hopper.f16.f32']),
+    ('FP16', 'FP16', 16, ['nv.hopper.f16.f16']),
+]
+# Blackwell's, also RTX Blackwell's
+_BLACKWELL = [
+    *_HOPPER,
+    ('FP8/6/4', 'FP32', 32, [f'nv.blackwell.{t}.f32' for t in _F8F6F4]),
+    ('FP8/6/4', 'FP16', 32, [f'nv.blackwell.{t}.f16' for t in _F8F6F4]),
+    ('MXFP8/6/4', 'FP32', 32, [f'nv.blackwell.mx.{t}' for t in _F8F6F4]),
+    ('MXFP4/NVFP4', 'FP32', 64, ['nv.blackwell.mxfp4', 'nv.blackwell.nvfp4']),
+]
 
 # (architecture, rows): each row (input, output, width, the designs in
 # `compile.DESIGNS` that model it); a design shared by several
@@ -74,33 +89,12 @@ ARCHS: list[tuple[str, list[tuple[str, str, int, list[str]]]]] = [
         ('FP8', 'FP16', 16, [f'nv.ada.{t}.f16' for t in _FP8]),
     ]),
     ('Hopper', [
-        _FP64,
-        ('TF32', 'FP32', 8, ['nv.hopper.tf32.f32']),
-        ('BF16/FP16', 'FP32', 16, ['nv.hopper.bf16.f32', 'nv.hopper.f16.f32']),
-        ('FP16', 'FP16', 16, ['nv.hopper.f16.f16.wgmma', 'nv.hopper.f16.f16.mma']),
+        *_HOPPER,
         ('FP8', 'FP32', 32, [f'nv.hopper.{t}.f32' for t in _FP8]),
         ('FP8', 'FP16', 32, [f'nv.hopper.{t}.f16' for t in _FP8]),
     ]),
-    ('Blackwell', [
-        _FP64,
-        ('TF32', 'FP32', 8, ['nv.hopper.tf32.f32']),
-        ('BF16/FP16', 'FP32', 16, ['nv.hopper.bf16.f32', 'nv.hopper.f16.f32']),
-        ('FP16', 'FP16', 16, ['nv.hopper.f16.f16.wgmma', 'nv.hopper.f16.f16.mma']),
-        ('FP8/4', 'FP32', 32, [f'nv.blackwell.{t}.f32' for t in _F8F4]),
-        ('FP8/4', 'FP16', 32, [f'nv.blackwell.{t}.f16.tcgen05' for t in _F8F4]),
-        ('MXFP8/4', 'FP32', 32, [f'nv.blackwell.mx.{t}' for t in _F8F4]),
-        ('MXFP4/NVFP4', 'FP32', 64, ['nv.blackwell.mxfp4', 'nv.blackwell.nvfp4']),
-    ]),
-    ('RTX Blackwell', [
-        _FP64,
-        ('TF32', 'FP32', 8, ['nv.hopper.tf32.f32']),
-        ('BF16/FP16', 'FP32', 16, ['nv.hopper.bf16.f32', 'nv.hopper.f16.f32']),
-        ('FP16', 'FP16', 16, ['nv.hopper.f16.f16.mma']),
-        ('FP8/4', 'FP32', 32, [f'nv.blackwell.{t}.f32' for t in _F8F4]),
-        ('FP8/4', 'FP16', 32, [f'nv.rtx_blackwell.{t}.f16.mma' for t in _F8F4]),
-        ('MXFP8/4', 'FP32', 32, [f'nv.blackwell.mx.{t}' for t in _F8F4]),
-        ('MXFP4/NVFP4', 'FP32', 64, ['nv.blackwell.mxfp4', 'nv.blackwell.nvfp4']),
-    ]),
+    ('Blackwell', _BLACKWELL),
+    ('RTX Blackwell', _BLACKWELL),
     ('CDNA1', [
         _FP32,
         ('BF16', 'FP32', 2, ['amd.cdna1.bf16']),
@@ -137,72 +131,43 @@ def load(path: Path) -> tuple[set[str], set[str]]:
     return {m['name'] for m in manifest['models']}, set(refused)
 
 
-class _Callees(DefaultVisitor):
-    """The FPy functions a function calls directly."""
-
-    def __init__(self):
-        self.fns: list[fp.Function] = []
-
-    def _visit_call(self, e, ctx):
-        if isinstance(e.fn, fp.Function):
-            self.fns.append(e.fn)
-        super()._visit_call(e, ctx)
-
-
 @cache
-def _code_lines(path: str) -> tuple[frozenset[int], ast.Module]:
-    """The lines of *path* holding code, not a comment, docstring or blank,
-    and its syntax tree."""
+def _functions(path: str) -> dict[int, int]:
+    """The lines of code of each function in *path*, by every line from its
+    first decorator to its `def`: from the `def` to its end, without blank
+    lines, comments or docstrings."""
     src = Path(path).read_text()
-    tree = ast.parse(src)
-    docs = set()
-    for node in ast.walk(tree):
-        if (isinstance(node, (ast.Module, ast.FunctionDef)) and node.body
-                and isinstance(node.body[0], ast.Expr)
-                and isinstance(node.body[0].value, ast.Constant)
-                and isinstance(node.body[0].value.value, str)):
-            docs.update(range(node.body[0].lineno, node.body[0].end_lineno + 1))
     skip = (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
             tokenize.DEDENT, tokenize.ENDMARKER)
     code = {line for t in tokenize.generate_tokens(io.StringIO(src).readline)
             if t.type not in skip for line in range(t.start[0], t.end[0] + 1)}
-    return frozenset(code - docs), tree
-
-
-def _function_lines(path: str, line: int) -> frozenset[int]:
-    """The code lines of the function defined, decorator first, at *line*."""
-    code, tree = _code_lines(path)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        start = node.decorator_list[0].lineno if node.decorator_list else node.lineno
-        if start <= line <= node.lineno:
-            return frozenset(l for l in code if node.lineno <= l <= node.end_lineno)
-    raise LookupError(f'no function at {path}:{line}')
+    nodes = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, (ast.Module, ast.FunctionDef))]
+    for n in nodes:
+        if ast.get_docstring(n, clean=False) is not None:
+            code -= set(range(n.body[0].lineno, n.body[0].end_lineno + 1))
+    loc = {}
+    for n in nodes:
+        if isinstance(n, ast.FunctionDef):
+            count = sum(n.lineno <= line <= n.end_lineno for line in code)
+            start = n.decorator_list[0].lineno if n.decorator_list else n.lineno
+            loc.update(dict.fromkeys(range(start, n.lineno + 1), count))
+    return loc
 
 
 @cache
 def _sources(name: str) -> frozenset[tuple[str, int]]:
     """Where each FPy function design *name* reaches is defined."""
-    seen: set[tuple[str, int]] = set()
-    todo = [dict(DESIGNS)[name]()[0]]
-    while todo:
-        fn = todo.pop()
-        where = (fn.ast.loc.source, fn.ast.loc.start_line)
-        if where in seen:
-            continue
-        seen.add(where)
-        callees = _Callees()
-        callees._visit_function(fn.ast, None)
-        todo.extend(callees.fns)
-    return frozenset(seen)
+    module = fp.Module()
+    module.add(dict(DESIGNS)[name]()[0])
+    return frozenset((f.ast.loc.source, f.ast.loc.start_line) for f in module.functions())
 
 
 def lines_of_code(designs: list[str]) -> int:
     """The lines of FPy *designs* take together, a function they share
     counted once."""
-    return sum(len(_function_lines(*where))
-               for where in set().union(*map(_sources, designs)))
+    return sum(_functions(path)[line]
+               for path, line in set().union(*map(_sources, designs)))
 
 
 def check(compiled: set[str], refused: set[str]) -> None:
