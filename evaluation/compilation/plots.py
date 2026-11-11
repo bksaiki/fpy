@@ -3,12 +3,15 @@ The compilation-time figures, from `compile_times.py`'s table: a panel per
 backend, a bar per design sorted by its time; coloured by each design's GPU
 architecture, by its input format, or by the MMA-Sim arithmetic model it
 transcribes (as the performance evaluation's figure), or in one colour.
+Beside them, `compile-times-paper.json`: each backend's medians, and each
+arithmetic model's range.
 
     python evaluation/compilation/plots.py    # -> evaluation/results/compilation/plots/{arch,format,models,solid}.{png,pdf}
 """
 
 import argparse
 import csv
+import json
 import statistics
 import sys
 from collections.abc import Callable
@@ -101,14 +104,38 @@ COLORINGS: dict[str, tuple[Callable[[str], str], dict[str, str]]] = {
 }
 
 
+STATS = ('seconds', 'constraints', 'queries', 'solver_seconds')
+"""Each compiled design's numbers: an older table has only its seconds."""
+
+
 def load(results: Path) -> dict[str, list[dict]]:
-    """Each backend's compiled designs, with their seconds."""
+    """Each backend's compiled designs, with their numbers."""
     by: dict[str, list[dict]] = {b: [] for b in BACKENDS}
     with (results / 'compilation' / 'compile-times.csv').open() as f:
         for r in csv.DictReader(f):
             if r['status'] == 'ok':
-                by[r['backend']].append({'design': r['design'], 'seconds': float(r['seconds'])})
+                by[r['backend']].append({'design': r['design']} | {
+                    k: float(r[k]) for k in STATS if r.get(k)})
     return by
+
+
+def summary(by: dict[str, list[dict]]) -> dict:
+    """Each backend's median over its compiled designs, and each arithmetic
+    model's least and greatest."""
+    out = {}
+    for b, designs in by.items():
+        stats = [k for k in STATS if all(k in d for d in designs)]
+        models: dict[str, list[dict]] = {}
+        for d in designs:
+            models.setdefault(arithmetic(d['design']), []).append(d)
+        out[b] = {
+            'designs': len(designs),
+            'median': {k: statistics.median(d[k] for d in designs) for k in stats},
+            'models': {m: {'designs': len(ds),
+                           'range': {k: [min(d[k] for d in ds), max(d[k] for d in ds)] for k in stats}}
+                       for m, ds in sorted(models.items())},
+        }
+    return out
 
 
 def figure(by: dict[str, list[dict]], coloring: str | None) -> plt.Figure:
@@ -154,10 +181,18 @@ def main(argv: list[str]) -> int:
         fig = figure(by, None if name == 'solid' else name)
         for ext in ('png', 'pdf'):
             fig.savefig(out / f'{name}.{ext}', dpi=200)
+    def num(k: str, v: float) -> str:
+        return f'{v:.1f}' if k.endswith('seconds') else f'{v:,.0f}'
+
+    paper = summary(by)
+    (args.results / 'compilation' / 'compile-times-paper.json').write_text(json.dumps(paper, indent=1))
     for b, label in BACKENDS.items():
-        times = [d['seconds'] for d in by[b]]
-        print(f'{label:7} {len(times)} designs, median {statistics.median(times):.1f} s, '
-              f'max {max(times):.1f} s, sum {sum(times):.0f} s')
+        s = paper[b]
+        print(f'{label}: {s["designs"]} designs; median ' + ', '.join(
+            f'{num(k, v)} {k.replace("_", " ")}' for k, v in s['median'].items()))
+        for m, r in s['models'].items():
+            print(f'  {m:12} {r["designs"]:2} designs  ' + '  '.join(
+                f'{k.replace("_", " ")} {num(k, lo)}-{num(k, hi)}' for k, (lo, hi) in r['range'].items()))
     return 0
 
 

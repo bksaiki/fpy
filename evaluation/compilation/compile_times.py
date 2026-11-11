@@ -7,8 +7,10 @@ specialization and analyses) and its Triton kernel
 nor Triton's own compilation runs.
 
 The table, `<results>/compilation/compile-times.csv` (`plots.py`), has a row
-per design and backend: whether FPy compiled it, why not, and the seconds it
-took. Its provenance has the run's wall time.
+per design and backend: whether FPy compiled it, why not, the seconds it
+took, and what digit-bound analysis asked of its solver (z3): the constraints
+it stated, the queries it made, and the seconds the solver took. Its
+provenance has the run's wall time.
 
     python evaluation/compilation/compile_times.py -j 16
 """
@@ -29,6 +31,8 @@ from compile import DESIGNS, Build, cpp_compiler, prepare
 from compile_triton import compile_matmul
 from core import outputs
 
+from fpy2.analysis.digit_bound import SolverStats, solver_backend
+
 RESULTS = ROOT / 'evaluation' / 'results'
 BACKENDS = ('cpp', 'triton')
 # compiled once in each process before timing, so no design pays for the
@@ -42,18 +46,23 @@ def generate_cpp(build: Build) -> str:
 
 
 def generate(job: tuple[str, str]) -> dict:
-    """One design's model from one backend, and the seconds it took; or why
-    FPy refused it."""
+    """One design's model from one backend, the seconds it took, and its
+    solver's statistics; or why FPy refused it."""
     name, backend = job
     build = dict(DESIGNS)[name]
     t0 = time.perf_counter()
-    try:
-        generate_cpp(build) if backend == 'cpp' else compile_matmul(build, None)
-        status, reason = 'ok', ''
-    except Exception as e:  # noqa: BLE001 -- a refusal is a result
-        status, reason = 'refused', f'{type(e).__name__}: {e}'
+    # z3, the default backend; its statistics are kept anyway, so this costs nothing
+    with solver_backend('z3') as solvers:
+        try:
+            generate_cpp(build) if backend == 'cpp' else compile_matmul(build, None)
+            status, reason = 'ok', ''
+        except Exception as e:  # noqa: BLE001 -- a refusal is a result
+            status, reason = 'refused', f'{type(e).__name__}: {e}'
+    seconds = time.perf_counter() - t0
+    stats = sum((s.stats for s in solvers), SolverStats())
     return {'design': name, 'backend': backend, 'status': status, 'reason': reason,
-            'seconds': time.perf_counter() - t0}
+            'seconds': seconds, 'constraints': stats.constraints, 'queries': stats.queries,
+            'solver_seconds': stats.solver_time}
 
 
 def _warm() -> None:
@@ -79,7 +88,8 @@ def main(argv: list[str]) -> int:
             rows = list(pool.map(generate, jobs))
     wall = time.perf_counter() - t0
     for r in rows:
-        print(f'{r["backend"]:6} {r["design"]:40} {r["status"]:7} {r["seconds"]:6.1f}s', flush=True)
+        print(f'{r["backend"]:6} {r["design"]:40} {r["status"]:7} {r["seconds"]:6.1f}s '
+              f'{r["constraints"]:7} constraints {r["queries"]:5} queries', flush=True)
 
     table = args.results / 'compilation' / 'compile-times.csv'
     outputs.write_csv(table, rows)
