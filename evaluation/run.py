@@ -68,6 +68,10 @@ EVALS = {
                            '-j', '1']],
         plot=lambda d: [[PY, str(HERE / 'compilation' / 'plots.py'), '--results', str(d.parent)]],
         done='compile-times.csv', needs=('matplotlib',)),
+    'ablation': Eval(
+        run=lambda d, j: [[PY, str(HERE / 'ablation' / 'run.py'), '-o', str(d), *j]],
+        plot=lambda d: [[PY, str(HERE / 'ablation' / 'report.py'), str(d)]],
+        done='ablation-paper.json', needs=()),
     # `explore.py` and `plots.py` add `blas/` to the root they are given
     'blas': Eval(
         run=lambda d, j: [[PY, str(HERE / 'dse' / 'blas' / 'explore.py'), '--results', str(d.parent), *j]],
