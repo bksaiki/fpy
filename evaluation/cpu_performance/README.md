@@ -8,9 +8,11 @@ call at a time from Python as MMA-Sim's `dpa` is: by
 arithmetic under default `torch.compile`.  Both run on PyTorch's intra-op
 threads, as many as `-j` (default: PyTorch's, the performance cores).
 Every configuration, both FPy and tuned MMA-Sim, is first checked to agree
-with MMA-Sim as released bit for bit.
+with MMA-Sim as released bit for bit (zeros of either sign equal).  At the
+largest batch and length, MMA-Sim as released is timed too
+(`CPU_PERF_RELEASED`, about 45 min more), for tuning's speedup over it.
 
-Operands are drawn from normal(0, 0.5) and rounded to each design's formats;
+Operands are drawn from normal(0, 1) and rounded to each design's formats;
 MX and NVFP4 operands are block-quantized by TorchAO.  Batch sizes, dot
 lengths, replicates and the rest are `config.py`'s `CPU_PERF_*`.
 
@@ -56,8 +58,11 @@ and `evaluation/run.py` reruns it next time.
   configuration measured;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup;
+- `perf-cpu-tuning.tex`: the same for tuned MMA-Sim over MMA-Sim as released,
+  if timed;
 - `perf-cpu-macros.tex`: the paper's `\EvalCPUPerf...` macros (speedups,
-  designs, batch, length, threads), to paste into its `eval.tex`;
+  tuning's median speedup `OptRatio`, designs, batch, length, threads), to
+  paste into its `eval.tex`;
 
 and prints the per-design table.
 

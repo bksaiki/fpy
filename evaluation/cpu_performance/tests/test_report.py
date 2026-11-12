@@ -28,3 +28,12 @@ def test_macros():
     assert '\\newcommand{\\EvalCPUPerfSpeedupMax}{4.00$\\times$\\xspace}' in tex
     assert '\\newcommand{\\EvalCPUPerfSpeedupMean}{2.00$\\times$\\xspace}' in tex
     assert '\\newcommand{\\EvalCPUPerfThreads}{5\\xspace}' in tex
+
+
+def test_tuning_speedup_and_macro():
+    rows = [{'design': 'fp32.fma', 'implementation': i, 'batch_size': 8, 'dot_length': 64, 'dots_per_second': r}
+            for i, r in [('fpy', 8.0), ('mmasim-tuned', 2.0), ('mmasim-released', 1.0)]]
+    tuning = report.headline(rows, impl=report.BASELINE, base=report.RELEASED)
+    assert tuning == {'fp32.fma': 2.0}
+    assert '\\newcommand{\\EvalCPUPerfOptRatio}{2.00$\\times$\\xspace}' in report.macros({'fp32.fma': 4.0}, 8, 64, 1, tuning)
+    assert 'OptRatio' not in report.macros({'fp32.fma': 4.0}, 8, 64, 1)

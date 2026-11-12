@@ -203,3 +203,7 @@ CPU_PERF_REPLICATES = 3
 
 CPU_PERF_MIN_RUN_TIME = 0.25
 """Seconds each timing lasts at least."""
+
+CPU_PERF_RELEASED = True
+"""Whether MMA-Sim as released is also timed, at the largest batch and length
+only, for tuning's speedup over it (about 45 min more)."""

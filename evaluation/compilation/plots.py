@@ -2,11 +2,12 @@
 The compilation-time figures, from `compile_times.py`'s table: a panel per
 backend, a bar per design sorted by its time; coloured by each design's GPU
 architecture, by its input format, or by the MMA-Sim arithmetic model it
-transcribes (as the performance evaluation's figure), or in one colour.
-Beside them, `compile-times-paper.json`: each backend's medians, and each
-arithmetic model's range.
+transcribes (as the performance evaluation's figure), or in one colour; and
+by architecture, each bar's digit-bound solver time solid and the rest
+faded.  Beside them, `compile-times-paper.json`: each backend's medians, and
+each arithmetic model's range.
 
-    python evaluation/compilation/plots.py    # -> evaluation/results/compilation/plots/{arch,format,models,solid}.{png,pdf}
+    python evaluation/compilation/plots.py    # -> evaluation/results/compilation/plots/{arch,format,models,solid,solver}.{png,pdf}
 """
 
 import argparse
@@ -21,6 +22,8 @@ import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.legend_handler import HandlerTuple
+from matplotlib.patches import Rectangle
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / 'evaluation' / 'results'
@@ -109,6 +112,11 @@ COLORINGS: dict[str, tuple[Callable[[str], str], dict[str, dict[str, object]]]] 
 }
 
 
+FADED = 0.35
+"""The opacity of a bar's time outside the solver, in the solver figure."""
+KEY = ('Hopper', 'Ada', 'AMD CDNA3')
+"""The families striping the solver figure's key: any family's style."""
+
 STATS = ('seconds', 'constraints', 'queries', 'solver_seconds')
 """Each compiled design's numbers: an older table has only its seconds."""
 
@@ -135,7 +143,9 @@ def summary(by: dict[str, list[dict]]) -> dict:
             models.setdefault(arithmetic(d['design']), []).append(d)
         out[b] = {
             'designs': len(designs),
-            'median': {k: statistics.median(d[k] for d in designs) for k in stats},
+            'median': {k: statistics.median(d[k] for d in designs) for k in stats} | (
+                {'solver_share': statistics.median(d['solver_seconds'] / d['seconds'] for d in designs)}
+                if 'solver_seconds' in stats else {}),
             'models': {m: {'designs': len(ds),
                            'range': {k: [min(d[k] for d in ds), max(d[k] for d in ds)] for k in stats}}
                        for m, ds in sorted(models.items())},
@@ -145,15 +155,23 @@ def summary(by: dict[str, list[dict]]) -> dict:
 
 def figure(by: dict[str, list[dict]], coloring: str | None) -> plt.Figure:
     """A panel per backend, a bar per compiled design sorted by its time,
-    coloured by *coloring* (one colour if `None`), and the median a dotted
-    line."""
-    group, palette = COLORINGS[coloring] if coloring else (None, {})
+    coloured by *coloring* (one colour if `None`; by architecture, the
+    solver's time solid and the rest faded, if `'solver'`), and the median a
+    dotted line."""
+    split = coloring == 'solver'
+    group, palette = COLORINGS['arch' if split else coloring] if coloring else (None, {})
     fig, axes = plt.subplots(1, len(BACKENDS), figsize=ROW, layout='constrained')
     fig.get_layout_engine().set(wspace=GAP)
     for b, ax in zip(BACKENDS, axes):
         mine = sorted(by[b], key=lambda d: d['seconds'])
         for i, d in enumerate(mine):
-            ax.bar(i, d['seconds'], width=0.9, **(palette[group(d['design'])] if group else {'color': SOLID}))
+            style = palette[group(d['design'])] if group else {'color': SOLID}
+            if split:
+                ax.bar(i, d['solver_seconds'], width=0.9, **style)
+                ax.bar(i, d['seconds'] - d['solver_seconds'], bottom=d['solver_seconds'], width=0.9,
+                       **style, alpha=FADED)
+            else:
+                ax.bar(i, d['seconds'], width=0.9, **style)
         median = statistics.median(d['seconds'] for d in mine)
         ax.axhline(median, color=INK, linestyle=':', linewidth=LINE)
         ax.text(-0.5, median, f'median {median:.1f} s', va='bottom', **SMALL | {'color': INK})
@@ -166,6 +184,12 @@ def figure(by: dict[str, list[dict]], coloring: str | None) -> plt.Figure:
     if group:   # in the first panel's empty upper left
         shown = {group(d['design']) for ds in by.values() for d in ds}
         legend(axes[0], {g: s for g, s in palette.items() if g in shown}, rows=4)
+    if split:   # in the last panel's empty upper left
+        stripes = [tuple(Rectangle((0, 0), 1, 1, **palette[f], alpha=a) for f in KEY) for a in (1, FADED)]
+        axes[-1].legend(stripes, ['Solver', 'Rest of compilation'], loc='upper left',
+                        handler_map={tuple: HandlerTuple(ndivide=None, pad=0)}, fontsize=SMALL['fontsize'],
+                        labelcolor=SMALL['color'], frameon=False, handlelength=1.6, handleheight=1.0,
+                        handletextpad=0.4)
     return fig
 
 
@@ -177,11 +201,12 @@ def main(argv: list[str]) -> int:
     by = load(args.results)
     out = args.results / 'compilation' / 'plots'
     out.mkdir(parents=True, exist_ok=True)
-    for name in (*COLORINGS, 'solid'):
+    timed = all('solver_seconds' in d for ds in by.values() for d in ds)   # not in older tables
+    for name in (*COLORINGS, 'solid', *(['solver'] if timed else [])):
         save(figure(by, None if name == 'solid' else name), out / name)
 
     def num(k: str, v: float) -> str:
-        return f'{v:.1f}' if k.endswith('seconds') else f'{v:,.0f}'
+        return f'{v:.1f}' if k.endswith('seconds') else f'{v:.0%}' if k.endswith('share') else f'{v:,.0f}'
 
     paper = summary(by)
     (args.results / 'compilation' / 'compile-times-paper.json').write_text(json.dumps(paper, indent=1))

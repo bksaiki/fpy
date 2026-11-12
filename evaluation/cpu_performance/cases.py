@@ -194,14 +194,14 @@ def select(cs: Sequence[Case], names: Sequence[str]) -> list[Case]:
 # ---------------------------------------------------------------------------
 # Inputs: the same values in MMA-Sim's and FPy's representations
 
-DISTRIBUTIONS = {'normal': 'normal(0, 0.5)', 'uniform': 'uniform[-1, 1)'}
+DISTRIBUTIONS = {'normal': 'normal(0, 1)', 'uniform': 'uniform[-1, 1)'}
 
 
 def sample(batch: int, length: int, seed: int, distribution: str) -> Tensor:
     """FP64 values to round to a design's input format."""
     g = torch.Generator().manual_seed(seed)
     if distribution == 'normal':
-        return torch.randn((batch, length), dtype=torch.float64, generator=g) * 0.5
+        return torch.randn((batch, length), dtype=torch.float64, generator=g)
     if distribution == 'uniform':
         return torch.rand((batch, length), dtype=torch.float64, generator=g) * 2 - 1
     raise ValueError(f'unknown distribution {distribution!r}')
