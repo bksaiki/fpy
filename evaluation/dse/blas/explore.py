@@ -7,7 +7,8 @@ CPU as FPy's C++ for it, chained by `fpy2_models`' `<op>_gemm`.
 
 The table, `<results>/blas/blas-grid.csv` (`plots.py`), has a row per grid
 point and case (test, `n`, `s`): the point's columns, its error, the FP32
-FMA loop's error on the same matrices, and the seconds the point took in FPy
+FMA loop's error on the same matrices, the floor's (the exact product an FP32
+ULP up or down at random, as the LLM grid's), and the seconds the point took in FPy
 (to C++), in the C++ compiler, and to grade. Its provenance has each stage's
 wall time.
 
@@ -197,10 +198,24 @@ def case(test: str, n: int, s: int, fmt) -> Case:
 
 
 def error(model: dict, c: Case) -> float:
-    """model's worst componentwise backward error on c; an entry whose
-    products are all 0 must come out exactly 0."""
+    """model's worst componentwise backward error on c."""
     gemm = getattr(torch.ops.fpy2_models, f'{op(model)}_gemm')
-    got = gemm(c.A, c.Bt, c.I, c.J, *unit_scales(model, c.n)).double()
+    return _worst(gemm(c.A, c.Bt, c.I, c.J, *unit_scales(model, c.n)).double(), c)
+
+
+def floor_error(c: Case, signs: torch.Generator) -> float:
+    """The worst componentwise backward error on c of its exact product
+    rounded to FP32, then an ULP up or down by a sign from *signs*, as the
+    LLM grid's floor (`swap.exact`); an entry whose products are all 0 stays 0."""
+    f = c.exact.float()
+    up = torch.rand(f.shape, generator=signs) < 0.5
+    moved = torch.nextafter(f, torch.where(up, torch.inf, -torch.inf))
+    return _worst(torch.where(c.size > 0, moved, f).double(), c)
+
+
+def _worst(got: torch.Tensor, c: Case) -> float:
+    """*got*'s worst componentwise backward error on c; an entry whose
+    products are all 0 must come out exactly 0."""
     err = (got - c.exact).abs()
     return torch.where(c.size > 0, err / c.size, torch.where(err == 0, 0.0, math.inf)).max().item()
 
@@ -238,6 +253,8 @@ def main(argv: list[str]) -> int:
             continue
         cases = [case(test, n, s, fmt) for test in ('1c', '2c') for s in ss]
         fma = [error(models[FMA], c) for c in cases]
+        signs = torch.Generator().manual_seed(config.BLAS_SEED)
+        floor = [floor_error(c, signs) for c in cases]
         for p in mine:
             cpp = compiled[p.design]
             point = {'anchor': p.anchor, 'format': f, 'value': p.value, 'is_anchor': p.is_anchor,
@@ -251,8 +268,8 @@ def main(argv: list[str]) -> int:
             t1 = time.perf_counter()
             errs = [error(models[p.design], c) for c in cases]
             point['seconds'] = time.perf_counter() - t1
-            rows += [point | {'test': c.test, 'n': c.n, 's': c.s, 'error': e, 'fma_error': b}
-                     for c, e, b in zip(cases, errs, fma)]
+            rows += [point | {'test': c.test, 'n': c.n, 's': c.s, 'error': e, 'fma_error': b, 'floor_error': z}
+                     for c, e, b, z in zip(cases, errs, fma, floor, strict=True)]
             print(f'{p.anchor} {p.value}: worst {max(errs):.3g} in {point["seconds"]:.1f}s', flush=True)
 
     wall['grade'] = time.perf_counter() - t0

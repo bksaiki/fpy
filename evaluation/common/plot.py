@@ -49,7 +49,7 @@ DPI = 200
 FAMILIES = {
     'Volta / Turing': ('#f0f9e8', ''), 'Ampere': ('#bae4bc', ''), 'Ada': ('#7bccc4', ''),
     'Hopper': ('#43a2ca', ''), 'Blackwell': ('#0868ac', ''),
-    'AMD CDNA1': ('#fee8c8', '////'), 'AMD CDNA2': ('#fdbb84', '////'), 'AMD CDNA3': ('#e34a33', '////'),
+    'CDNA1': ('#fee8c8', '////'), 'CDNA2': ('#fdbb84', '////'), 'CDNA3': ('#e34a33', '////'),
     'FMA chain': ('#969696', '....'),
 }
 """Hardware families, in legend order, with their color and hatch."""
@@ -81,7 +81,7 @@ def family(design: str) -> str:
         return 'FMA chain'
     arch = design.split('.')[1]
     if arch.startswith('cdna'):
-        return f'AMD {arch.upper()}'
+        return arch.upper()
     return {'volta': 'Volta / Turing', 'turing': 'Volta / Turing',
             'rtx_blackwell': 'Blackwell'}.get(arch, arch.capitalize())
 

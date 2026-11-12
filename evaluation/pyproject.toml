@@ -14,6 +14,7 @@ dependencies = [
   "torchao==0.18.0",          # the block-scaled formats' quantizers (cpu_performance)
   # the reference the GSM8K and CPU performance evaluations run against
   "mmasim==2.1.1",
+  "lm-eval[hf]==0.4.13",      # GSM8K accuracy as lm-evaluation-harness reports it (gsm8k/lmeval.py)
 ]
 
 [dependency-groups]

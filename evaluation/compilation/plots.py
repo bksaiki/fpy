@@ -114,7 +114,7 @@ COLORINGS: dict[str, tuple[Callable[[str], str], dict[str, dict[str, object]]]] 
 
 FADED = 0.35
 """The opacity of a bar's time outside the solver, in the solver figure."""
-KEY = ('Hopper', 'Ada', 'AMD CDNA3')
+KEY = ('Hopper', 'Ada', 'CDNA3')
 """The families striping the solver figure's key: any family's style."""
 
 STATS = ('seconds', 'constraints', 'queries', 'solver_seconds')
@@ -180,7 +180,7 @@ def figure(by: dict[str, list[dict]], coloring: str | None) -> plt.Figure:
         ax.set_xlabel('Designs', **LARGE)
         round_axis(ax, 1.05 * mine[-1]['seconds'])
         tidy(ax)
-    axes[0].set_ylabel('Compilation Time (s)', **LARGE)
+    axes[0].set_ylabel('Compilation time (s)', **LARGE)
     if group:   # in the first panel's empty upper left
         shown = {group(d['design']) for ds in by.values() for d in ds}
         legend(axes[0], {g: s for g, s in palette.items() if g in shown}, rows=4)

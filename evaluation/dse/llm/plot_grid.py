@@ -34,7 +34,7 @@ FAMILIES = {'fp8-row': 'FP8', 'fp8-row:fnuz': 'FP8', 'bf16': 'BF16', 'mxfp8': 'F
 """Each scheme's input format, its panels' title."""
 
 PANELS = (('observed', 'free_kl', 'k0_kl'), ('amplified', 'kl', 'floor_kl'))
-"""Each panel: its header, its KL column, and its ±1 ulp column."""
+"""Each panel: its header, its KL column, and its ±1 ULP column."""
 SCALE = TEXTWIDTH / 16
 """The paper's figure was drawn 16 inches wide and printed at the text
 width; it is now drawn at print size, every size below scaled by this."""
@@ -49,12 +49,12 @@ KEY_GAP = 0.03
 titles, as the paper printed it."""
 HEIGHT = 1.6
 """Inches: the figure's, and the BLAS figure's, for square panels."""
-GENERATIONS = ('Blackwell', 'Hopper', 'Ada', 'AMD CDNA3', 'AMD CDNA2')
+GENERATIONS = ('Blackwell', 'Hopper', 'Ada', 'CDNA3', 'CDNA2')
 """Each generation (a family of `HARDWARE`), its marker by position."""
-BASES = {'nv.hopper.bf16.f32': ('Hopper', 'Hopper/Blackwell'), 'nv.ampere.bf16.f32': ('Ada', 'Ada'),
-         'amd.cdna3.bf16': ('AMD CDNA3', 'CDNA3'), 'amd.cdna2.bf16': ('AMD CDNA2', 'CDNA2'),
+BASES = {'nv.hopper.bf16.f32': ('Hopper', 'Hopper'), 'nv.ampere.bf16.f32': ('Ada', 'Ada'),
+         'amd.cdna3.bf16': ('CDNA3', 'CDNA3'), 'amd.cdna2.bf16': ('CDNA2', 'CDNA2'),
          'nv.hopper.e4m3.f32': ('Hopper', 'Hopper'),
-         'nv.ada.e4m3.f32': ('Ada', 'Ada'), 'amd.cdna3.fp8': ('AMD CDNA3', 'CDNA3'),
+         'nv.ada.e4m3.f32': ('Ada', 'Ada'), 'amd.cdna3.fp8': ('CDNA3', 'CDNA3'),
          'nv.blackwell.mx.e4m3': ('Blackwell', 'Blackwell')}
 """Each anchor: its generation, and its legend name (MMA-Sim's Blackwell
 BF16 is Hopper's, Ada's Ampere's)."""
@@ -77,12 +77,12 @@ def figure(rows: list[dict], out: Path) -> None:
         legend(mine[0], anchors, 'upper right')
         for ax, (title, _, ref) in zip(mine, PANELS):
             ax.set_title(f'{f} ({title})', loc='left', pad=6 * SCALE, **LARGE)
-            # one ±1 ulp line, the lowest of the bases' (their quantizations differ)
+            # one ±1 ULP line, the lowest of the bases' (their quantizations differ)
             floor = min(float(r[ref]) for r in rows if family[r['anchor']] == f and r.get(ref))
             ax.axhline(math.log10(floor), color=INK, linestyle=':', linewidth=LINE, zorder=1)
             panel(ax)
-    axes[0].set_ylabel('log10 KL(ref ‖ design)', labelpad=4 * SCALE, **LARGE)
-    key(fig, '±1 ulp')
+    axes[0].set_ylabel(r'$\log_{10}$ KL(ref ‖ design)', labelpad=4 * SCALE, **LARGE)
+    key(fig, '±1 ULP')
     on_ticks(fig)
     save(fig, out, tight=True)
 
