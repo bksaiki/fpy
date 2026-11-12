@@ -12,6 +12,7 @@ overwriting only those; the README says what each holds.
 
 import argparse
 import json
+import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -79,10 +80,15 @@ def queries(records: list[dict[str, Any]], b: str) -> tuple[list[int], list[floa
     return xs, ys
 
 
+JITTER = 0.04
+"""The scatter's greatest relative jitter of a constraint count."""
+
+
 def figure(records: list[dict[str, Any]], path: Path) -> None:
     """Each query's time against the constraints it saw, a panel per
     backend in one row on shared log-log axes, as *path* with `.pdf` and
-    with `.png`.
+    with `.png`.  Constraint counts recur across designs, so each point is
+    jittered by up to `JITTER` along x, else they stack into columns.
 
     A panel each, not one cloud: tens of thousands of points a backend
     overlap until only the last drawn shows."""
@@ -91,13 +97,15 @@ def figure(records: list[dict[str, Any]], path: Path) -> None:
     fig, axes = plt.subplots(1, cols, figsize=ROW, sharex=True, sharey=True, squeeze=False,
                              layout='constrained')
     shown = 0
+    rng = random.Random(0)   # the same jitter each time
     for ax, b in zip(axes.flat, bs):
         xs, secs = queries(records, b)
         shown += len(xs)
+        xs = [x * (1 + JITTER) ** rng.uniform(-1, 1) for x in xs]
         ys = [1000 * s for s in secs]
         # rasterized: a vector PDF of this many points is slow to open
-        ax.scatter(xs, ys, s=1, color=ACCENT, alpha=0.25,
-                   linewidths=0, rasterized=True)
+        # small and opaque: overlaps do not darken into blotches
+        ax.scatter(xs, ys, s=0.6, color=ACCENT, linewidths=0, rasterized=True)
         ax.set_title(NAMES.get(b, b), loc='left', **LARGE)
         tidy(ax, 'both')
     ax0 = axes.flat[0]
@@ -110,7 +118,7 @@ def figure(records: list[dict[str, Any]], path: Path) -> None:
         ax0.yaxis.set_major_formatter(plain)
     fig.supxlabel('Constraints in the queried component', **LARGE)
     fig.supylabel('Query time (ms)', **LARGE)
-    save(fig, path)
+    save(fig, path, dpi=600)   # its points are rasterized, in the PDF too
 
 
 def numbers(records: list[dict[str, Any]]) -> dict[str, Any]:

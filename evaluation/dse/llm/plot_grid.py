@@ -83,12 +83,28 @@ def figure(rows: list[dict], out: Path) -> None:
             panel(ax)
     axes[0].set_ylabel('log10 KL(ref ‖ design)', labelpad=4 * SCALE, **LARGE)
     key(fig, '±1 ulp')
+    on_ticks(fig)
     save(fig, out, tight=True)
 
 
+def on_ticks(fig: plt.Figure) -> None:
+    """*fig*'s panels' k-axes from their first k to their last, both ticks,
+    as their y-axes, with points on the edge drawn whole.  After the layout,
+    fixed: a last tick's label past a panel's edge would otherwise narrow
+    every panel."""
+    fig.canvas.draw()
+    fig.set_layout_engine('none')
+    for ax in fig.axes:
+        lo, hi = ax.dataLim.intervalx
+        ticks = ax.xaxis.get_major_locator().tick_values(lo, hi)
+        ax.set_xlim(max(t for t in ticks if t <= lo), min(t for t in ticks if t >= hi))
+        for a in (*ax.lines, *ax.collections):
+            a.set_clip_on(False)
+
+
 def panel(ax: plt.Axes) -> None:
-    """A k-axis panel: square, its ticks, grid and limits (widened to the
-    nearest ticks)."""
+    """A k-axis panel: square, its ticks, grid and y limits (widened to the
+    nearest ticks); :func:`on_ticks` ends its k-axis on ticks."""
     ax.set_box_aspect(1)
     ax.set_xlabel('k (bits)', labelpad=4 * SCALE, **LARGE)
     ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True, steps=[1, 2, 4, 5, 10]))

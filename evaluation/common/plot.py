@@ -174,11 +174,11 @@ def speedup_figure(panels: list[dict[str, float]], path: Path, inside: int | Non
     save(fig, path)
 
 
-def save(fig: plt.Figure, path: Path, tight: bool = False) -> None:
-    """*fig* as *path* `.png` and `.pdf`, then closed; *tight*, cropped to
-    its content (keys past its edges included)."""
+def save(fig: plt.Figure, path: Path, tight: bool = False, dpi: int = DPI) -> None:
+    """*fig* as *path* `.png` and `.pdf` (rasterized parts at *dpi*), then
+    closed; *tight*, cropped to its content (keys past its edges included)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     crop = {'bbox_inches': 'tight', 'pad_inches': 0.01} if tight else {}
     for ext in ('.png', '.pdf'):
-        fig.savefig(path.with_suffix(ext), dpi=DPI, **crop)
+        fig.savefig(path.with_suffix(ext), dpi=dpi, **crop)
     plt.close(fig)

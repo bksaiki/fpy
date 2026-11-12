@@ -41,6 +41,7 @@ from plot_grid import (
     _look,
     key,
     legend,
+    on_ticks,
     panel,
 )
 
@@ -130,7 +131,9 @@ def main(argv: list[str]) -> int:
                     help="the outputs' root, as `explore.py`'s (default: %(default)s)")
     args = ap.parse_args(argv)
     points, fma = load(args.results)
-    save(figure(points, fma), args.results / 'blas' / 'plots' / 'k', tight=True)
+    fig = figure(points, fma)
+    on_ticks(fig)
+    save(fig, args.results / 'blas' / 'plots' / 'k', tight=True)
     numbers(points, fma)
     return 0
 
