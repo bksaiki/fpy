@@ -16,6 +16,7 @@ from core import kernels, quant, swap
 from generator.catalog import CATALOG
 from mmasim import MMABlockScaleOperation, MMAOperation
 from mmasim.arithmetic import fdpa, fma, ftz_mul_add
+from torch._inductor import compile_fx, graph
 
 import fpy2 as fp
 
@@ -47,6 +48,9 @@ torch._dynamo.config.fail_on_recompile_limit_hit = True   # never fall back to e
 torch._inductor.config.emulate_precision_casts = True
 torch._inductor.config.eager_numerics.division_rounding = True
 torch._inductor.config.eager_numerics.disable_ftz = True
+# compile for any input alignment: assuming the first call's, Inductor copies each later
+# misaligned slice's whole strided extent (for `w.T[t:t + L]`, the weight block)
+compile_fx.should_assume_input_aligned = graph.should_assume_input_aligned = lambda _: False
 
 
 def _fma_gpu(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
@@ -175,7 +179,8 @@ def _dtype(fmt: fp.Context) -> torch.dtype:
 def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
             scales: tuple[torch.Tensor, torch.Tensor] | None, budget: int) -> torch.Tensor:
     (m, k), n = a.shape, w.shape[0]
-    per = _bytes(design, k)
+    # tuned, a call holds only its own products' intermediates
+    per = _bytes(design, min(k, _width(design)) if TUNED else k)
     cols = min(n, max(1, budget // per))
     rows = min(m, max(1, budget // (cols * per)))
     sa, sw = scales or (None, None)
@@ -190,17 +195,14 @@ def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
     return y
 
 
-def _width(op: MMAOperation | MMABlockScaleOperation) -> int:
-    """Products per instruction of *op*."""
-    if isinstance(op, fma.MMA_FMA):
-        return 1
-    if isinstance(op, ftz_mul_add.MMA_FTZ_MUL_ADD):
-        return op.P
-    return op.L_max
+def _width(design: str) -> int:
+    """Products per MMA-Sim call: FPy's design's (`k`), as on the CPU
+    (`cpu_performance`)."""
+    return CATALOG[design].k
 
 
 def _step(design: str) -> Callable[..., torch.Tensor]:
-    """*design*'s operation on one instruction's operands, compiled: for its
+    """*design*'s operation on one call's operands (:func:`_width`), compiled: for its
     first shape, then for any `m` and `n` (Dynamo's automatic dynamic shapes;
     `dynamic=True` would make the instruction's width symbolic too, which
     miscompiles GTR-FDPA's even/odd split)."""
@@ -212,9 +214,8 @@ def _step(design: str) -> Callable[..., torch.Tensor]:
 def _call(design: str, a: torch.Tensor, w: torch.Tensor, sa: torch.Tensor | None,
           sw: torch.Tensor | None) -> torch.Tensor:
     """`a @ w.T` from `C = 0`, block scales *sa* `[m, k / b]` and *sw*
-    `[n, k / b]` if any: tuned, an instruction at a time, as on the CPU
-    (`cpu_performance`); as released, in one call, but ST-FDPA's one scale
-    per instruction chained here."""
+    `[n, k / b]` if any: tuned, :func:`_width` products a call; as released,
+    in one call, but ST-FDPA's one scale per instruction chained here."""
     op = operation(design)
     c = torch.zeros(a.shape[0], w.shape[0], dtype=output(design), device=a.device)
     b = w.T
@@ -222,7 +223,7 @@ def _call(design: str, a: torch.Tensor, w: torch.Tensor, sa: torch.Tensor | None
         return op(a, b, c) if sa is None else op(a, b, c, sa, sw.T)
     step = _step(design) if TUNED else op
     k = a.shape[1]
-    L = min(k, _width(op))
+    L = min(k, _width(design))
     block = None if sa is None else k // sa.shape[1]
     for t in range(0, k, L):
         if block is None:

@@ -38,7 +38,7 @@ PANELS = (('observed', 'free_kl', 'k0_kl'), ('amplified', 'kl', 'floor_kl'))
 SCALE = TEXTWIDTH / 16
 """The paper's figure was drawn 16 inches wide and printed at the text
 width; it is now drawn at print size, every size below scaled by this."""
-LARGE, SMALL = {'fontsize': 14 * SCALE, 'color': INK}, {'fontsize': 12 * SCALE, 'color': MUTED}
+LARGE, SMALL = {'fontsize': 6, 'color': INK}, {'fontsize': 5, 'color': MUTED}
 """The two text styles: titles, axis labels and the key; ticks and legends."""
 LINE, MARKER, EDGE = 2 * SCALE, 6 * SCALE, 0.8 * SCALE
 """Points: data lines, their markers, and axes, ticks and grid lines."""
@@ -126,17 +126,17 @@ def legend(ax: plt.Axes, anchors: list[str], loc: str, ncol: int = 1) -> None:
                                   markeredgecolor='white', markeredgewidth=EDGE, label=BASES[a][1])
                        for a in anchors for c, m in [_look(a)]],
               loc=loc, ncol=ncol, fontsize=SMALL['fontsize'], labelcolor=SMALL['color'], frameon=False,
-              columnspacing=0.8)
+              columnspacing=0.8, labelspacing=0.1, borderpad=0.2, borderaxespad=0.2)
 
 
 def key(fig: plt.Figure, dotted: str) -> None:
     """The joins' line styles and the *dotted* line, above the panels."""
     handles = [plt.Line2D([], [], linestyle='', label='c added')]
     handles += [plt.Line2D([], [], color=MUTED, linestyle=s, linewidth=LINE, label=lab) for s, lab in JOINS.values()]
-    handles += [plt.Line2D([], [], linestyle='', label=' ')]
     handles += [plt.Line2D([], [], color=INK, linestyle=':', linewidth=LINE, label=dotted)]
     leg = fig.legend(handles=handles, loc='outside upper center', ncol=len(handles), fontsize=LARGE['fontsize'],
-                     labelcolor=LARGE['color'], frameon=False, handlelength=2.4, columnspacing=1.2)
+                     labelcolor=LARGE['color'], frameon=False, handlelength=2.4, columnspacing=1.2,
+                     borderpad=0.6)   # its padding: the gap to the panel titles
     leg.get_texts()[0].set(fontweight='bold')
 
 

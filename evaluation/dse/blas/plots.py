@@ -113,7 +113,7 @@ def figure(points: list[dict], floor: dict[str, dict]) -> plt.Figure:
         ax.set_title(f, loc='left', pad=6 * SCALE, **LARGE)
         ax.yaxis.set_major_locator(ticker.MultipleLocator(5))
         panel(ax)
-    axes[0].set_ylabel(r'Worst $\log_2 \eta$', labelpad=4 * SCALE, **LARGE)
+    axes[0].set_ylabel(r'$\log_2 \eta$', labelpad=4 * SCALE, **LARGE)
     key(fig, '±1 ULP')
     return fig
 

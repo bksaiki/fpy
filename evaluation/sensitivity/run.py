@@ -62,7 +62,7 @@ def compile_once(
     call limited to *call_timeout* seconds: the wall time, the solver
     statistics summed over every store, each query (`trace`, as columns), and
     the C++'s hash, or the error that stopped it."""
-    from compile import compile_design
+    from compile import cpp_compiler, prepare
 
     build = dict(DESIGNS)[name]
     # untimed: a backend's first solver loads its module (cvc5's, lazily)
@@ -71,7 +71,8 @@ def compile_once(
     with solver_backend(
             backend, timeout_ms=round(1000 * call_timeout), keep_trace=True) as solvers:
         try:
-            src, _ = compile_design(build)
+            # the C++ alone, as `compilation/compile_times.py` times it (no signature)
+            src = cpp_compiler().compile_module(prepare(build))
             outcome = {'cpp_sha256': hashlib.sha256(src.encode()).hexdigest()}
         except Exception:  # noqa: BLE001 -- one design's failure is reported, not fatal
             outcome = {'error': traceback.format_exc()}

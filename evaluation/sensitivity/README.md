@@ -3,8 +3,9 @@
 How much of compilation the digit-bound solver takes, and how z3 compares
 with its own optimizer and with cvc5 as its backend, on the
 MMA-Sim designs (`evaluation/common/mma/compile.py`'s `DESIGNS`).  Each design
-is compiled to C++ with `compile_design`, which always runs digit-bound
-inference, once per backend and repeat.
+is compiled to C++ as `compilation/compile_times.py` times it (the C++
+alone, without `compile_design`'s entry signature, which would run
+digit-bound inference a second time), once per backend and repeat.
 
 The backends are in `fpy2/analysis/digit_bound/`: `solver.py` (the
 interface, and the base every backend shares), `z3_solver.py` and
