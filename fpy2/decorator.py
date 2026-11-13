@@ -180,8 +180,9 @@ def _closure_names(func: Callable, env: ForeignEnv) -> set[str]:
     ``logb``; membership in *env* is the filter, as it is in
     ``getclosurevars``.
     """
-    names = set(inspect.getclosurevars(func).nonlocals)
-    return names | {n for n in func.__code__.co_names if n in env}
+    return set(inspect.getclosurevars(func).nonlocals) | {
+        n for n in func.__code__.co_names if n in env
+    }
 
 
 def _apply_fpy_decorator[**P, R](

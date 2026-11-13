@@ -11,15 +11,16 @@ construction rather than by ``assume(...)`` filtering.
 
 from collections.abc import Callable
 
-from hypothesis import given
-from hypothesis import strategies as st
-
 import fpy2 as fp
+
+from hypothesis import given, strategies as st
+
 from fpy2.analysis.format_infer import AbstractFormat
 from fpy2.number.context.mp_fixed import MPFixedFormat
 from fpy2.number.context.mps_float import MPSFloatFormat
 
 from ...generators import real_floats
+
 
 # ---------------------------------------------------------------------------
 # Types

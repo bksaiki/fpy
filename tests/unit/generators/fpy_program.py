@@ -56,6 +56,7 @@ from typing import Any
 from hypothesis import strategies as st
 
 import fpy2 as fp
+
 from fpy2.ast.fpyast import (
     Abs,
     Add,
@@ -75,11 +76,11 @@ from fpy2.ast.fpyast import (
     Enumerate,
     Exp,
     Expr,
+    Hexnum,
     ForeignVal,
     ForStmt,
     FuncDef,
     FuncMeta,
-    Hexnum,
     If1Stmt,
     IfExpr,
     IfStmt,
@@ -92,8 +93,8 @@ from fpy2.ast.fpyast import (
     ListTypeAnn,
     Log,
     Mul,
-    NamedUnaryOp,
     Neg,
+    NamedUnaryOp,
     Not,
     Or,
     Range1,
@@ -116,9 +117,10 @@ from fpy2.ast.fpyast import (
     WhileStmt,
     Zip,
 )
-from fpy2.env import ForeignEnv
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType, Type
+from fpy2.env import ForeignEnv
 from fpy2.utils import CompareOp, NamedId, UnderscoreId
+
 
 # ---------------------------------------------------------------------------
 # Types
