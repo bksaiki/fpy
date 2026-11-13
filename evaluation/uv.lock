@@ -549,26 +549,28 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'" },
-    { name = "gmpy2", specifier = "==2.3.1" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = "==6.135" },
+    { name = "gmpy2", specifier = ">=2.2" },
+    { name = "hypothesis", marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'" },
-    { name = "numpy" },
+    { name = "numpy", specifier = ">=2.1" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-xdist", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sphinx", marker = "extra == 'dev'" },
     { name = "sphinx-pyproject", marker = "extra == 'dev'" },
     { name = "sphinx-rtd-theme", marker = "extra == 'dev'" },
-    { name = "titanfp", specifier = "==0.1.2" },
+    { name = "titanfp", specifier = ">=0.1.2" },
+    { name = "torch", marker = "extra == 'triton'" },
+    { name = "triton", marker = "sys_platform == 'linux' and extra == 'triton'" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "z3-solver", specifier = "==5.3.3.0" },
+    { name = "z3-solver", specifier = ">=5" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "triton"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "build" },
-    { name = "hypothesis", specifier = "==6.135" },
+    { name = "hypothesis" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-xdist" },
@@ -596,6 +598,7 @@ dependencies = [
     { name = "torchao", version = "0.18.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
     { name = "transformers" },
     { name = "triton", marker = "sys_platform == 'linux'" },
+    { name = "z3-solver" },
 ]
 
 [package.dev-dependencies]
@@ -618,6 +621,7 @@ requires-dist = [
     { name = "torchao", marker = "sys_platform == 'linux'", specifier = "==0.18.0", index = "https://download.pytorch.org/whl/cu126" },
     { name = "transformers", specifier = "==5.17.0" },
     { name = "triton", marker = "sys_platform == 'linux'", specifier = "==3.8.0" },
+    { name = "z3-solver", specifier = "==5.3.3.0" },
 ]
 
 [package.metadata.requires-dev]

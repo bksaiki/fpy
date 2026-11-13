@@ -17,10 +17,10 @@ license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "titanfp==0.1.2",
-  "gmpy2==2.3.1",
-  "numpy",
-  "z3-solver==5.3.3.0"
+  "titanfp>=0.1.2",
+  "gmpy2>=2.2",
+  "numpy>=2.1",
+  "z3-solver>=5"
 ]
 
 # ``dev`` deps are listed twice on purpose: ``[project.optional-dependencies]``
@@ -31,7 +31,7 @@ dependencies = [
 dev = [
   "pytest",
   "pytest-xdist",
-  "hypothesis==6.135",
+  "hypothesis",
   "mypy",
   "ruff",
   "build",
@@ -40,12 +40,17 @@ dev = [
   "sphinx-rtd-theme",
   "sphinx-pyproject"
 ]
+# the Triton backend runs its kernels through these; Triton ships Linux wheels only
+triton = [
+  "torch",
+  "triton; sys_platform == 'linux'"
+]
 
 [dependency-groups]
 dev = [
   "pytest",
   "pytest-xdist",
-  "hypothesis==6.135",
+  "hypothesis",
   "mypy",
   "ruff",
   "build",
