@@ -33,6 +33,10 @@ EAGER_BUDGET = 3 << 30
 so a call splits the same however much memory is free.
 Every decode layer but `lm_head` fits in one block."""
 
+CALL = 64
+"""Products per tuned MMA-Sim call, for every design: the fewest that are a
+whole number of every design's FPy calls (`k`)."""
+
 _BUDGET: int | None = None
 """Bytes per call instead, if set (tests)."""
 
@@ -179,8 +183,8 @@ def _dtype(fmt: fp.Context) -> torch.dtype:
 def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
             scales: tuple[torch.Tensor, torch.Tensor] | None, budget: int) -> torch.Tensor:
     (m, k), n = a.shape, w.shape[0]
-    # tuned, a call holds only its own products' intermediates
-    per = _bytes(design, min(k, _width(design)) if TUNED else k)
+    # tuned, a call's steps run in turn, each holding its own intermediates
+    per = _bytes(design, CATALOG[design].L) if TUNED else _bytes(design, k)
     cols = min(n, max(1, budget // per))
     rows = min(m, max(1, budget // (cols * per)))
     sa, sw = scales or (None, None)
@@ -196,18 +200,35 @@ def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
 
 
 def _width(design: str) -> int:
-    """Products per MMA-Sim call: FPy's design's (`k`), as on the CPU
-    (`cpu_performance`)."""
-    return CATALOG[design].k
+    """Products per MMA-Sim call: tuned, :data:`CALL`; as released (ST-FDPA's
+    instructions chained one scale at a time), the design's `k`."""
+    return CALL if TUNED else CATALOG[design].k
+
+
+def _chain(design: str) -> Callable[..., torch.Tensor]:
+    """*design*'s operation on one call's operands; ST-FDPA, which takes one
+    scale per call, an instruction (`k` products) at a time."""
+    op, k = operation(design), CATALOG[design].k
+    if not isinstance(op, fdpa.MMA_ST_FDPA):
+        return op.__call__
+
+    def chain(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, sa: torch.Tensor,
+              sb: torch.Tensor) -> torch.Tensor:
+        block = a.shape[1] // sa.shape[1]
+        for t in range(0, a.shape[1], k):
+            s = slice(t // block, (t + k) // block)
+            c = op(a[:, t:t + k], b[t:t + k], c, sa[:, s], sb[s])
+        return c
+    return chain
 
 
 def _step(design: str) -> Callable[..., torch.Tensor]:
-    """*design*'s operation on one call's operands (:func:`_width`), compiled: for its
+    """*design*'s operation on one call's operands (:func:`_chain`), compiled: for its
     first shape, then for any `m` and `n` (Dynamo's automatic dynamic shapes;
     `dynamic=True` would make the instruction's width symbolic too, which
     miscompiles GTR-FDPA's even/odd split)."""
     if design not in _COMPILED:
-        _COMPILED[design] = torch.compile(operation(design).__call__)
+        _COMPILED[design] = torch.compile(_chain(design))
     return _COMPILED[design]
 
 
