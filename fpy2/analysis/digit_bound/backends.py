@@ -6,14 +6,11 @@ Which solver a store gets when it is not handed one: z3, unless
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TypeVar
 
 from .solver import Solver
 from .z3_solver import Z3Solver
 
 __all__ = ['default_solver', 'solver_factory']
-
-_S = TypeVar('_S', bound=Solver)
 
 _factory: ContextVar[Callable[[], Solver] | None] = ContextVar('_factory', default=None)
 """What :func:`solver_factory` chose, where it is in effect."""
@@ -26,7 +23,7 @@ def default_solver() -> Solver:
 
 
 @contextmanager
-def solver_factory(make: Callable[[], _S]) -> Generator[list[_S], None, None]:
+def solver_factory[S: Solver](make: Callable[[], S]) -> Generator[list[S], None, None]:
     """Give every store made inside the block a solver from *make*.
 
     Yields the list of solvers made, which grows as they are; their
@@ -36,9 +33,9 @@ def solver_factory(make: Callable[[], _S]) -> Generator[list[_S], None, None]:
             compile_design(build)
         total = sum((s.stats for s in solvers), SolverStats())
     """
-    made: list[_S] = []
+    made: list[S] = []
 
-    def factory() -> _S:
+    def factory() -> S:
         s = make()
         made.append(s)
         return s

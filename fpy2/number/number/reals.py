@@ -7,7 +7,7 @@ import math
 import numbers
 import random
 from fractions import Fraction
-from typing import Self, TypeAlias, overload
+from typing import Self, overload
 
 import numpy as np
 
@@ -29,7 +29,7 @@ from ..globals import get_current_float_converter, get_current_str_converter
 from ..round import RoundingDirection, RoundingMode
 from .flags import Flags
 
-RNG: TypeAlias = random.Random | np.random.Generator
+type RNG = random.Random | np.random.Generator
 """Type alias for random number generators."""
 
 

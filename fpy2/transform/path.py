@@ -21,7 +21,6 @@ Build one by descending::
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ..ast.accessors import BlockField, ExprField, subblocks, subexprs
 from ..ast.fpyast import (
@@ -54,7 +53,7 @@ class SubBlock:
         return StmtPath(self, index)
 
 
-BlockPath: TypeAlias = FuncBody | SubBlock
+type BlockPath = FuncBody | SubBlock
 """A block of a program: the function's body, or one held by a statement."""
 
 
@@ -98,7 +97,7 @@ class ExprPath:
         return p
 
 
-Path: TypeAlias = BlockPath | StmtPath | ExprPath
+type Path = BlockPath | StmtPath | ExprPath
 """Any path, for the operations that take more than one kind."""
 
 

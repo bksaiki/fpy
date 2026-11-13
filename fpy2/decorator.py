@@ -5,8 +5,7 @@ Decorators for the FPy language.
 import builtins
 import inspect
 from collections.abc import Callable
-from types import CodeType
-from typing import Any, ParamSpec, TypeVar, overload
+from typing import Any, overload
 
 from .analysis import Reachability, SyntaxCheck
 from .ast import EffectStmt, FuncMeta, NamedId
@@ -18,18 +17,15 @@ from .primitive import Primitive
 from .rewrite import ExprPattern, StmtPattern
 from .utils import getfunclines
 
-P = ParamSpec('P')
-R = TypeVar('R')
-
 ###########################################################
 # @fpy decorator
 
 @overload
-def fpy(func: Callable[P, R]) -> Function[P, R]:
+def fpy[**P, R](func: Callable[P, R]) -> Function[P, R]:
     ...
 
 @overload
-def fpy(
+def fpy[**P, R](
     *,
     ctx: Context | None = None,
     pre: Any = None,
@@ -38,7 +34,7 @@ def fpy(
 ) -> Callable[[Callable[P, R]], Function[P, R]]:
     ...
 
-def fpy(
+def fpy[**P, R](
     func: Callable[P, R] | None = None,
     *,
     ctx: Context | None = None,
@@ -70,7 +66,7 @@ def fpy(
 ###########################################################
 # @pattern decorator
 
-def pattern(func: Callable[P, R]):
+def pattern[**P, R](func: Callable[P, R]):
     """
     Decorator to parse a Python function into an FPy pattern.
     Constructs an FPy `Pattern` from a Python function.
@@ -91,11 +87,11 @@ def pattern(func: Callable[P, R]):
 # @fpy_primitive decorator
 
 @overload
-def fpy_primitive(func: Callable[P, R]) -> Primitive[P, R]:
+def fpy_primitive[**P, R](func: Callable[P, R]) -> Primitive[P, R]:
     ...
 
 @overload
-def fpy_primitive(
+def fpy_primitive[**P, R](
     *,
     ctx: str | None = None,
     arg_ctxs: list[str | tuple] | None = None,
@@ -106,7 +102,7 @@ def fpy_primitive(
 ) -> Callable[[Callable[P, R]], Primitive[P, R]]:
     ...
 
-def fpy_primitive(
+def fpy_primitive[**P, R](
     func: Callable[P, R] | None = None,
     *,
     ctx: str | None = None,
@@ -180,27 +176,16 @@ def _function_env(func: Callable) -> ForeignEnv:
 def _closure_names(func: Callable, env: ForeignEnv) -> set[str]:
     """Every name *func*'s body may read from its defining scope.
 
-    The nested code objects are walked because :func:`inspect.getclosurevars`
-    reads only one, and before PEP 709 (Python 3.12) a comprehension compiles
-    to its own -- so a name used only inside ``[... for x in xs]`` is otherwise
-    invisible, and `SyntaxCheck` would call it unbound.
-
     ``co_names`` also holds attribute names, so ``fp.logb`` contributes
     ``logb``; membership in *env* is the filter, as it is in
     ``getclosurevars``.
     """
-    names = set(inspect.getclosurevars(func).nonlocals)
-    codes = [func.__code__]
-    while codes:
-        code = codes.pop()
-        names |= {n for n in code.co_names if n in env}
-        # a nested object's `co_freevars` name the enclosing function's locals,
-        # which are FPy locals rather than foreign
-        codes.extend(c for c in code.co_consts if isinstance(c, CodeType))
-    return names
+    return set(inspect.getclosurevars(func).nonlocals) | {
+        n for n in func.__code__.co_names if n in env
+    }
 
 
-def _apply_fpy_decorator(
+def _apply_fpy_decorator[**P, R](
     func: Callable[P, R],
     *,
     ctx: Context | None = None,
@@ -311,7 +296,7 @@ def _check_prim_contexts(
                 raise ValueError(f"unbound context variable in ret_ctx: {v}")
 
 
-def _apply_fpy_prim_decorator(
+def _apply_fpy_prim_decorator[**P, R](
     func: Callable[P, R],
     *,
     ctx: str | None = None,

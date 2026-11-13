@@ -3,7 +3,6 @@ This module defines rounding utilities.
 """
 
 from enum import Enum
-from typing import TypeAlias
 
 from ..utils import enum_repr
 
@@ -94,8 +93,8 @@ class OverflowMode(Enum):
 ###########################################################
 # Type aliases
 
-RM: TypeAlias = RoundingMode
+RM = RoundingMode
 """alias for `RoundingMode`"""
 
-OV: TypeAlias = OverflowMode
+OV = OverflowMode
 """alias for `OverflowMode`"""

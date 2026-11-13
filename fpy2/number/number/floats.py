@@ -4,7 +4,7 @@ an arbitrary-precision floating-point number.
 """
 
 # `X | None` annotations reference names bound only under TYPE_CHECKING (e.g.
-# `Context`), so defer annotation evaluation to stay importable on Python 3.11.
+# `Context`), so defer annotation evaluation to stay importable before Python 3.14.
 from __future__ import annotations
 
 import math

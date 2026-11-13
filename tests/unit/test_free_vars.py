@@ -2,10 +2,7 @@
 Free-variable capture at decoration.
 
 The decorator collects the names an FPy body may read from its defining Python
-scope.  Before Python 3.12 a comprehension compiles to its own code object, and
-:func:`inspect.getclosurevars` reads only one -- so a name used only inside
-``[... for x in xs]`` needs the walk that :func:`_closure_names` does.  These
-pin the same answer on every version.
+scope, including those read only inside a comprehension.
 """
 
 import pytest
@@ -29,7 +26,7 @@ class TestComprehensionScope:
 
     def test_nested_call(self):
         # `fp.logb` inside a comprehension: the module alias `fp` is itself a
-        # free variable, and lives in the nested code object too
+        # free variable
         @fp.fpy(ctx=fp.FP64)
         def f(xs):
             return [max(fp.logb(x), _K) for x in xs]
@@ -37,8 +34,6 @@ class TestComprehensionScope:
         assert f([8.0, 1.0]) == [3.0, 3.0]
 
     def test_iterable(self):
-        # the outermost iterable is evaluated in the *enclosing* scope, so this
-        # arm worked already; kept so a fix cannot regress it
         @fp.fpy(ctx=fp.FP64)
         def f():
             return [x * 2 for x in range(_N)]
@@ -54,7 +49,7 @@ class TestComprehensionScope:
 
 
 class TestOuterScope:
-    """The cases that never depended on the walk."""
+    """Names read outside any comprehension."""
 
     def test_plain_reference(self):
         @fp.fpy(ctx=fp.FP64)
@@ -74,7 +69,7 @@ class TestOuterScope:
 
 
 def test_unbound_is_still_unbound():
-    """The walk widens what resolves, so a genuine typo must still fail."""
+    """A genuine typo must still fail."""
     with pytest.raises(FPySyntaxError, match='unbound variable'):
         @fp.fpy(ctx=fp.FP64)
         def f(xs):

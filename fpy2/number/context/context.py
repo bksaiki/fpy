@@ -236,7 +236,7 @@ class Context(ABC):
             case int():
                 return RealFloat.from_int(x)
             case Fraction():
-                if x.denominator == 1:
+                if x.is_integer():
                     return RealFloat.from_int(int(x))
                 elif is_dyadic(x):
                     return RealFloat.from_rational(x)

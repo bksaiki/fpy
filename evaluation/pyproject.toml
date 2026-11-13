@@ -2,7 +2,7 @@
 [project]
 name = "fpy2-evaluation"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
   "fpy2",
   # the versions the results were made with
@@ -15,6 +15,7 @@ dependencies = [
   # the reference the GSM8K and CPU performance evaluations run against
   "mmasim==2.1.1",
   "lm-eval[hf]==0.4.13",      # GSM8K accuracy as lm-evaluation-harness reports it (gsm8k/lmeval.py)
+  "z3-solver==5.3.3.0",       # the digit-bound solver (compilation, sensitivity)
   "cvc5==1.4.2",              # a digit-bound solver backend (sensitivity)
 ]
 

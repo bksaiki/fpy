@@ -5,7 +5,7 @@ Installation
 
 Requirements:
 
-* Python 3.11 or later
+* Python 3.12 or later
 
 To install the latest stable release of FPy from PyPI, run::
 

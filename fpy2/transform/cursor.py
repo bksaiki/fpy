@@ -15,7 +15,6 @@ than a silent mis-hit.  Holding that reference also keeps the tree alive, so no
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import TypeAlias
 
 from ..ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
 from .error import TransformReferenceError
@@ -156,7 +155,7 @@ class ExprCursor:
         return f'{format_path(self.path)}{where}'
 
 
-Cursor: TypeAlias = ExprCursor | StmtCursor | BlockCursor
+Cursor = ExprCursor | StmtCursor | BlockCursor
 """What a rewrite can be aimed at, and what forwarding hands back."""
 
 

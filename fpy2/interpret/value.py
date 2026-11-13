@@ -15,7 +15,7 @@ Python boundary; :func:`from_value` converts back.
 """
 
 from fractions import Fraction
-from typing import Any, TypeAlias
+from typing import Any
 
 from ..number import FP64, INTEGER, REAL, Context, Float, RealFloat
 from ..utils import UNINIT, is_dyadic
@@ -62,11 +62,11 @@ class Foreign:
         return id(self.val)
 
 
-RealValue: TypeAlias = Float | Fraction
+RealValue = Float | Fraction
 """Type of real values in FPy programs."""
-ScalarValue: TypeAlias = bool | Context | RealValue
+type ScalarValue = bool | Context | RealValue
 """Type of scalar values in FPy programs."""
-Value: TypeAlias = ScalarValue | list['Value'] | tuple['Value', ...] | Foreign
+type Value = ScalarValue | list[Value] | tuple[Value, ...] | Foreign
 """Type of values in FPy programs."""
 
 

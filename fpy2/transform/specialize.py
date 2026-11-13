@@ -20,7 +20,7 @@ nothing contributes nothing, leaving polymorphic specs unchanged.
 import hashlib
 from collections import Counter
 from dataclasses import dataclass, replace
-from typing import NamedTuple, TypeAlias
+from typing import NamedTuple
 
 from ..analysis.alias import Alias
 from ..analysis.array_size import (
@@ -153,7 +153,7 @@ class _TuplePin:
     elts: 'tuple[_Pin | None, ...]'
 
 
-_Pin: TypeAlias = FormatBound | _ListPin | _TuplePin
+type _Pin = FormatBound | _ListPin | _TuplePin
 """What one argument's type pins, or ``None`` where it pins nothing."""
 
 
@@ -172,9 +172,9 @@ class _ExprBound:
     fmt: FormatBound
 
 
-_Bound: TypeAlias = _DefBound | _ExprBound
+type _Bound = _DefBound | _ExprBound
 
-_PinnedValue: TypeAlias = Context | RoundingMode | None
+type _PinnedValue = Context | RoundingMode | None
 """A value a call site may pin into a callee -- see :data:`_PINNABLE`."""
 
 
@@ -216,7 +216,7 @@ class _SpecKey(NamedTuple):
     inst: _Instance
 
 
-_Shape: TypeAlias = 'frozenset[tuple[_Instance, int]]'
+type _Shape = frozenset[tuple[_Instance, int]]
 """How many specs of each instantiation one expansion produced.
 
 What :meth:`Specialize.apply` compares to decide it has reached a fixpoint.

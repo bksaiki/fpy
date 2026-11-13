@@ -12,7 +12,6 @@ and the classes of that correspondence are the index spaces; a variable's
 
 from collections.abc import Container, Iterable
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ...utils import Unionfind
 
@@ -38,7 +37,7 @@ class Elements:
     """Which index, outermost first: a list of lists has two."""
 
 
-Key: TypeAlias = Binder | Elements
+type Key = Binder | Elements
 """A binder or a list's element space."""
 
 

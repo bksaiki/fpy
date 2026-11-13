@@ -6,7 +6,6 @@ import ast as pyast
 import copy
 import functools
 import inspect
-import sys
 from collections.abc import Callable
 from fractions import Fraction
 from typing import Any
@@ -36,10 +35,8 @@ HOOK_NAME = '__fpy_hook'
 
 def _is_integer(x: Float | Fraction) -> bool:
     match x:
-        case Float():
+        case Float() | Fraction():
             return x.is_integer()
-        case Fraction():
-            return x.denominator == 1
         case _:
             raise TypeError(f'expected a real number, got `{x}`')
 
@@ -1209,28 +1206,16 @@ class BytecodeCompiler(Visitor):
             defaults=[]
         )
 
-        if sys.version_info >= (3, 12):
-            return pyast.FunctionDef(
-                name=func.name,
-                args=py_args,
-                body=body,
-                decorator_list=[],
-                returns=None,
-                type_comment=None,
-                type_params=[],
-                **attrs
-            )
-        else:
-            return pyast.FunctionDef(
-                name=func.name,
-                args=py_args,
-                body=body,
-                decorator_list=[],
-                returns=None,
-                type_comment=None,
-                # type_params=[],
-                **attrs
-            )   
+        return pyast.FunctionDef(
+            name=func.name,
+            args=py_args,
+            body=body,
+            decorator_list=[],
+            returns=None,
+            type_comment=None,
+            type_params=[],
+            **attrs
+        )
 
 ###########################################################
 # Interpreter

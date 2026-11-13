@@ -9,7 +9,7 @@ to a representative super-format. The precondition therefore holds by
 construction rather than by ``assume(...)`` filtering.
 """
 
-from typing import Callable, TypeAlias
+from collections.abc import Callable
 
 import fpy2 as fp
 
@@ -28,9 +28,9 @@ from ...generators import real_floats
 
 # (p, exp, b) triple representing an abstract format A(p, exp, b).
 # p is `float('inf')` for the fixed-point case, otherwise a positive int.
-Prec: TypeAlias = int | float
-Format: TypeAlias = tuple[Prec, int, fp.RealFloat]
-MinimalFn: TypeAlias = Callable[[Format], Format]
+type Prec = int | float
+type Format = tuple[Prec, int, fp.RealFloat]
+type MinimalFn = Callable[[Format], Format]
 
 
 # ---------------------------------------------------------------------------

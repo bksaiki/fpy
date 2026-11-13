@@ -11,7 +11,6 @@ context variable (:class:`NamedId`) is generated.
 """
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -32,10 +31,10 @@ __all__ = [
     'ScopeContext',
 ]
 
-ContextScopeSite: TypeAlias = FuncDef | ContextStmt
+type ContextScopeSite = FuncDef | ContextStmt
 """AST nodes that introduce a rounding context scope"""
 
-ContextUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
+type ContextUseSite = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
 """AST nodes that use a rounding context"""
 
 _CTX_FREE_OPS = (Len, Dim, Size, Range1, Range2, Range3, Enumerate, Empty)
@@ -78,7 +77,7 @@ class PartialContext:
         return tuple(v for v in vals if isinstance(v, Expr))
 
 
-ScopeContext: TypeAlias = ContextParam | PartialContext
+type ScopeContext = ContextParam | PartialContext
 """The context of a scope: concrete, partially applied, or a symbolic variable.
 
 Consumers that need a concrete :class:`Context` test for one and fall back;

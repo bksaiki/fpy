@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
-from typing import TypeAlias
+from itertools import pairwise
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -49,7 +49,7 @@ __all__ = [
 #####################################################################
 # Array-size lattice
 
-ArraySize: TypeAlias = 'int | NamedId | None'
+type ArraySize = int | NamedId | None
 """
 Static size of a list-valued expression — a flat lattice:
 
@@ -69,7 +69,7 @@ just ``==`` (via :func:`is_size_eq`).  Variables are minted per run and are
 not meaningful across functions.
 """
 
-SizeUnionfind: TypeAlias = 'Unionfind[NamedId | int]'
+type SizeUnionfind = Unionfind[NamedId | int]
 """Internal: equivalence classes of size variables (and the concrete
 ``int``s they are pinned to), used *during* analysis.  A concrete ``int``
 is always the class representative, so resolving a variable is a ``find``
@@ -124,7 +124,7 @@ class TupleSize:
     elts: tuple['ArraySizeBound', ...]
 
 
-ArraySizeBound: TypeAlias = 'None | ListSize | TupleSize'
+type ArraySizeBound = None | ListSize | TupleSize
 """
 Inferred array-size info for an expression or variable definition.
 
@@ -214,9 +214,9 @@ def static_trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> int | None:
 #####################################################################
 # Internal analysis visitor
 
-_CalleeSignature: TypeAlias = 'tuple[FuncDef, tuple[ArraySizeBound, ...]]'
+type _CalleeSignature = tuple[FuncDef, tuple[ArraySizeBound, ...]]
 
-_Affine: TypeAlias = 'tuple[Expr | None, int, int]'
+type _Affine = tuple[Expr | None, int, int]
 """``(base, scale, offset)``, standing for ``base * scale + offset``."""
 
 
@@ -824,10 +824,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
         """Whether *e* is provably an integer: an integral constant, a size
         query, a ``range`` target, or :meth:`_is_int_op` arithmetic."""
         val = self._get_eval(e)
-        if isinstance(val, Float):
+        if isinstance(val, Float | Fraction):
             return val.is_integer()
-        if isinstance(val, Fraction):
-            return val.denominator == 1
         e = self.def_use.defining_expr(e)
         match e:
             case Len() | Dim() | Size():
@@ -1046,7 +1044,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 for arg in test.args:
                     self._seed_from_assert(arg)
             case Compare():
-                for op, lhs, rhs in zip(test.ops, test.args, test.args[1:]):
+                for op, (lhs, rhs) in zip(test.ops, pairwise(test.args)):
                     if op == CompareOp.EQ:
                         self._relate_sizes(self._len_size(lhs), self._len_size(rhs))
             case _:

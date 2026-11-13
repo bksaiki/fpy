@@ -16,8 +16,6 @@ emitter consumes it as an opaque :class:`ScalarOpTable`, so future
 targets can swap in a different table without changing the emitter.
 """
 
-from __future__ import annotations
-
 from functools import cache
 
 from ...ast.fpyast import (

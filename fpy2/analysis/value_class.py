@@ -69,7 +69,6 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -160,7 +159,7 @@ class ListClass:
     elt: 'ClassBound'
 
 
-ClassBound: TypeAlias = 'ValueClass | TupleClass | ListClass | None'
+type ClassBound = ValueClass | TupleClass | ListClass | None
 """A class shaped like the value it describes, mirroring
 :data:`~fpy2.analysis.format_infer.FormatBound`.
 
@@ -408,7 +407,7 @@ def _exact_select(args: list[ValueClass], *, is_max: bool) -> ValueClass:
     return out
 
 
-_ElementKey: TypeAlias = 'Region | Definition'
+type _ElementKey = Region | Definition
 """What a fact about every element of a list is kept under: its region, where
 that abstracts one list, else the definition naming it, which is one list
 wherever it is read.  Either lasts until a store into the region."""
@@ -552,7 +551,7 @@ class ValueClassAnalysis:
 #####################################################################
 # Analysis
 
-_CalleePre: TypeAlias = tuple[
+type _CalleePre = tuple[
     TypeAnalysis, ContextUseAnalysis, AliasAnalysis, ReachabilityAnalysis
 ]
 

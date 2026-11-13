@@ -3,7 +3,7 @@ FPy parsing from FPCore.
 """
 
 from itertools import combinations
-from typing import Any, TypeAlias
+from typing import Any
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
@@ -14,7 +14,7 @@ from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
 
-DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
+type DataElt = tuple[DataElt] | fpc.ValueExpr
 
 # Lazy lookup tables to avoid expensive initialization at import time
 _constants_cache = None

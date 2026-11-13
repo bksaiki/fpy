@@ -2,13 +2,12 @@
 Definition analysis.
 """
 
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 
-_Defs: TypeAlias = set[NamedId]
-_DefMap: TypeAlias = dict[StmtBlock, _Defs]
+type _Defs = set[NamedId]
+type _DefMap = dict[StmtBlock, _Defs]
 
 __all__ = [
     'DefAnalysis',

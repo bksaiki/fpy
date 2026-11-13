@@ -1,6 +1,5 @@
 """Definition-use analysis for FPy ASTs"""
 
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -28,7 +27,7 @@ __all__ = [
     'UseSite',
 ]
 
-UseSite: TypeAlias = Var | IndexedAssign | Call
+type UseSite = Var | IndexedAssign | Call
 """AST nodes that can use variables"""
 
 @default_repr

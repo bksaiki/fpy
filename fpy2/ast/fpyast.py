@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, Self, TypeAlias
+from typing import Any, Self
 
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
@@ -451,7 +451,7 @@ class RationalVal(RealVal):
 
     def is_integer(self) -> bool:
         """Returns true if the represented value is an integer."""
-        return self.as_rational().denominator == 1
+        return self.as_rational().is_integer()
 
 
 class Decnum(RationalVal):
@@ -1853,7 +1853,7 @@ class FuncDef(Ast):
 ###########################################################
 # Type aliases
 
-FuncSymbol: TypeAlias = Var | Attribute
+type FuncSymbol = Var | Attribute
 """
 FPy function symbols have the recursive form
 

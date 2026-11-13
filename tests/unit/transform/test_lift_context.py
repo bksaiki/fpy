@@ -1,18 +1,13 @@
 """Unit tests for the :class:`fpy2.transform.LiftContext` transform."""
 
 
-from typing import TypeVar
-
 import fpy2 as fp
-
 from fpy2.ast import Assign, ContextStmt, ForStmt, FuncDef, Stmt, Var
 from fpy2.transform import LiftContext
 from fpy2.transform.path import walk_stmts
 
-_S = TypeVar('_S', bound=Stmt)
 
-
-def _find_stmt(ast: FuncDef, node_type: type[_S]) -> _S:
+def _find_stmt[S: Stmt](ast: FuncDef, node_type: type[S]) -> S:
     """The first statement of *node_type* in *ast*."""
     return next(s for _, s in walk_stmts(ast) if isinstance(s, node_type))
 

@@ -36,7 +36,6 @@ the context in which the function is called (this is usually a variable).
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import TypeAlias
 
 from .number import Context
 from .number.context.format import Format
@@ -57,7 +56,7 @@ __all__ = [
 ]
 
 
-ContextParam: TypeAlias = NamedId | Context
+type ContextParam = NamedId | Context
 """context parameter: either a context variable or a concrete context"""
 
 
@@ -399,5 +398,5 @@ class FunctionType(Type):
         return FunctionType(ctx, arg_types, return_type)
 
 
-ScalarType: TypeAlias = BoolType | RealType | ContextType
+type ScalarType = BoolType | RealType | ContextType
 """Scalar types"""

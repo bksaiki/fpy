@@ -14,11 +14,8 @@ around ``with`` blocks.  ``CppEmitter._dispatch`` documents how a signature is
 chosen when nothing matches exactly.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import enum
-from typing import TypeAlias
 
 from ...ast.fpyast import Expr
 from ...number.context.context import Context
@@ -79,9 +76,9 @@ class CppOp:
         return out
 
 
-UnaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
-BinaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
-TernaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
+type UnaryOpTable = dict[type[Expr], list[CppOp]]
+type BinaryOpTable = dict[type[Expr], list[CppOp]]
+type TernaryOpTable = dict[type[Expr], list[CppOp]]
 
 
 @dataclasses.dataclass

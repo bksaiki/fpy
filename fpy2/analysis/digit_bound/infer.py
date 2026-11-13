@@ -19,7 +19,7 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 import math
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Protocol
 
 from ...ast.accessors import subblocks, subexprs
 from ...ast.fpyast import *
@@ -59,7 +59,7 @@ __all__ = [
     'Terms',
 ]
 
-_Operand: TypeAlias = int | Definition
+type _Operand = int | Definition
 """A range operand's identity: a literal by its value, a variable by its
 definition."""
 
@@ -115,7 +115,7 @@ class _Apart:
     n: int
 
 
-_IndexKey: TypeAlias = _Range | _Elts | _Witness | _Last | _Read | _Apart
+type _IndexKey = _Range | _Elts | _Witness | _Last | _Read | _Apart
 """An index set a copy is taken over."""
 
 

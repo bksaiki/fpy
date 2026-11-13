@@ -1,6 +1,6 @@
 """Pulling an invariant factor out of a reduction."""
 
-from typing import NamedTuple, TypeAlias
+from typing import NamedTuple
 
 from ..analysis import (
     ArraySizeAnalysis,
@@ -25,7 +25,7 @@ from .hoist_invariant import _from_before, _Nodes, _own_exprs
 from .path import walk_blocks
 from .utils import RoundingScopes, SiteRewriter, check_where
 
-_Reduction: TypeAlias = 'Sum | AMax | AMin'
+type _Reduction = Sum | AMax | AMin
 """The reductions this rewrite knows."""
 
 

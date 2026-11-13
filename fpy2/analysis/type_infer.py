@@ -5,6 +5,7 @@ Type checking for FPy programs.
 from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
+from itertools import pairwise
 from typing import cast
 
 from ..ast import *
@@ -523,12 +524,12 @@ class _TypeInferInstance(Visitor):
         # Equality unifies the operands; ordering pins both to real.  Applied
         # per operator, so a chain may mix the two.
         tys = [self._visit_expr(arg, None) for arg in e.args]
-        for i, op in enumerate(e.ops):
+        for op, (lhs, rhs) in zip(e.ops, pairwise(tys)):
             if op is CompareOp.EQ or op is CompareOp.NE:
-                self._unify(tys[i], tys[i + 1])
+                self._unify(lhs, rhs)
             else:
-                self._unify(tys[i], RealType(None))
-                self._unify(tys[i + 1], RealType(None))
+                self._unify(lhs, RealType(None))
+                self._unify(rhs, RealType(None))
         return BoolType()
 
     def _visit_call(self, e: Call, ctx: None) -> Type:

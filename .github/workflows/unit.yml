@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install
         run: uv sync --locked
       - name: Check
@@ -72,7 +72,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install
         run: uv sync --locked
       - name: Lint
@@ -91,7 +91,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install
         run: uv sync --locked
       - name: Unit Tests
@@ -110,7 +110,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install
         run: uv sync --locked
       - name: Unit Tests
@@ -129,7 +129,7 @@ jobs:
   #     - uses: astral-sh/setup-uv@v5
   #       with:
   #         enable-cache: true
-  #         python-version: "3.11"
+  #         python-version: "3.12"
   #     - name: Install
   #       run: uv sync --locked
   #     - name: Compilation tests
@@ -148,7 +148,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install
         run: uv sync --locked
       - name: Tests (C++)
@@ -171,7 +171,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install
         run: uv sync --locked
       - name: Install local dependencies
