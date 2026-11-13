@@ -10,6 +10,7 @@ import mmasim_matmul
 import pytest
 import torch
 from core import kernels, quant, swap
+from mmasim.arithmetic import fma
 
 import fpy2 as fp
 
@@ -46,6 +47,9 @@ def _moderate(op: quant.Operand, rows: int, k: int, g: torch.Generator) -> quant
     if fmt == fp.MX_E2M1:
         e = _E2M1.cuda()[torch.randint(8, (rows, k), generator=g, device='cuda')]
         e = e * torch.where(torch.rand(rows, k, generator=g, device='cuda') < 0.5, -1.0, 1.0)
+    elif fmt in quant._SUBBYTE:   # FP6: no torch dtype
+        top = float(fmt.maxval())
+        e = quant._subbyte(_values(rows, k, g=g, top=2).clamp(-top, top), fmt)
     else:
         e = _values(rows, k, g=g, top=2).to(quant.DTYPES[fmt]).float()
     return quant.Quantized(op, e, torch.ones(rows, 1, device='cuda'))
@@ -139,22 +143,25 @@ def test_release_drops_every_held_weight():
     assert run._input is None
 
 
-@pytest.mark.parametrize('design', ['nv.hopper.bf16.f32', 'nv.hopper.tf32.f32', 'amd.cdna3.bf16',
-                                    'amd.cdna3.fp8', 'amd.cdna2.bf16', 'fp32 (fma)', 'nv.blackwell.mx.e4m3',
-                                    'nv.blackwell.nvfp4'])
+@pytest.mark.parametrize('design', mmasim_matmul.DESIGNS)
 def test_tuned_is_bit_for_bit(design: str, compiled: None):
-    """Tuned (no host waits; replaying, a CUDA graph per call shape) gives
-    MMA-Sim's own bits, and each replay its own operands'."""
+    """Tuned (no host waits, compiled, BF16 in FP32) gives MMA-Sim's own bits."""
     released = [_both(design, 3, 16, 1024, seed)[0] for seed in (0, 1)]
     mmasim_matmul.tune()
     try:
-        eager = _both(design, 3, 16, 1024, 0)[0]
-        assert not mmasim_matmul._GRAPHS   # no graph outside `replaying`
-        with mmasim_matmul.replaying():
-            tuned = [_both(design, 3, 16, 1024, seed)[0] for seed in (0, 1)]
-        assert len(mmasim_matmul._GRAPHS) == 1   # one shape, captured once
+        tuned = [_both(design, 3, 16, 1024, seed)[0] for seed in (0, 1)]
     finally:
         mmasim_matmul.tune(False)
-    assert bool(mmasim_matmul.same(eager, released[0]).all())
     assert all(bool(mmasim_matmul.same(t, r).all()) for t, r in zip(tuned, released, strict=True))
     assert not bool(mmasim_matmul.same(*released).all())
+
+
+def test_same_equates_signed_zeros_and_nans():
+    y = torch.tensor([0.0, float('nan'), 1.0], dtype=torch.float16)
+    z = torch.tensor([-0.0, -float('nan'), -1.0], dtype=torch.float16)
+    assert mmasim_matmul.same(y, z).tolist() == [True, True, False]
+
+
+def test_fma_keeps_subnormals():
+    x = torch.tensor([2.0 ** -70], device='cuda')
+    assert fma.fma(x, x, torch.zeros_like(x)).item() == 2.0 ** -140

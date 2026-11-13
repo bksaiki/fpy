@@ -7,7 +7,7 @@ The report from hand-written results.
 import json
 import math
 
-from report import VENDORS, Row, load, main, slacks, table, tightness
+from report import VENDORS, Row, load, main, paper_latex, slacks, table, tightness
 
 
 def _p(digits, lsb, msb, mag):
@@ -49,6 +49,13 @@ def test_tightness_is_observed_over_allowed():
     # an unbounded quantum covers none of it
     volta = (2, {'digits': (1 + 23 / 24) / 2, 'lsb': 0.5, 'mag': (1 + 2 ** -10) / 2})
     assert tightness([_VOLTA, _FMA]) == [('Volta', *volta), ('Total', *volta)]
+
+
+def test_paper_table_has_a_column_per_architecture():
+    tex = paper_latex(table([_VOLTA, _FMA]), tightness([_VOLTA, _FMA]))
+    assert ' & Volta & FMA & Total \\\\' in tex
+    assert 'Assignments & 3 & 1 & 4 \\\\' in tex
+    assert "$p' / p$ & 98\\% & -- & 98\\% \\\\" in tex   # FMA's site never ran
 
 
 def test_writes_tables_and_figure(tmp_path):

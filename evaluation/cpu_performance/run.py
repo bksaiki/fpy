@@ -5,7 +5,8 @@ by `torch.ops.fpy2_models.<op>` and by MMA-Sim's `dpa` tuned (`no_sync`'s
 arithmetic under `torch.compile`).  Each operator is first checked to give the
 same bits on a repeat call, on one thread or many, and batched or one row at a
 time; every configuration, both FPy and tuned MMA-Sim, to agree with MMA-Sim
-as released bit for bit.
+as released bit for bit.  At the largest batch and length, MMA-Sim as released
+is timed too (`config.CPU_PERF_RELEASED`), for tuning's speedup over it.
 
     python evaluation/cpu_performance/run.py                # every design
     python evaluation/cpu_performance/run.py --smoke        # one batch and length, briefly
@@ -176,6 +177,8 @@ def main(argv: list[str]) -> int:
         # each timed once per replicate, in a shuffled order so that none is
         # always first
         order = [('fpy', p.fpy), ('mmasim-tuned', p.tuned)]
+        if config.CPU_PERF_RELEASED and (batch, length) == (max(args.batches), max(args.lengths)):
+            order.append((report.RELEASED, p.mmasim))
         for rep in range(replicates):
             rng.shuffle(order)
             for impl, fn in order:
@@ -197,7 +200,7 @@ def main(argv: list[str]) -> int:
         'threads': threads, 'replicates': replicates, 'min_run_time': min_run_time,
         'distribution': cs.DISTRIBUTIONS[config.CPU_PERF_DISTRIBUTION], 'seed': config.CPU_PERF_SEED,
         'designs': args.designs, 'batches': args.batches, 'lengths': args.lengths,
-        'smoke': args.smoke,
+        'smoke': args.smoke, 'released': config.CPU_PERF_RELEASED,
         'elapsed_seconds': time.monotonic() - started, 'invalid_configurations': invalid})
     if invalid:
         print(f'{invalid} configurations disagree with MMA-Sim: no summary.csv', flush=True)

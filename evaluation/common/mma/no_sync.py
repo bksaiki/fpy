@@ -4,17 +4,22 @@ synchronizations, for the tuned MMA-Sim baselines (`gsm8k/mmasim_matmul.tune`,
 `cpu_performance`).  Each function is MMA-Sim's own, line for line, with its
 data-dependent Python branch (`pow2`) and its boolean-mask updates
 (`x[mask] = ...`, which count the mask on the host) replaced by `torch.where`;
-the results are bit for bit MMA-Sim's.  :func:`install` patches them into the
-module, where MMA-Sim's operations look them up.
+the results are bit for bit MMA-Sim's.  MMA-Sim's FMA chain (`MMA_FMA.dpa`, an
+`fma` per product) runs as one kernel per call, the same `fma`s in the same
+order (:func:`fma_dpa`).  :func:`install` patches them into the module, where
+MMA-Sim's operations look them up.
 
 Adapted from MMA-Sim (https://github.com/microsoft/MMA-Sim),
 Copyright (c) Microsoft Corporation, under the MIT License.
 """
 
+import functools
+
 import torch
-from mmasim.arithmetic import fdpa, fma
+from mmasim.arithmetic import fdpa, fma, ftz_mul_add
 from mmasim.arithmetic.helper import dtype_subnormal_exponent
 from torch._inductor import lowering
+from torch.utils.cpp_extension import load_inline
 
 _ORIGINAL = {n: getattr(fdpa, n) for n in ('pow2', 'frexp_and_normalize', 'ldexp_and_normalize', 't_fdpa',
                                            'st_fdpa', 'gst_fdpa', 'tr_fdpa', 'gtr_fdpa')}
@@ -158,10 +163,105 @@ def gtr_fdpa(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, F: int, F2: int,
     return ldexp_and_normalize(s_dot, e_max, rho)
 
 
+def ftz_mul(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    # MMA-Sim's, without its FP16/BF16-only assert: BF16 values held in FP32
+    # flush below the same 2^-126, so give the same results
+    assert x.dtype == y.dtype
+    x = ftz_mul_add.flush_subnormal(x, keep_sign=False)
+    y = ftz_mul_add.flush_subnormal(y, keep_sign=False)
+    return ftz_mul_add.flush_subnormal(x.float() * y.float(), keep_sign=True)
+
+
+_CHAIN_CPU = r"""
+#include <torch/extension.h>
+#include <cmath>
+
+template <typename T>
+static void chain(const T *a, const T *b, T *o, int64_t M, int64_t N, int64_t K,
+                  const int64_t *sa, const int64_t *sb) {
+#pragma omp parallel for collapse(2) if (M * N > 1024)
+    for (int64_t m = 0; m < M; ++m)
+        for (int64_t n = 0; n < N; ++n) {
+            T acc = o[m * N + n];
+            for (int64_t k = 0; k < K; ++k)
+                acc = std::fma(a[m * sa[0] + n * sa[1] + k * sa[2]],
+                               b[m * sb[0] + n * sb[1] + k * sb[2]], acc);
+            o[m * N + n] = acc;
+        }
+}
+
+torch::Tensor fma_chain(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
+    auto o = c.clone();
+    auto sa = a.strides(), sb = b.strides();
+    AT_DISPATCH_FLOATING_TYPES(a.scalar_type(), "fma_chain", [&] {
+        chain<scalar_t>(a.data_ptr<scalar_t>(), b.data_ptr<scalar_t>(), o.data_ptr<scalar_t>(),
+                        a.size(0), a.size(1), a.size(2), sa.data(), sb.data());
+    });
+    return o;
+}
+"""
+
+
+@functools.cache
+def _chain_cpu():
+    return load_inline('fpy_eval_fma_chain', _CHAIN_CPU, functions=['fma_chain'],
+                       extra_cflags=['-O3', '-fopenmp'], extra_ldflags=['-fopenmp'])
+
+
+if torch.cuda.is_available():
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def _chain_gpu(a, b, c, o, M, N, K, sa0, sa1, sa2, sb0, sb1, sb2, BLOCK: tl.constexpr):
+        p = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+        mask = p < M * N
+        m, n = p // N, p % N
+        acc = tl.load(c + p, mask=mask)
+        for k in range(K):
+            x = tl.load(a + m * sa0 + n * sa1 + k * sa2, mask=mask)
+            y = tl.load(b + m * sb0 + n * sb1 + k * sb2, mask=mask)
+            # `tl.fma` (the hardware FMA, IEEE subnormals), not libdevice's,
+            # which Triton flushes by default
+            acc = tl.fma(x, y, acc)
+        tl.store(o + p, acc, mask=mask)
+
+
+def _broadcast(a: torch.Tensor, b: torch.Tensor,
+               c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """*a* and *b* `[..., K]` broadcast to *c*'s shape, all three with one
+    leading dimension if *c* is `[batch]`; *c* contiguous."""
+    a, b = (x.expand(*c.shape, x.shape[-1]) for x in (a, b))
+    if c.dim() == 1:
+        a, b, c = a[None], b[None], c[None]
+    return a, b, c.contiguous()
+
+
+@torch.compiler.disable
+def _fma_dpa_cpu(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    return _chain_cpu().fma_chain(*_broadcast(a, b, c)).view(c.shape)
+
+
+def fma_dpa(self: fma.MMA_FMA, a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    """`MMA_FMA.dpa` as one kernel: `c = fma(a[..., i], b[..., i], c)` for each
+    `i` in order, for *a* and *b* `[..., K]` (broadcast to *c*'s shape) and
+    *c* `[m, n]` or `[batch]`.  On the GPU, a Triton kernel `torch.compile`
+    compiles into its graph; on the CPU, C++ that Dynamo does not trace."""
+    if not c.is_cuda:
+        return _fma_dpa_cpu(a, b, c)
+    shape = c.shape
+    a, b, c = _broadcast(a, b, c)
+    o = torch.empty_like(c)
+    m, n, k = a.shape
+    torch.library.wrap_triton(_chain_gpu)[(triton.cdiv(m * n, 256),)](
+        a, b, c, o, m, n, k, *a.stride(), *b.stride(), BLOCK=256)
+    return o.view(shape)
+
+
+_FMA_DPA = fma.MMA_FMA.dpa
+
 _PATCHED = {n: globals()[n] for n in _ORIGINAL}
-_FMA_CPU = fma.fma_cpu
-# one wrapper, so that reinstalling does not fail Dynamo's guard on `fma_cpu`
-_FMA_CPU_UNCOMPILED = torch.compiler.disable(_FMA_CPU)
+_FTZ_MUL = ftz_mul_add.ftz_mul
 _FREXP_LOWERINGS = {o: lowering.lowerings[o] for o in torch.ops.aten.frexp.op_overloads()
                     if o in lowering.lowerings}
 
@@ -169,12 +269,11 @@ _FREXP_LOWERINGS = {o: lowering.lowerings[o] for o in torch.ops.aten.frexp.op_ov
 def install(on: bool = True) -> None:
     """Patch MMA-Sim's arithmetic with these, and make it compile under
     `torch.compile` (or restore its own).  Inductor's vectorized CPU `frexp`
-    of FP64 does not compile, so `aten.frexp` falls back to ATen; Dynamo
-    passes stale pointers to MMA-Sim's ctypes FMA (`fma_cpu`), so it runs
-    uncompiled."""
+    of FP64 does not compile, so `aten.frexp` falls back to ATen."""
     for n, f in (_PATCHED if on else _ORIGINAL).items():
         setattr(fdpa, n, f)
-    fma.fma_cpu = _FMA_CPU_UNCOMPILED if on else _FMA_CPU
+    ftz_mul_add.ftz_mul = ftz_mul if on else _FTZ_MUL
+    fma.MMA_FMA.dpa = fma_dpa if on else _FMA_DPA
     if on:
         lowering.make_fallback(torch.ops.aten.frexp)
     else:

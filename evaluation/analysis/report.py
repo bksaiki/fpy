@@ -6,6 +6,9 @@ The precision evaluation's tables, figure and summary, from `run.py`'s results;
 
 Writes into the results directory:
 
+- `precision-table.tex`: the paper's Table 1, a column per architecture: the
+  designs, sites and sites bounded only by R* from format inference, then
+  each parameter's mean tightness;
 - `precision-tops.tex`: sites bounded only by R*, per architecture, without
   and with digit bounds;
 - `precision-tightness.tex`: the fraction of each inferred format's
@@ -32,6 +35,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from observe import SLACK, Analysis
 
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from common.plot import ACCENT, LARGE, ROW, save, tidy
+
 ARCHS = {
     'volta': 'Volta', 'turing': 'Turing', 'ampere': 'Ampere', 'ada': 'Ada',
     'hopper': 'Hopper', 'blackwell': 'Blackwell', 'rtx_blackwell': 'Blackwell',
@@ -52,8 +59,6 @@ that is not a power of two."""
 BINS = 8
 """Slacks of this many bits or more share the last bin."""
 
-BLUE, INK, MUTED, GRID = '#2a78d6', '#1f1f1e', '#6b6a64', '#e4e3dc'
-LARGE, SMALL = {'fontsize': 14, 'color': INK}, {'fontsize': 12, 'color': MUTED}
 
 
 @dataclass
@@ -182,31 +187,49 @@ def tightness_latex(rows: list[tuple[str, int, dict[str, float]]]) -> str:
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 
+PAPER = {'digits': "$p' / p$", 'lsb': "$2^{exp} / 2^{exp'}$", 'mag': "$b' / b$"}
+"""Each parameter's row in the paper's table."""
+
+
+def paper_latex(rows: list[Row], tight: list[tuple[str, int, dict[str, float]]]) -> str:
+    """The paper's Table 1 from `table`'s *rows* and `tightness`' *tight*:
+    a column per architecture, then the total, set apart (`\\R` is the
+    paper's macro for the reals)."""
+    means = {label: m for label, _, m in tight}
+
+    def pct(label: str, c: str) -> str:
+        return f'{100 * means[label][c]:.0f}\\%' if label in means else '--'
+
+    body = [('Designs', [str(r.designs) for r in rows]), ('Assignments', [str(r.sites) for r in rows]),
+            (r'Only $\R^*$ (FI)', [str(r.top_format) for r in rows]),
+            *((head, [pct(r.label, c) for r in rows]) for c, head in PAPER.items())]
+    heads = ['FMA' if r.label == 'FMA chain' else r.label for r in rows]
+    return '\n'.join([
+        r'\begin{tabular}{@{}l*{' + str(len(rows) - 1) + r'}{r}@{\hspace{1em}}r@{}}', r'\toprule',
+        ' & ' + ' & '.join(heads) + r' \\', r'\midrule',
+        *(f'{head} & {" & ".join(cells)} \\\\' for head, cells in body),
+        r'\bottomrule', r'\end{tabular}', ''])
+
+
 def _bin(v: float) -> int:
     """Bin 0 holds exact bounds, bin k slacks in (k - 1, k] bits."""
     return BINS if math.isinf(v) else min(math.ceil(v), BINS)
 
 
 def figure(data: dict[str, list[int | float]], out: Path) -> None:
-    fig, axes = plt.subplots(1, len(DIMENSIONS), figsize=(4 * len(DIMENSIONS), 3.4),
-                             sharey=True, layout='constrained')
+    fig, axes = plt.subplots(1, len(DIMENSIONS), figsize=ROW, sharey=True, layout='constrained')
     labels = [str(b) for b in range(BINS)] + [f'≥{BINS}']
     for ax, (d, title) in zip(axes, DIMENSIONS.items(), strict=True):
         counts = [0] * (BINS + 1)
         for v in data[d]:
             counts[_bin(v)] += 1
-        ax.bar(range(BINS + 1), counts, width=0.8, color=BLUE, zorder=2)
+        ax.bar(range(BINS + 1), counts, width=0.8, color=ACCENT, zorder=2)
         ax.set_title(title, loc='left', **LARGE)
         ax.set_xticks(range(BINS + 1), labels)
         ax.set_xlabel('slack (bits)', **LARGE)
-        ax.tick_params(colors=SMALL['color'], labelsize=SMALL['fontsize'])
-        ax.grid(axis='y', color=GRID, linewidth=0.8, zorder=0)
-        for side in ('top', 'right'):
-            ax.spines[side].set_visible(False)
+        tidy(ax)
     axes[0].set_ylabel('sites', **LARGE)
-    for ext in ('.pdf', '.png'):
-        fig.savefig(out.with_suffix(ext), dpi=200)
-    plt.close(fig)
+    save(fig, out)
 
 
 def _excluded(records: list[dict[str, Any]]) -> dict[str, int]:
@@ -317,6 +340,7 @@ def main(argv: list[str]) -> int:
     if not records:
         ap.error(f'no results in {out}')
     anf, _ = load(out / 'anf')
+    (out / 'precision-table.tex').write_text(paper_latex(table(records), tightness(records)))
     for suffix, groups in (('', ARCHS), ('-vendor', VENDORS)):
         (out / f'precision-tops{suffix}.tex').write_text(latex(table(records, groups)))
         (out / f'precision-tightness{suffix}.tex').write_text(

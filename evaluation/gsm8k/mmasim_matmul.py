@@ -5,17 +5,18 @@ as `examples/mmasim/tests` builds them.
 """
 
 import gc
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import generator
 import no_sync
 import torch
+import triton
 from core import kernels, quant, swap
 from generator.catalog import CATALOG
 from mmasim import MMABlockScaleOperation, MMAOperation
 from mmasim.arithmetic import fdpa, fma, ftz_mul_add
+from torch._inductor import compile_fx, graph
 
 import fpy2 as fp
 
@@ -28,9 +29,13 @@ DESIGNS = tuple(d for d in CATALOG if d not in REFUSED)
 PREFIX = 'mmasim:'
 
 EAGER_BUDGET = 3 << 30
-"""Bytes of intermediates (:func:`_bytes`) one MMA-Sim call without a graph
-may hold: fixed, so a call splits the same however much memory is free.
+"""Bytes of intermediates (:func:`_bytes`) one MMA-Sim call may hold: fixed,
+so a call splits the same however much memory is free.
 Every decode layer but `lm_head` fits in one block."""
+
+CALL = 64
+"""Products per tuned MMA-Sim call, for every design: the fewest that are a
+whole number of every design's FPy calls (`k`)."""
 
 _BUDGET: int | None = None
 """Bytes per call instead, if set (tests)."""
@@ -38,57 +43,51 @@ _BUDGET: int | None = None
 TUNED = False
 """Whether MMA-Sim is the tuned baseline (:func:`tune`)."""
 
-_REPLAYING = False
-"""Whether calls replay their shape's graph (:func:`replaying`)."""
+_COMPILED: dict[str, Callable[..., torch.Tensor]] = {}
+"""Each design's instruction (:func:`_step`), compiled (tuned)."""
 
-_GRAPHS: dict[tuple, tuple[torch.cuda.CUDAGraph, list[torch.Tensor], torch.Tensor]] = {}
-"""Each call shape's captured graph, its input buffers, and its output."""
+torch._dynamo.config.recompile_limit = 64
+torch._dynamo.config.fail_on_recompile_limit_hit = True   # never fall back to eager unseen
+# compiled kernels round as eager does: no FMA contraction, flush to zero, or approximate division
+torch._inductor.config.emulate_precision_casts = True
+torch._inductor.config.eager_numerics.division_rounding = True
+torch._inductor.config.eager_numerics.disable_ftz = True
+# compile for any input alignment: assuming the first call's, Inductor copies each later
+# misaligned slice's whole strided extent (for `w.T[t:t + L]`, the weight block)
+compile_fx.should_assume_input_aligned = graph.should_assume_input_aligned = lambda _: False
 
-GRAPH_LIMIT = 2 << 30
-"""A call shape gets a graph only if its intermediates (:func:`_bytes`) fit
-in this: a graph keeps them reserved, out of the model's reach."""
 
-GRAPHLESS: set[tuple] = set()
-"""The call shapes without a graph, over :data:`GRAPH_LIMIT` or out of
-memory capturing: these run without one (still without host waits)."""
+def _fma_gpu(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    """MMA-Sim's `fma_gpu`, but IEEE: Triton's libdevice flushes FP32
+    subnormals by default, MMA-Sim's CPU FMA does not."""
+    a, b, c = a.contiguous(), b.contiguous(), c.contiguous()
+    out = torch.empty_like(a)
+    n = a.numel()
+    fma.fma_gpu_kernel[lambda meta: (triton.cdiv(n, meta['BLOCK']),)](
+        a, b, c, out, n, BLOCK=1024, enable_reflect_ftz=False)
+    return out
 
-_POOL: tuple | None = None
-"""The memory pool every graph shares: they never run at once, and each
-output is copied out of it."""
+
+fma.fma_gpu = _fma_gpu   # released and tuned alike
 
 
 def tune(on: bool = True) -> None:
     """Make MMA-Sim the tuned baseline, or as released: tuned, its
-    arithmetic never waits for the GPU (`no_sync`), and in decode
-    (:func:`replaying`) each call shape is captured once as a CUDA graph and
-    replayed, as LLM servers do.  Bit for bit the same."""
+    arithmetic never waits for the GPU (`no_sync`) and runs under
+    `torch.compile`, BF16 operands held in FP32 (Inductor compiles no BF16
+    before Ampere; MMA-Sim treats both alike).  Bit for bit the same."""
     global TUNED
     no_sync.install(on)
     TUNED = on
-    GRAPHLESS.clear()
-    release_graphs()
+    release_compiled()
 
 
-@contextmanager
-def replaying() -> Iterator[None]:
-    """Within, a tuned MMA-Sim replays each call shape's graph, captured on
-    first use: for decode, whose shapes repeat every step.  A graph holds
-    60-440 MiB beyond PyTorch's allocator, so prefill's one-off shapes run
-    without one."""
-    global _REPLAYING
-    old, _REPLAYING = _REPLAYING, True
-    try:
-        yield
-    finally:
-        _REPLAYING = old
+def release_compiled() -> None:
+    """Drop every compiled call: per design, as each adds to Dynamo's
+    recompile count."""
+    _COMPILED.clear()
+    torch._dynamo.reset()
 
-
-def release_graphs() -> None:
-    """Drop every captured graph and its memory."""
-    global _POOL
-    _GRAPHS.clear()
-    _POOL = None
-    torch.cuda.empty_cache()
 
 _RHO = {(32, fp.RM.RTZ): 'RZ-FP32', (22, fp.RM.RTZ): 'RZ-E8M13', (32, fp.RM.RNE): 'RNE-FP32',
         (16, fp.RM.RNE): 'RNE-FP16'}
@@ -169,113 +168,99 @@ def _operands(scheme: quant.Scheme, qa: quant.Quantized,
     """A call's operands, then any block scales, and the dtypes MMA-Sim takes
     them in."""
     ins = [qa.elements, qw.elements]
-    dtypes = [DTYPES[scheme.x.elements], DTYPES[scheme.w.elements]]
+    dtypes = [_dtype(scheme.x.elements), _dtype(scheme.w.elements)]
     if scheme.applied == 'instruction':
         ins += [qa.scales, qw.scales]
         dtypes += [DTYPES[scheme.x.scaling.fmt]] * 2
     return ins, dtypes
 
 
-def _key(design: str, ins: list[torch.Tensor], dtypes: list[torch.dtype]) -> tuple:
-    return (design, *((tuple(x.shape), str(d)) for x, d in zip(ins, dtypes, strict=True)))
-
-
-def graphed(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized) -> bool:
-    """Whether this call's shape has a captured graph now."""
-    return _key(design, *_operands(scheme, qa, qw)) in _GRAPHS
-
-
-def _replay(design: str, ins: list[torch.Tensor], dtypes: list[torch.dtype]) -> torch.Tensor:
-    """*design*'s call on *ins* (operands, then any scales) converted to
-    *dtypes*, by its shape's graph, captured on first use: the operands
-    copied in, the output copied out.  A shape whose graph does not fit runs
-    without one (:data:`GRAPHLESS`)."""
-    key = _key(design, ins, dtypes)
-    (m, k), n = ins[0].shape, ins[1].shape[0]
-    if m * n * _bytes(design, k) > GRAPH_LIMIT:
-        GRAPHLESS.add(key)
-    if key not in _GRAPHS and key not in GRAPHLESS:
-        try:
-            _GRAPHS[key] = _capture(design, ins, dtypes)
-        except (torch.OutOfMemoryError, torch.AcceleratorError) as ex:
-            if 'out of memory' not in str(ex):
-                raise
-            GRAPHLESS.add(key)   # the other graphs stay: dropping them re-captures each, mid-decode
-            torch.cuda.empty_cache()
-    if key in GRAPHLESS:
-        a, b, *scales = (x.to(d) for x, d in zip(ins, dtypes, strict=True))
-        return matmul(design, a, b, tuple(scales) or None)
-    graph, static, out = _GRAPHS[key]
-    for buf, x in zip(static, ins, strict=True):
-        buf.copy_(x)
-    graph.replay()
-    return out.clone()
-
-
-def _capture(design: str, ins: list[torch.Tensor],
-             dtypes: list[torch.dtype]) -> tuple[torch.cuda.CUDAGraph, list[torch.Tensor], torch.Tensor]:
-    """*design*'s call on buffers like *ins* in *dtypes*, run once on a side
-    stream, then captured: in one block, as a graphed call fits in
-    :data:`GRAPH_LIMIT`."""
-    global _POOL
-    static = [x.to(d) for x, d in zip(ins, dtypes, strict=True)]
-    scales = (static[2], static[3]) if len(static) == 4 else None
-    budget = _BUDGET or GRAPH_LIMIT
-    side = torch.cuda.Stream()
-    side.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(side):
-        _blocks(design, static[0], static[1], scales, budget)
-    torch.cuda.current_stream().wait_stream(side)
-    _POOL = _POOL or torch.cuda.graph_pool_handle()
-    graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph, pool=_POOL):
-        out = _blocks(design, static[0], static[1], scales, budget)
-    return graph, static, out
+def _dtype(fmt: fp.Context) -> torch.dtype:
+    d = DTYPES[fmt]
+    return torch.float32 if TUNED and d == torch.bfloat16 else d
 
 
 def _blocks(design: str, a: torch.Tensor, w: torch.Tensor,
             scales: tuple[torch.Tensor, torch.Tensor] | None, budget: int) -> torch.Tensor:
-    op = operation(design)
     (m, k), n = a.shape, w.shape[0]
-    per = _bytes(design, k)
+    # tuned, a call's steps run in turn, each holding its own intermediates
+    per = _bytes(design, CATALOG[design].L) if TUNED else _bytes(design, k)
     cols = min(n, max(1, budget // per))
     rows = min(m, max(1, budget // (cols * per)))
     sa, sw = scales or (None, None)
     if rows == m and cols == n:
-        return _call(op, design, a, w, sa, sw)
+        return _call(design, a, w, sa, sw)
     y = torch.empty(m, n, dtype=output(design), device=a.device)
     for i in range(0, m, rows):
         for j in range(0, n, cols):
-            y[i:i + rows, j:j + cols] = _call(op, design, a[i:i + rows], w[j:j + cols],
+            y[i:i + rows, j:j + cols] = _call(design, a[i:i + rows], w[j:j + cols],
                                               None if sa is None else sa[i:i + rows],
                                               None if sw is None else sw[j:j + cols])
     return y
 
 
-def _call(op: MMAOperation | MMABlockScaleOperation, design: str, a: torch.Tensor,
-          w: torch.Tensor, sa: torch.Tensor | None, sw: torch.Tensor | None) -> torch.Tensor:
+def _width(design: str) -> int:
+    """Products per MMA-Sim call: tuned, :data:`CALL`; as released (ST-FDPA's
+    instructions chained one scale at a time), the design's `k`."""
+    return CALL if TUNED else CATALOG[design].k
+
+
+def _chain(design: str) -> Callable[..., torch.Tensor]:
+    """*design*'s operation on one call's operands; ST-FDPA, which takes one
+    scale per call, an instruction (`k` products) at a time."""
+    op, k = operation(design), CATALOG[design].k
+    if not isinstance(op, fdpa.MMA_ST_FDPA):
+        return op.__call__
+
+    def chain(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, sa: torch.Tensor,
+              sb: torch.Tensor) -> torch.Tensor:
+        block = a.shape[1] // sa.shape[1]
+        for t in range(0, a.shape[1], k):
+            s = slice(t // block, (t + k) // block)
+            c = op(a[:, t:t + k], b[t:t + k], c, sa[:, s], sb[s])
+        return c
+    return chain
+
+
+def _step(design: str) -> Callable[..., torch.Tensor]:
+    """*design*'s operation on one call's operands (:func:`_chain`), compiled: for its
+    first shape, then for any `m` and `n` (Dynamo's automatic dynamic shapes;
+    `dynamic=True` would make the instruction's width symbolic too, which
+    miscompiles GTR-FDPA's even/odd split)."""
+    if design not in _COMPILED:
+        _COMPILED[design] = torch.compile(_chain(design))
+    return _COMPILED[design]
+
+
+def _call(design: str, a: torch.Tensor, w: torch.Tensor, sa: torch.Tensor | None,
+          sw: torch.Tensor | None) -> torch.Tensor:
+    """`a @ w.T` from `C = 0`, block scales *sa* `[m, k / b]` and *sw*
+    `[n, k / b]` if any: tuned, :func:`_width` products a call; as released,
+    in one call, but ST-FDPA's one scale per instruction chained here."""
+    op = operation(design)
     c = torch.zeros(a.shape[0], w.shape[0], dtype=output(design), device=a.device)
     b = w.T
-    if isinstance(op, fdpa.MMA_ST_FDPA):   # one scale per instruction, chained here
-        L = op.L_max
-        for t in range(0, a.shape[1], L):
-            j = t // L
-            c = op(a[:, t:t + L], b[t:t + L], c, sa[:, j:j + 1], sw[:, j:j + 1].T)
-        return c
-    if isinstance(op, fdpa.MMA_GST_FDPA):
-        return op(a, b, c, sa, sw.T)
-    return op(a, b, c)
+    if not TUNED and not isinstance(op, fdpa.MMA_ST_FDPA):
+        return op(a, b, c) if sa is None else op(a, b, c, sa, sw.T)
+    step = _step(design) if TUNED else op
+    k = a.shape[1]
+    L = min(k, _width(design))
+    block = None if sa is None else k // sa.shape[1]
+    for t in range(0, k, L):
+        if block is None:
+            c = step(a[:, t:t + L], b[t:t + L], c)
+        else:
+            s = slice(t // block, (t + L) // block)
+            c = step(a[:, t:t + L], b[t:t + L], c, sa[:, s], sw[:, s].T)
+    return c
 
 
 def accumulate(design: str, scheme: quant.Scheme, qa: quant.Quantized,
                qw: quant.Quantized) -> torch.Tensor:
     """`qa @ qw.T` by *design*'s MMA-Sim operation, as :func:`swap.accumulate`
     by its kernel: block scales applied by its instructions, *scheme*'s others
-    not yet.  The operands are converted to :data:`DTYPES` per call, not kept:
-    tuned and :func:`replaying`, by the copy into the graph's buffers."""
+    not yet.  The operands are converted to :data:`DTYPES` per call, not kept."""
     ins, dtypes = _operands(scheme, qa, qw)
-    if TUNED and _REPLAYING and qa.elements.is_cuda:
-        return _replay(design, ins, dtypes)
     a, b, *scales = (x.to(d) for x, d in zip(ins, dtypes, strict=True))
     return matmul(design, a, b, tuple(scales) or None)
 
@@ -305,17 +290,17 @@ class Run(swap.Run):
 
     def release(self) -> None:
         """Drop every weight held for a design (quantized, in the kernel's
-        storage) and the last input, its graphs, and return the GPU memory:
-        between designs, so they do not pile up."""
+        storage) and the last input, and return the GPU memory: between
+        designs, so they do not pile up."""
         self._weights.clear()
         self._prepared.clear()
         self._input = None
-        release_graphs()
+        release_compiled()
         gc.collect()
         torch.cuda.empty_cache()
 
     def drop_storage(self) -> None:
-        """Free the kernel's copies of the weights, for MMA-Sim's graphs; the
+        """Free the kernel's copies of the weights, for MMA-Sim's intermediates; the
         check converts the few it needs."""
         self._prepared.clear()
         torch.cuda.empty_cache()
@@ -329,7 +314,7 @@ class Run(swap.Run):
         storage = kernels.storage(design)[1]
         out = {'calls': 0, 'outputs': 0, 'differing': 0, 'finite': 0}
         for qa, qw, _, y in self.calls or []:
-            z = swap.accumulate(design, self.scheme, qa, qw, qw.elements.to(storage))   # uncached: room for graphs
+            z = swap.accumulate(design, self.scheme, qa, qw, qw.elements.to(storage))   # uncached: room for MMA-Sim
             out['calls'] += 1
             out['outputs'] += y.numel()
             out['differing'] += int((~same(y, z)).sum())
@@ -343,10 +328,12 @@ _BITS = {torch.float16: torch.int16, torch.float32: torch.int32, torch.float64: 
 
 
 def same(y: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-    """Where *y* and *z* are the same bits, or both NaN; of one dtype."""
+    """Where *y* and *z* are the same bits, both zero (FPy's semantics
+    leaves zero unsigned), or both NaN; of one dtype."""
     if y.dtype != z.dtype:
         raise ValueError(f'{y.dtype} and {z.dtype}')
-    return (y.view(_BITS[y.dtype]) == z.view(_BITS[z.dtype])) | (y.isnan() & z.isnan())
+    return ((y.view(_BITS[y.dtype]) == z.view(_BITS[z.dtype])) | ((y == 0) & (z == 0))
+            | (y.isnan() & z.isnan()))
 
 
 def _extend(run: swap.Run) -> Run:

@@ -10,22 +10,30 @@ Writes into the results directory:
 
 - `perf-cpu-speedup.{pdf,png}`: each design's speedup, ascending, colored by
   its hardware family;
+- `plots/perf-cpu-speedup-b<batch>-n<length>.{pdf,png}`: the same, at every
+  configuration measured;
 - `perf-cpu-speedup.tex`: each family's geometric mean, least and greatest
   speedup, and all designs';
+- `perf-cpu-tuning.tex`: the same for tuned MMA-Sim's speedup over MMA-Sim as
+  released, where `run.py` timed it;
 - `perf-cpu-macros.tex`: the paper's `EvalCPUPerf...` macros, for its
-  `eval.tex`: all designs' speedups, and the configuration they are at;
+  `eval.tex`: all designs' speedups, tuning's median speedup, and the
+  configuration they are at;
 
 and prints the per-design table.
 """
 
 import argparse
 import csv
-import math
-import os
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from common.plot import FAMILIES, family, geomean, speedup_figure
 
 PREFIX = 'perf-cpu-'
 """This report's outputs' prefix."""
@@ -33,29 +41,11 @@ PREFIX = 'perf-cpu-'
 BASELINE = 'mmasim-tuned'
 """The MMA-Sim implementation FPy is compared with."""
 
-FAMILIES = {
-    'Volta / Turing': '#2a78d6', 'Ampere': '#eb6834', 'Ada': '#1baf7a', 'Hopper': '#eda100',
-    'Blackwell': '#e87ba4', 'AMD CDNA3': '#b5b3ab', 'AMD CDNA2': '#7d7b75', 'FMA chain': '#3d3c3a',
-}
-"""Hardware families, in legend order, with their colors: each NVIDIA
-generation its own hue, oldest first (Volta and Turing sharing one, as do
-datacenter and RTX Blackwell); AMD's and the FMA chains, not compared across
-generations, grays."""
+RELEASED = 'mmasim-released'
+"""MMA-Sim as released, which tuning is compared with."""
 
 UNSTABLE = 0.10
 """A relative IQR above which a measurement is flagged."""
-
-
-def family(design: str) -> str:
-    """*design*'s hardware family, of `FAMILIES`."""
-    tokens = design.split('.')
-    if tokens[-1] == 'fma':
-        return 'FMA chain'
-    arch = tokens[1]
-    if arch in ('cdna2', 'cdna3'):
-        return f'AMD {arch.upper()}'
-    return {'volta': 'Volta / Turing', 'turing': 'Volta / Turing',
-            'rtx_blackwell': 'Blackwell'}.get(arch, arch.capitalize())
 
 
 def load(results: Path) -> list[dict[str, Any]]:
@@ -70,16 +60,22 @@ def load(results: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def speedups(rows: list[dict[str, Any]]) -> dict[tuple[str, int, int], float]:
-    """FPy's speedup over `BASELINE`, by (design, batch size, length)."""
+def speedups(rows: list[dict[str, Any]], impl: str = 'fpy',
+             base: str = BASELINE) -> dict[tuple[str, int, int], float]:
+    """*impl*'s speedup over *base*, by (design, batch size, length)."""
     rate = {(r['implementation'], r['design'], r['batch_size'], r['dot_length']): r['dots_per_second']
             for r in rows}
-    return {tuple(cfg): fpy / rate[BASELINE, *cfg] for (impl, *cfg), fpy in rate.items()
-            if impl == 'fpy' and (BASELINE, *cfg) in rate}
+    return {tuple(cfg): x / rate[base, *cfg] for (i, *cfg), x in rate.items()
+            if i == impl and (base, *cfg) in rate}
 
 
-def geomean(xs: list[float]) -> float:
-    return math.exp(sum(map(math.log, xs)) / len(xs))
+def headline(rows: list[dict[str, Any]], batch: int | None = None, length: int | None = None,
+             impl: str = 'fpy', base: str = BASELINE) -> dict[str, float]:
+    """Each design's speedup of *impl* over *base* at *batch* and *length*
+    (the largest of each by default)."""
+    batch = batch or max(r['batch_size'] for r in rows)
+    length = length or max(r['dot_length'] for r in rows)
+    return {d: x for (d, b, n), x in speedups(rows, impl, base).items() if (b, n) == (batch, length)}
 
 
 def table(values: dict[str, float]) -> list[dict[str, Any]]:
@@ -104,9 +100,10 @@ def latex(rows: list[dict[str, Any]]) -> str:
     return '\n'.join([*lines, r'\bottomrule', r'\end{tabular}', ''])
 
 
-def macros(values: dict[str, float], batch: int, length: int, threads: int) -> str:
+def macros(values: dict[str, float], batch: int, length: int, threads: int,
+           tuning: dict[str, float] | None = None) -> str:
     """The paper's macros for *values*' speedups, as `eval.tex` writes them,
-    rounded as `latex` rounds them."""
+    rounded as `latex` rounds them, and *tuning*'s median if given."""
     def cmd(name: str, value: str) -> str:
         return f'\\newcommand{{\\EvalCPUPerf{name}}}{{{value}\\xspace}}'
 
@@ -117,49 +114,12 @@ def macros(values: dict[str, float], batch: int, length: int, threads: int) -> s
         f'% on {threads} threads; least, greatest and geometric mean over {len(xs)} designs.',
         *(cmd(f'Speedup{k}', f'{x:.2f}$\\times$')
           for k, x in (('Min', min(xs)), ('Max', max(xs)), ('Mean', geomean(xs)))),
+        *([cmd('OptRatio', f'{statistics.median(tuning.values()):.2f}$\\times$')] if tuning else []),
         cmd('Designs', str(len(xs))),
         cmd('Batch', str(batch)),
         cmd('Length', str(length)),
         cmd('Threads', str(threads)),
         ''])
-
-
-def figure(values: dict[str, float], out: Path) -> None:
-    """`perf-cpu-speedup`: *values*' designs ascending, unnamed; the legend
-    names their families."""
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import FuncFormatter
-
-    order = sorted(values, key=values.get)
-    heights = [values[d] for d in order]
-    fig, ax = plt.subplots(figsize=(7.0, 2.3))
-    ax.bar(range(len(order)), heights, 0.9, color=[FAMILIES[family(d)] for d in order])
-    mean = geomean(heights)
-    ax.axhline(mean, color='black', linewidth=1.0, linestyle=':')
-    ax.annotate(f'geomean {mean:.2f}×', (0, mean), xycoords=ax.get_yaxis_transform(),
-                xytext=(3, 2), textcoords='offset points', fontsize=7)
-    ax.axhline(1.0, color='black', linewidth=0.8, linestyle='--')
-    ax.set_xlim(-0.6, len(order) - 0.4)
-    ax.set_xticks([])
-    ax.set_xlabel('Designs', fontsize=8)
-    ax.set_ylim(bottom=0)
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:g}×'))
-    ax.tick_params(axis='y', labelsize=7)
-    ax.set_ylabel('Speedup', fontsize=8)
-    ax.grid(True, axis='y', alpha=0.25)
-    ax.set_axisbelow(True)
-    ax.spines[['top', 'right']].set_visible(False)
-    shown = [f for f in FAMILIES if f in {family(d) for d in order}]
-    handles = [plt.Rectangle((0, 0), 1, 1, color=FAMILIES[f]) for f in shown]
-    # a grid of two rows, filled column by column
-    ax.legend(handles, shown, loc='upper left', ncol=math.ceil(len(shown) / 2), columnspacing=1.0,
-              frameon=False, fontsize=7, handlelength=1.4, handleheight=1.0)
-    fig.tight_layout(pad=0.2)
-    for ext in ('pdf', 'png'):
-        fig.savefig(out / f'{PREFIX}speedup.{ext}', dpi=300)
-    plt.close(fig)
 
 
 def summary(rows: list[dict[str, Any]], batch: int, length: int) -> str:
@@ -187,22 +147,27 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--batch', type=int, help='batch size reported (default: the largest)')
     ap.add_argument('--length', type=int, help='dot length reported (default: the longest)')
     args = ap.parse_args(argv)
-    os.environ.setdefault('MPLCONFIGDIR', str(Path(__file__).resolve().parents[1] / '.matplotlib'))
-
     rows = load(args.results)
     if not rows:
         sys.exit(f'{args.results / "summary.csv"} has no measurements')
     batch = args.batch or max(r['batch_size'] for r in rows)
     length = args.length or max(r['dot_length'] for r in rows)
-    ups = {d: x for (d, b, n), x in speedups(rows).items() if (b, n) == (batch, length)}
+    ups = headline(rows, batch, length)
     if not ups:
         sys.exit(f'no design was timed at batch={batch} length={length}')
-    figure(ups, args.results)
+    speedup_figure([ups], args.results / f'{PREFIX}speedup')
+    for b, n in sorted({(r['batch_size'], r['dot_length']) for r in rows}):
+        speedup_figure([headline(rows, b, n)], args.results / 'plots' / f'{PREFIX}speedup-b{b}-n{n}')
     (args.results / f'{PREFIX}speedup.tex').write_text(latex(table(ups)))
+    if tuning := headline(rows, batch, length, BASELINE, RELEASED):
+        (args.results / f'{PREFIX}tuning.tex').write_text(latex(table(tuning)))
     threads = next(r['threads'] for r in rows if (r['batch_size'], r['dot_length']) == (batch, length))
-    (args.results / f'{PREFIX}macros.tex').write_text(macros(ups, batch, length, threads))
+    (args.results / f'{PREFIX}macros.tex').write_text(macros(ups, batch, length, threads, tuning))
     print(summary(rows, batch, length), end='')
     print(f'geomean over {len(ups)} designs: {geomean(list(ups.values())):.2f}x')
+    if tuning:
+        print(f'tuned over released MMA-Sim, {len(tuning)} designs: median '
+              f'{statistics.median(tuning.values()):.2f}x, geomean {geomean(list(tuning.values())):.2f}x')
     return 0
 
 

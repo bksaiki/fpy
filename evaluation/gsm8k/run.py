@@ -2,8 +2,8 @@
 Times GSM8K on Qwen3.5-0.8B with every linear layer computed by a design:
 by FPy's kernel (`fpy`) and by MMA-Sim (`mmasim`), against FP32 (`torch`).
 
-    python evaluation/gsm8k/run.py                  # every design, 32 problems: about 3 h
-    python evaluation/gsm8k/run.py --mmasim full nv.hopper.bf16.f32   # MMA-Sim measured: about 3.6 h
+    python evaluation/gsm8k/run.py                  # every design, 32 problems: about 5 h
+    python evaluation/gsm8k/run.py --full           # MMA-Sim predicted only: about 2.5 h
     python evaluation/gsm8k/run.py --smoke          # 2 problems, 8 tokens
     python evaluation/gsm8k/run.py -n 1319 --backends torch fpy
 
@@ -11,14 +11,14 @@ FPy's kernels compile first, so every timing is of the compiled model.
 
 Replaces the results directory (`evaluation/results/gsm8k/`, or `-o DIR`)
 with `torch.json`, `<design>-<backend>.json` and `report.py`'s tables.
-MMA-Sim's time is predicted per layer by default (`sample.py`), and also
-sampled in the model for `--sampled` designs, to check the prediction.
+MMA-Sim's time is predicted per layer (`sample.py`), also sampled in the
+model for `--sampled` designs, and measured end to end for `--full` ones,
+both to check the prediction.
 Exits 1 if `fpy` and `mmasim` emit different tokens, or a call MMA-Sim ran
 differs from FPy's kernel.
 """
 
 import argparse
-import contextlib
 import dataclasses
 import json
 import platform
@@ -65,17 +65,17 @@ def measure(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     eos = generate.stop_tokens(model, tok)
     prompts = encode(tok, problems)
     warmup = time.perf_counter()
-    # tuned MMA-Sim captures decode's graphs in its first timed step, so prefill runs without
-    # them, as in its prediction
-    decoding = (mmasim_matmul.replaying if backend == 'mmasim' and mmasim_matmul.TUNED
-                else contextlib.nullcontext)
-    if backend != 'mmasim':   # Triton's JIT and CUDA's start-up, outside the timing
+    # Triton's JIT, CUDA's start-up and tuned MMA-Sim's compilation, outside the timing;
+    # MMA-Sim on 2 prompts, as more take long (1 would compile its calls for 1 row)
+    if backend != 'mmasim':
         batched.generate(model, prompts[:batch], 2, eos)
+    elif mmasim_matmul.TUNED:
+        batched.generate(model, prompts[:2], 2, eos)
     warmup = time.perf_counter() - warmup
     tokens: list[list[int]] = []
     batches = []
     for i in range(0, len(prompts), batch):
-        g = batched.generate(model, prompts[i:i + batch], max_new, eos, decoding)
+        g = batched.generate(model, prompts[i:i + batch], max_new, eos)
         tokens += g.tokens
         batches.append({'first': i, 'shared': batched.shared(prompts[i:i + batch]),
                         **{k: v for k, v in dataclasses.asdict(g).items() if k != 'tokens'}})
@@ -106,7 +106,6 @@ def mmasim(model: torch.nn.Module, run: mmasim_matmul.Run, tok: Any,
     way, and the in-model sample if *sampled*.  *fpy* is FPy's record."""
     if method == 'full':
         r = measure(model, run, tok, problems, 'mmasim', design, max_new, batch)
-        r['graphless'] = sample.graphless(design)
     else:
         r = {'backend': 'mmasim', 'design': design, 'model': model.config.name_or_path,
              'scheme': run.scheme.name, 'baseline': _baseline(), 'problems': fpy['problems'],
@@ -156,9 +155,9 @@ def _foreign(out: Path) -> list[str]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('designs', nargs='*', default=list(config.GSM8K_DESIGNS or mmasim_matmul.DESIGNS),
-                    choices=mmasim_matmul.DESIGNS, metavar='DESIGN',
-                    help='designs (default: every design both backends compute, `mmasim_matmul.DESIGNS`)')
+    ap.add_argument('designs', nargs='*', choices=mmasim_matmul.DESIGNS, metavar='DESIGN',
+                    help='designs (default: every design both backends compute, `mmasim_matmul.DESIGNS`; '
+                         'with --smoke, Hopper BF16 and Blackwell FP8)')
     ap.add_argument('-o', '--out', metavar='DIR', type=Path, default=RESULTS,
                     help='the results directory, replaced (default %(default)s)')
     ap.add_argument('-n', '--problems', type=int, default=config.GSM8K_PROBLEMS,
@@ -171,23 +170,28 @@ def main(argv: list[str]) -> int:
                     help='default: all')
     ap.add_argument('--model', default=config.MODEL, help='default %(default)s')
     ap.add_argument('--mmasim', choices=('layers', 'full'), default='layers',
-                    help="MMA-Sim's time: predicted per layer, or measured over the whole "
-                         'run (default %(default)s)')
+                    help="MMA-Sim's time for every design: predicted per layer, or measured over "
+                         'the whole run (default %(default)s; --full measures only some)')
     ap.add_argument('--mmasim-as', choices=('tuned', 'released'), default='tuned',
-                    help='MMA-Sim tuned (no host waits, CUDA graphs; same bits), or as released '
+                    help='MMA-Sim tuned (no host waits, torch.compile; same bits), or as released '
                          '(default %(default)s)')
     ap.add_argument('--reuse', metavar='DIR', type=Path,
                     help="take `torch`'s and `fpy`'s records from DIR where there, rather than run them")
+    ap.add_argument('--full', nargs='*', default=list(config.GSM8K_FULL), metavar='DESIGN',
+                    help="designs whose MMA-Sim run is also measured end to end (default %(default)s)")
     ap.add_argument('--sampled', nargs='*', default=list(config.GSM8K_SAMPLED), metavar='DESIGN',
                     help='designs also sampled in the model, checking the prediction '
                          '(default %(default)s)')
     ap.add_argument('-j', '--jobs', type=int, default=1,
-                    help='processes compiling the designs; above 1, their compile times '
-                         'contend (default %(default)s)')
+                    help='processes compiling the designs; above 1, their recorded compile '
+                         'times contend (default %(default)s)')
     ap.add_argument('--smoke', action='store_true', help='2 problems, 8 tokens')
     args = ap.parse_args(argv)
     if args.smoke:
         args.problems, args.max_new = 2, 8
+    if not args.designs:
+        args.designs = (['nv.hopper.bf16.f32', 'nv.blackwell.e4m3.f32'] if args.smoke
+                        else list(config.GSM8K_DESIGNS or mmasim_matmul.DESIGNS))
     if 'mmasim' in args.backends and 'fpy' not in args.backends:
         ap.error("MMA-Sim's prediction starts from FPy's run: add --backends fpy")
     if foreign := _foreign(args.out):
@@ -231,7 +235,8 @@ def _run(args: argparse.Namespace) -> int:
             r = json.loads(reused.read_text())
             print(f'  reused {reused}', flush=True)
         elif backend == 'mmasim':
-            r = mmasim(model, run, tok, problems, design, records['fpy', design], args.mmasim,
+            method = 'full' if design in args.full else args.mmasim
+            r = mmasim(model, run, tok, problems, design, records['fpy', design], method,
                        args.max_new, args.batch, design in args.sampled)
         else:
             r = measure(model, run, tok, problems, backend, design, args.max_new, args.batch)

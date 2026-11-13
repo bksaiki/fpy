@@ -13,6 +13,7 @@ it stated, the queries it made, and the seconds the solver took. Its
 provenance has the run's wall time.
 
     python evaluation/compilation/compile_times.py -j 16
+    python evaluation/compilation/compile_times.py --smoke   # the first 2 designs
 """
 
 import argparse
@@ -76,9 +77,11 @@ def main(argv: list[str]) -> int:
                     help="the outputs' root (default: %(default)s)")
     ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='processes generating models (default: %(default)s)')
+    ap.add_argument('--smoke', action='store_true', help='the first 2 designs')
     args = ap.parse_args(argv)
 
-    jobs = [(name, backend) for backend in BACKENDS for name, _ in DESIGNS]
+    designs = DESIGNS[:2] if args.smoke else DESIGNS
+    jobs = [(name, backend) for backend in BACKENDS for name, _ in designs]
     t0 = time.perf_counter()
     if args.jobs <= 1:
         _warm()
@@ -97,7 +100,7 @@ def main(argv: list[str]) -> int:
         'argv': sys.argv, **outputs.commit(), 'machine': platform.platform(), 'cpus': os.cpu_count(),
         'settings': {k: v if isinstance(v, int) else str(v) for k, v in vars(args).items()},
         'seconds': {'total': wall}})
-    print(f'{len(DESIGNS)} designs, {sum(r["status"] == "refused" for r in rows)} refused: {table}')
+    print(f'{len(designs)} designs, {sum(r["status"] == "refused" for r in rows)} refused: {table}')
     return 0
 
 

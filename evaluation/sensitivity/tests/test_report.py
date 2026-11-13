@@ -90,7 +90,7 @@ def test_it_writes_every_output(tmp_path):
     assert '1 compiled by every backend' in (tmp_path / 'sensitivity-summary.txt').read_text()
     totals = (tmp_path / 'sensitivity-table.tex').read_text()
     # design `a` alone: every backend compiled it
-    assert 'Z3 & Optimize & 8\\,s & 2\\,s & 25\\% & 200.0\\,ms' in totals
+    assert 'Z3 & Optimize & 8 & 2 & 25\\% & 200.0 ' in totals
     assert 'Constraints' not in totals and 'Queries' not in totals
 
 

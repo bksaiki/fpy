@@ -11,7 +11,7 @@ part measures by default.
 | `ablation` | which MMA-Sim designs compile with digit-bound analysis and each set of rewrites switched off | CPU | ~15 min |
 | `blas` | each grid design's GEMM backward error on Grading-the-BLAS matrices | CPU, C++ compiler | not yet timed |
 | `cpu_performance` | how fast FPy's C++ for each MMA-Sim design runs against MMA-Sim | CPU, C++ compiler | ~1.5 h (M3 Pro) |
-| `gsm8k` | GSM8K speed: FPy's kernels against MMA-Sim (tuned: no host waits, CUDA graphs in decode; `--mmasim-as released` for MMA-Sim as released; predicted per layer, `gsm8k/sample.py`) and FP32, every design; MMA-Sim measured whole: `gsm8k/run.py --mmasim full nv.hopper.bf16.f32` (~2.5 h, apart) | CUDA GPU | ~2.5 h (~1.2 h reusing FPy's records: `--reuse DIR`) |
+| `gsm8k` | GSM8K speed: FPy's kernels against MMA-Sim (tuned: no host waits, `torch.compile`; `--mmasim-as released` for MMA-Sim as released) and FP32, every design. MMA-Sim predicted per layer (`gsm8k/sample.py`), and measured end to end for Hopper BF16 (`config.GSM8K_FULL`, ~2.5 h of it) | CUDA GPU | ~5.5 h |
 | `llm` | how far each grid design moves Qwen3.5-0.8B's next-token predictions | CUDA GPU | ~13 h (TITAN V) |
 
 ## Setup
@@ -47,7 +47,7 @@ uv run run.py results                                 # everything, ~18.5 h
 uv run run.py results --disable gsm8k --disable llm   # the CPU evaluations
 uv run run.py results --plot                          # only redraw, from existing results
 uv run run.py results --no-cache                      # discard results and caches, rerun
-uv run run.py results --threads 8                     # processes or threads per evaluation
+uv run run.py results --threads 16                    # processes or threads per evaluation (default 1)
 ```
 
 Each evaluation writes to `results/<name>/`. Before anything runs, `run.py`

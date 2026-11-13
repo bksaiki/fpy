@@ -68,6 +68,12 @@ def test_a_run_replaces_the_last(tmp_path):
     assert (tmp_path / 'fp32_fma.json').exists()
 
 
+def test_smoke(tmp_path):
+    assert main(['-o', str(tmp_path), '-b', 'z3', '--smoke']) == 0
+    settings = json.loads((tmp_path / 'sensitivity-run.json').read_text())
+    assert settings['repeats'] == 1 and settings['designs'] == ['nv.volta.f16.f32', 'nv.volta.f16.f16']
+
+
 @pytest.mark.parametrize('mine', ['notes.md', 'settings.json'])
 def test_files_a_run_did_not_write_are_kept(tmp_path, mine):
     (tmp_path / mine).write_text('mine')

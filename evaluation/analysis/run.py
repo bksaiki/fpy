@@ -4,6 +4,7 @@ MMA-Sim designs: each site's static bound against every value it takes.
 
     python evaluation/analysis/run.py           # everything, about 7 min
     python evaluation/analysis/run.py volta     # matching designs only
+    python evaluation/analysis/run.py --smoke   # one design, 50 inputs
 
 Replaces the results directory (`evaluation/results/analysis/`, or `-o DIR`)
 with `<design>.json` per design, an `anf/` pass (sites counted with every
@@ -141,9 +142,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-s', '--seed', type=int, default=config.ANALYSIS_SEED, help='seed (default %(default)s)')
     ap.add_argument('--inputs', choices=sorted(SOURCES), default=config.ANALYSIS_INPUTS,
                     help='input source (default %(default)s)')
-    ap.add_argument('-j', '--jobs', type=int, default=8,
-                    help='measure in this many processes (default 8)')
+    ap.add_argument('-j', '--jobs', type=int, default=1,
+                    help='measure in this many processes (default %(default)s)')
+    ap.add_argument('--smoke', action='store_true', help='Hopper BF16 alone, 50 inputs')
     args = ap.parse_args(argv)
+    if args.smoke:
+        args.filter, args.inputs_per_design = ['nv.hopper.bf16.f32'], 50
 
     names = [name for name, _ in DESIGNS
              if not args.filter or any(f in name for f in args.filter)]

@@ -35,23 +35,84 @@ from fpy2.backend.triton.launcher import _torch_dtype
 
 from . import outputs, quant
 
-TILES: dict[str, tuple[int, int]] = {
-    'nv.ampere.bf16.f32': (32, 1),
-    'nv.hopper.bf16.f32': (32, 1),
-    'amd.cdna2.bf16': (16, 64),
-    'amd.cdna2.bf16_1k': (16, 64),
-    'amd.cdna3.bf16': (64, 1),
-    'nv.ada.e4m3.f32': (128, 1),
+MEASURED: dict[str, tuple[int, int]] = {
+    'nv.volta.f16.f32': (32, 1),
+    'nv.volta.f16.f16': (32, 1),
+    'nv.turing.f16.f32': (32, 1),
+    'nv.turing.f16.f16': (32, 1),
+    'nv.ampere.tf32.f32': (32, 1),
+    'nv.ampere.bf16.f32': (128, 1),
+    'nv.ada.e4m3.f32': (64, 1),
+    'nv.ada.e5m2.f32': (64, 1),
+    'nv.ada.e4m3.e5m2.f32': (64, 1),
+    'nv.ada.e4m3.f16': (64, 1),
+    'nv.ada.e5m2.f16': (64, 1),
+    'nv.ada.e4m3.e5m2.f16': (64, 1),
+    'nv.hopper.tf32.f32': (128, 1),
+    'nv.hopper.bf16.f32': (64, 1),
+    'nv.hopper.f16.f32': (32, 1),
+    'nv.hopper.f16.f16': (32, 1),
     'nv.hopper.e4m3.f32': (32, 1),
+    'nv.hopper.e5m2.f32': (32, 1),
+    'nv.hopper.e4m3.e5m2.f32': (32, 1),
+    'nv.hopper.e4m3.f16': (32, 1),
+    'nv.hopper.e5m2.f16': (32, 1),
+    'nv.hopper.e4m3.e5m2.f16': (32, 1),
     'nv.blackwell.e4m3.f32': (32, 1),
-    'amd.cdna3.fp8': (64, 1),
+    'nv.blackwell.e5m2.f32': (32, 1),
+    'nv.blackwell.e4m3.e5m2.f32': (32, 1),
+    'nv.blackwell.e3m2.f32': (64, 1),
+    'nv.blackwell.e2m3.f32': (64, 1),
+    'nv.blackwell.e3m2.e2m3.f32': (64, 1),
+    'nv.blackwell.e2m1.f32': (64, 1),
+    'nv.blackwell.e4m3.f16': (32, 1),
+    'nv.blackwell.e5m2.f16': (32, 1),
+    'nv.blackwell.e4m3.e5m2.f16': (32, 1),
+    'nv.blackwell.e3m2.f16': (32, 1),
+    'nv.blackwell.e2m3.f16': (32, 1),
+    'nv.blackwell.e3m2.e2m3.f16': (32, 1),
+    'nv.blackwell.e2m1.f16': (32, 1),
     'nv.blackwell.mx.e4m3': (32, 1),
+    'nv.blackwell.mx.e5m2': (32, 1),
+    'nv.blackwell.mx.e4m3.e5m2': (32, 1),
+    'nv.blackwell.mx.e3m2': (32, 1),
+    'nv.blackwell.mx.e2m3': (32, 1),
+    'nv.blackwell.mx.e3m2.e2m3': (32, 1),
     'nv.blackwell.mx.e2m1': (32, 1),
-    'nv.blackwell.mxfp4': (16, 1),
     'nv.blackwell.nvfp4': (16, 1),
+    'nv.blackwell.mxfp4': (16, 1),
+    'amd.cdna2.bf16': (16, 32),
+    'amd.cdna2.bf16_1k': (16, 32),
+    'amd.cdna2.f16': (16, 32),
+    'amd.cdna3.tf32': (64, 1),
+    'amd.cdna3.f16': (64, 1),
+    'amd.cdna3.bf16': (64, 1),
+    'amd.cdna3.fp8': (64, 1),
+    'amd.cdna3.bf8': (64, 1),
+    'amd.cdna3.fp8.bf8': (64, 1),
+    'fp64 (fma)': (16, 64),
+    'fp32 (fma)': (16, 64),
 }
-"""Each design and its fixed tile `(block, block_m)`, the fastest per
-`bench/speed.py --best`; another MMA-Sim design's is :func:`tile`'s."""
+"""Each MMA-Sim design's tile `(block, block_m)`: of blocks 16-128 and heights
+1-64, the one with the least predicted FPy time on GSM8K (`gsm8k/sample.py`'s
+prediction, its recorded calls replayed at each tile)."""
+
+TILES: dict[str, tuple[int, int]] = {d: MEASURED[d] for d in (
+    'nv.ampere.bf16.f32',
+    'nv.hopper.bf16.f32',
+    'amd.cdna2.bf16',
+    'amd.cdna2.bf16_1k',
+    'amd.cdna3.bf16',
+    'nv.ada.e4m3.f32',
+    'nv.hopper.e4m3.f32',
+    'nv.blackwell.e4m3.f32',
+    'amd.cdna3.fp8',
+    'nv.blackwell.mx.e4m3',
+    'nv.blackwell.mx.e2m1',
+    'nv.blackwell.mxfp4',
+    'nv.blackwell.nvfp4',
+)}
+"""The designs run by name and their tiles; :func:`register` adds more."""
 
 
 _BUILDS: dict[str, Callable] = dict(DESIGNS)
@@ -124,8 +185,9 @@ def known(design: str) -> bool:
 
 
 def tile_of(design: str) -> tuple[int, int]:
-    """*design*'s tile: :data:`TILES`', else its catalog design's :func:`tile`."""
-    return TILES[design] if design in TILES else tile(CATALOG[design])
+    """*design*'s tile: :data:`TILES`', else :data:`MEASURED`'s, else its catalog
+    design's :func:`tile`."""
+    return TILES.get(design) or MEASURED.get(design) or tile(CATALOG[design])
 
 
 @cache

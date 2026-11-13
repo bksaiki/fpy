@@ -157,6 +157,10 @@ GSM8K_DESIGNS: tuple[str, ...] | None = None
 """Designs run; `None`: every design both backends compute
 (`gsm8k/mmasim_matmul.DESIGNS`)."""
 
+GSM8K_FULL = ('nv.hopper.bf16.f32',)
+"""Designs whose MMA-Sim run is also measured end to end, not only predicted:
+the paper's measured row (about 2.5 h for Hopper BF16)."""
+
 GSM8K_SAMPLED = ('nv.hopper.bf16.f32', 'nv.hopper.tf32.f32', 'amd.cdna3.bf16', 'amd.cdna3.fp8',
                  'amd.cdna2.bf16', 'fp32 (fma)', 'nv.blackwell.mx.e4m3', 'nv.blackwell.nvfp4')
 """One design per kind of MMA-Sim operation (T-FDPA, its TF32, TR, GTR, FTZ,
@@ -199,3 +203,7 @@ CPU_PERF_REPLICATES = 3
 
 CPU_PERF_MIN_RUN_TIME = 0.25
 """Seconds each timing lasts at least."""
+
+CPU_PERF_RELEASED = True
+"""Whether MMA-Sim as released is also timed, at the largest batch and length
+only, for tuning's speedup over it (about 45 min more)."""

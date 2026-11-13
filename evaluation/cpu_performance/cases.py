@@ -194,14 +194,14 @@ def select(cs: Sequence[Case], names: Sequence[str]) -> list[Case]:
 # ---------------------------------------------------------------------------
 # Inputs: the same values in MMA-Sim's and FPy's representations
 
-DISTRIBUTIONS = {'normal': 'normal(0, 0.5)', 'uniform': 'uniform[-1, 1)'}
+DISTRIBUTIONS = {'normal': 'normal(0, 1)', 'uniform': 'uniform[-1, 1)'}
 
 
 def sample(batch: int, length: int, seed: int, distribution: str) -> Tensor:
     """FP64 values to round to a design's input format."""
     g = torch.Generator().manual_seed(seed)
     if distribution == 'normal':
-        return torch.randn((batch, length), dtype=torch.float64, generator=g) * 0.5
+        return torch.randn((batch, length), dtype=torch.float64, generator=g)
     if distribution == 'uniform':
         return torch.rand((batch, length), dtype=torch.float64, generator=g) * 2 - 1
     raise ValueError(f'unknown distribution {distribution!r}')
@@ -306,12 +306,14 @@ BITS = {torch.float16: torch.int16, torch.float32: torch.int32, torch.float64: t
 
 
 def compare(got: Tensor, want: Tensor, name: str) -> dict[str, Any]:
-    """*got* against MMA-Sim's *want*, bit for bit."""
+    """*got* against MMA-Sim's *want*, bit for bit, but zeros of either sign
+    equal (FPy's semantics leaves zero unsigned)."""
     if got.shape != want.shape or got.dtype != want.dtype:
         return {'valid': False, 'reason': 'shape or dtype mismatch',
                 f'{name}_shape': list(got.shape), 'mmasim_shape': list(want.shape),
                 f'{name}_dtype': str(got.dtype), 'mmasim_dtype': str(want.dtype)}
-    differ = (got.contiguous().view(BITS[got.dtype]) != want.contiguous().view(BITS[want.dtype]))
+    differ = ((got.contiguous().view(BITS[got.dtype]) != want.contiguous().view(BITS[want.dtype]))
+              & ~((got == 0) & (want == 0)))
     if not differ.any():
         return {'valid': True}
     i = int(differ.flatten().nonzero()[0])

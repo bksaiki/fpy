@@ -13,11 +13,13 @@ def test_summary_separates_lengths():
 
 
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float64])
-def test_validation_keeps_signed_zero_and_reports_first_mismatch(dtype):
-    got = torch.tensor([1.0, 0.0], dtype=dtype)
-    want = torch.tensor([1.0, -0.0], dtype=dtype)
+def test_validation_equates_signed_zeros_and_reports_first_mismatch(dtype):
+    want = torch.tensor([1.0, -0.0, 2.0], dtype=dtype)
+    v = cs.validate(cs.Prepared(lambda: torch.tensor([1.0, 0.0, 2.0], dtype=dtype), lambda: want, lambda: want))
+    assert v['valid']
+    got = torch.tensor([1.0, 0.0, 3.0], dtype=dtype)
     v = cs.validate(cs.Prepared(lambda: got, lambda: want, lambda: want))
     assert not v['valid']
     assert v['reason'] == 'output bit mismatch'
     assert v['mismatches'] == 1
-    assert v['first_difference'] == 1
+    assert v['first_difference'] == 2
