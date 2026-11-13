@@ -1,12 +1,19 @@
 name: Documentation generation
 
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   SPHINXOPTS: "-W"
 
 jobs:
-  mypy:
+  docs:
     name: "Generate documentation"
     runs-on: ubuntu-latest
     steps:
