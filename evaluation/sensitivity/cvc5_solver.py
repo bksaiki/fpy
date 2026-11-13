@@ -4,16 +4,11 @@ A cvc5 backend for the digit-bound store, for comparison with z3.
 The same encoding as :class:`~fpy2.analysis.digit_bound.Z3Solver`, through
 cvc5's base API.  cvc5 does not optimize, so every maximum is found
 by bisection, as z3 finds it by default.
-
-Importing it adds backend ``cvc5`` to the core's
-:data:`~fpy2.analysis.digit_bound.BACKENDS`, so it also loads as a pytest
-plugin (``-p cvc5_solver``).
 """
 
 import cvc5
 from cvc5 import Kind
 
-from fpy2.analysis.digit_bound import BACKENDS
 from fpy2.analysis.digit_bound.solver import (
     Constraint,
     Rel,
@@ -124,5 +119,3 @@ class Cvc5Solver(_ComponentSolver[cvc5.Solver]):
         found = into.getValue(self._to_cvc5(objective))
         return found.getIntegerValue() if found.isIntegerValue() else None
 
-
-BACKENDS['cvc5'] = Cvc5Solver

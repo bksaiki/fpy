@@ -32,7 +32,7 @@ from compile import DESIGNS, Build, cpp_compiler, prepare
 from compile_triton import compile_matmul
 from core import outputs
 
-from fpy2.analysis.digit_bound import SolverStats, solver_backend
+from fpy2.analysis.digit_bound import SolverStats, Z3Solver, solver_factory
 
 RESULTS = ROOT / 'evaluation' / 'results'
 BACKENDS = ('cpp', 'triton')
@@ -53,7 +53,7 @@ def generate(job: tuple[str, str]) -> dict:
     build = dict(DESIGNS)[name]
     t0 = time.perf_counter()
     # z3, the default backend; its statistics are kept anyway, so this costs nothing
-    with solver_backend('z3') as solvers:
+    with solver_factory(Z3Solver) as solvers:
         try:
             generate_cpp(build) if backend == 'cpp' else compile_matmul(build, None)
             status, reason = 'ok', ''

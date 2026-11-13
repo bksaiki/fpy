@@ -4,23 +4,26 @@ that each keeps its statistics, and how a store is given one.
 """
 
 import math
+from functools import partial
 
 import pytest
 
 from fpy2.analysis.digit_bound import (
-    BACKENDS,
     DigitBoundStore,
     SolverStats,
     Z3Solver,
     default_solver,
-    make_solver,
-    solver_backend,
+    solver_factory,
 )
-from fpy2.analysis.digit_bound.backends import ENV_VAR
 
 from .test_digit_bound import TestBisectionMatchesOptimization, TestFusedSum
 
+BACKENDS = {'z3': Z3Solver, 'z3-opt': partial(Z3Solver, bisect=False)}
 BACKEND_PARAMS = list(BACKENDS)
+
+
+def make_solver(backend: str, **opts):
+    return BACKENDS[backend](**opts)
 
 
 def _store(backend: str) -> DigitBoundStore:
@@ -232,49 +235,21 @@ class TestStatsSum:
 
 class TestChoosingABackend:
 
-    def test_z3_by_default(self, monkeypatch):
-        monkeypatch.delenv(ENV_VAR, raising=False)
+    def test_z3_by_default(self):
         assert isinstance(DigitBoundStore()._solver, Z3Solver)
 
-    @pytest.mark.parametrize('backend', BACKEND_PARAMS)
-    def test_the_environment_names_the_default(self, monkeypatch, backend):
-        monkeypatch.setenv(ENV_VAR, backend)
-        assert type(default_solver()) is type(make_solver(backend))
-
-    def test_z3_opt_optimizes(self):
-        solver = make_solver('z3-opt')
-        assert isinstance(solver, Z3Solver) and solver.bisect is False
-
-    @pytest.mark.parametrize('backend', BACKEND_PARAMS)
-    def test_a_block_chooses_and_keeps_its_solvers(self, monkeypatch, backend):
-        monkeypatch.delenv(ENV_VAR, raising=False)
-        with solver_backend(backend) as solvers:
+    def test_a_block_chooses_and_keeps_its_solvers(self):
+        make = partial(Z3Solver, timeout_ms=5)
+        with solver_factory(make) as solvers:
             a, b = DigitBoundStore(), DigitBoundStore()
-        assert [a._solver, b._solver] == solvers
-        assert type(solvers[0]) is type(make_solver(backend))
+            assert default_solver().timeout_ms == 5
+        assert [a._solver, b._solver] == solvers[:2]
         # and only inside it
-        assert isinstance(DigitBoundStore()._solver, Z3Solver)
-
-    def test_a_block_overrides_the_environment(self, monkeypatch):
-        monkeypatch.setenv(ENV_VAR, 'no-such-backend')
-        with solver_backend('z3') as solvers:
-            DigitBoundStore()
-        assert len(solvers) == 1
-
-    def test_options_reach_the_backend(self):
-        with solver_backend('z3', bisect=False, timeout_ms=5, keep_trace=True) as solvers:
-            DigitBoundStore()
-        assert solvers[0].bisect is False
-        assert solvers[0].timeout_ms == 5
-        assert solvers[0].keep_trace is True
-
-    def test_an_unknown_backend_is_refused(self):
-        with pytest.raises(ValueError, match='unknown solver backend'):
-            make_solver('no-such-backend')
+        assert DigitBoundStore()._solver.timeout_ms != 5
 
     def test_a_handed_solver_wins(self):
         solver = Z3Solver()
-        with solver_backend('z3') as solvers:
+        with solver_factory(Z3Solver) as solvers:
             s = DigitBoundStore(solver=solver)
         assert s._solver is solver
         assert solvers == []
