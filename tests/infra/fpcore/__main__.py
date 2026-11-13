@@ -18,14 +18,19 @@ if not os.getenv("FPBENCH"):
 
 from .eval import test_eval
 from .parse import test_parse
-from .diff_test import test_ports
+from .diff_test import test_fpbench_examples
 from .round_trip import test_round_trip
 from .tcheck import test_tcheck
 
-# guarded: `test_ports` spawns workers, which re-run this module
+# guarded: `test_fpbench_examples` spawns workers, which re-run this module
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='FPCore infrastructure tests')
+    parser.add_argument('-j', '--jobs', type=int, default=1,
+                        help='worker processes for the FPBench port checks (default 1)')
+    args = parser.parse_args()
     test_parse()
     test_eval()
     test_round_trip()
     test_tcheck()
-    test_ports()
+    test_fpbench_examples(jobs=args.jobs)
