@@ -5,12 +5,12 @@ is rounded at -- which is the precision of the resulting fixed-point value.
 See ``docs/todos/digit-bound.md``.
 
 :mod:`solver` is the constraint language, the interface to a solver and
-what every backend shares; :mod:`z3_solver` and :mod:`cvc5_solver` are the
-backends, :mod:`backends` which one a store gets, :mod:`store` the domain
+what every backend shares; :mod:`z3_solver` the backend,
+:mod:`backends` which one a store gets, :mod:`store` the domain
 and its queries, and :mod:`infer` the pass over a program.
 """
 
-from .backends import BACKENDS, default_solver, make_solver, solver_backend
+from .backends import default_solver, solver_factory
 from .infer import (
     Bounds,
     DigitBoundAnalysis,
@@ -24,7 +24,6 @@ from .store import DigitBoundStore
 from .z3_solver import Z3Solver
 
 __all__ = [
-    'BACKENDS',
     'Bounds',
     'Constraint',
     'DigitBoundAnalysis',
@@ -40,6 +39,5 @@ __all__ = [
     'Terms',
     'Z3Solver',
     'default_solver',
-    'make_solver',
-    'solver_backend',
+    'solver_factory',
 ]

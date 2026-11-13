@@ -20,8 +20,7 @@ dependencies = [
   "titanfp==0.1.2",
   "gmpy2==2.3.1",
   "numpy",
-  "z3-solver==5.3.3.0",
-  "cvc5==1.4.2"
+  "z3-solver==5.3.3.0"
 ]
 
 # ``dev`` deps are listed twice on purpose: ``[project.optional-dependencies]``
@@ -73,10 +72,9 @@ python_classes = ["Test*", "*TestCase"]
 disable_error_code = ["import-untyped"]
 check_untyped_defs = true
 
-# optional: the Triton backend imports them only to run a kernel; cvc5 ships
-# no type information
+# optional: the Triton backend imports them only to run a kernel
 [[tool.mypy.overrides]]
-module = ["torch", "torch.*", "triton", "triton.*", "cvc5", "cvc5.*"]
+module = ["torch", "torch.*", "triton", "triton.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint]

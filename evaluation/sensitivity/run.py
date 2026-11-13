@@ -26,6 +26,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +35,10 @@ sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examp
 sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
 import config
+from backends import BACKENDS
 from compile import DESIGNS, _filename
 
-from fpy2.analysis.digit_bound import BACKENDS, SolverStats, make_solver, solver_backend
+from fpy2.analysis.digit_bound import SolverStats, solver_factory
 
 RESULTS = Path(__file__).resolve().parents[1] / 'results' / 'sensitivity'
 
@@ -65,11 +67,11 @@ def compile_once(
     from compile import cpp_compiler, prepare
 
     build = dict(DESIGNS)[name]
-    # untimed: a backend's first solver loads its module (cvc5's, lazily)
-    make_solver(backend)
+    # untimed: a backend's first solver may warm up its library
+    make = partial(BACKENDS[backend], timeout_ms=round(1000 * call_timeout), keep_trace=True)
+    make()
     start = time.perf_counter()
-    with solver_backend(
-            backend, timeout_ms=round(1000 * call_timeout), keep_trace=True) as solvers:
+    with solver_factory(make) as solvers:
         try:
             # the C++ alone, as `compilation/compile_times.py` times it (no signature)
             src = cpp_compiler().compile_module(prepare(build))

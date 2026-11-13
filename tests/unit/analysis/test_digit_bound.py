@@ -17,7 +17,6 @@ from fpy2.analysis.digit_bound import (
     DigitBoundParams,
     DigitBoundStore,
     Term,
-    Z3Solver,
 )
 from fpy2.analysis.digit_bound.spaces import Binder, Key
 from fpy2.strategies import monomorphize
@@ -282,10 +281,9 @@ class TestReachesIsADecision:
         assert s.reaches([(x, 4)]) is False
 
 
-class TestBisectionMatchesOptimization:
-    """Bisection is the default because it is cheaper; it has to agree with
-    `Optimize`, which is the reference.  Its upward probe needs somewhere to
-    stop, and where it stops must only ever loosen the answer."""
+class TestBisection:
+    """Bisection finds the maximum.  Its upward probe needs somewhere to stop,
+    and where it stops must only ever loosen the answer."""
 
     CASES = (
         # far below where the probe starts: reading it as unsatisfiable, or
@@ -308,21 +306,19 @@ class TestBisectionMatchesOptimization:
     )
 
     @pytest.mark.parametrize('name,build,want', CASES, ids=[c[0] for c in CASES])
-    def test_both_backends_find_the_maximum(self, name, build, want):
-        for bisect in (True, False):
-            s = DigitBoundStore(solver=Z3Solver(bisect=bisect))
-            x, y = s.var('x'), s.var('y')
-            _, obj = build(s, x, y)
-            assert s.maximum(obj) == want, (name, bisect)
+    def test_it_finds_the_maximum(self, name, build, want):
+        s = DigitBoundStore()
+        x, y = s.var('x'), s.var('y')
+        _, obj = build(s, x, y)
+        assert s.maximum(obj) == want
 
 
 class TestAGuardedConstraint:
     """A constraint holding only where its literals do, and a query that says
     which it assumes."""
 
-    @pytest.mark.parametrize('bisect', [True, False])
-    def test_it_binds_only_when_assumed(self, bisect):
-        s = DigitBoundStore(solver=Z3Solver(bisect=bisect))
+    def test_it_binds_only_when_assumed(self):
+        s = DigitBoundStore()
         x = s.var('x')
         s.le(x, 10)
         g = s.literal()

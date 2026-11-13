@@ -3,10 +3,9 @@ The solver interface for the digit-bound store.
 
 The constraint language -- affine terms over integer variables -- the
 interface a backend answers questions about it through, and what every
-backend shares.  Each backend is a module of its own: z3 in :mod:`z3_solver`,
-cvc5 beside it.  :mod:`fpy2.analysis.digit_bound.store`
-states the constraints; nothing here walks an AST or knows what a variable
-means.
+backend shares.  The z3 backend is :mod:`z3_solver`.
+:mod:`fpy2.analysis.digit_bound.store` states the constraints; nothing here
+walks an AST or knows what a variable means.
 """
 
 import math
@@ -190,8 +189,8 @@ class SolverStats:
     """
 
     solver_time: float = 0.0
-    """Seconds in the backend: stating constraints, which z3 and cvc5 encode
-    into live solvers as they arrive, and answering queries."""
+    """Seconds in the backend: stating constraints, which the backends
+    encode into live solvers as they arrive, and answering queries."""
     queries: int = 0
     """Calls to :meth:`Solver.maximize` and :meth:`Solver.reaches`."""
     degraded: int = 0
@@ -230,9 +229,7 @@ class _ComponentSolver(Generic[_S]):
     statistics.
 
     A backend supplies :meth:`_new`, :meth:`_encode`, :meth:`_check` and
-    :meth:`_value`; one that optimizes natively clears :attr:`bisect` and
-    overrides :meth:`_maximum`, or :meth:`_maxima` to optimize a query's
-    objectives together, and needs no :meth:`_value`.
+    :meth:`_value`.
     """
 
     timeout_ms: int
@@ -245,10 +242,6 @@ class _ComponentSolver(Generic[_S]):
 
     trace: list[QueryRecord]
 
-    bisect: bool = True
-    """Whether a maximum is found by bisection, rather than asked of a
-    separate, optimizing solver."""
-
     _components: Unionfind[int]
     """Variable indices grouped into components: constraints that share no
     variable cannot bear on each other, so they never meet a solver
@@ -257,9 +250,9 @@ class _ComponentSolver(Generic[_S]):
     _group: dict[int, list[Constraint]]
     """Constraints by component root, kept unencoded until asked for."""
 
-    _built: dict[tuple[int, bool], _S]
-    """A component's solvers, by root and by whether it optimizes.  Each is
-    encoded once and then learns incrementally."""
+    _built: dict[int, _S]
+    """Each component's solver, by root.  Each is encoded once and then
+    learns incrementally."""
 
     _span: int
     """Total magnitude of the constants assumed so far."""
@@ -291,8 +284,8 @@ class _ComponentSolver(Generic[_S]):
 
     # -- what a backend supplies -------------------------------------------
 
-    def _new(self, optimize: bool) -> _S:
-        """An empty solver, optimizing where *optimize*."""
+    def _new(self) -> _S:
+        """An empty solver."""
         raise NotImplementedError
 
     def _encode(self, into: _S, constraint: Constraint) -> None:
@@ -326,12 +319,11 @@ class _ComponentSolver(Generic[_S]):
             self._components.union(root, other)   # *root* stays the leader
             moved = self._group.pop(other, [])
             self._group.setdefault(root, []).extend(moved)
-            for opt in (False, True):
-                live = self._built.get((root, opt))
-                if live is not None:
-                    for c in moved:
-                        self._encode(live, c)
-                self._built.pop((other, opt), None)
+            live = self._built.get(root)
+            if live is not None:
+                for c in moved:
+                    self._encode(live, c)
+            self._built.pop(other, None)
         return root
 
     @staticmethod
@@ -358,37 +350,42 @@ class _ComponentSolver(Generic[_S]):
         root = self._union(named)
         self._group.setdefault(root, []).append(constraint)
         self.stats.constraints += 1
-        # the backends are incremental: state it into the live solvers rather
-        # than discarding ones that have already learned from their neighbours
-        for opt in (False, True):
-            live = self._built.get((root, opt))
-            if live is not None:
-                self._encode(live, constraint)
+        # the backends are incremental: state it into the live solver rather
+        # than discarding one that has already learned from its neighbours
+        live = self._built.get(root)
+        if live is not None:
+            self._encode(live, constraint)
         self.stats.solver_time += time.perf_counter() - start
 
-    def _solver_for_vars(self, named: set[int], *, optimize: bool) -> _S:
+    def _root(self, named: set[int]) -> int:
+        """The one component holding the variables *named*, merged where
+        they span several; ``-1``, holding nothing, where *named* is empty.
+
+        An objective spanning several components names no single one, so its
+        solver would be built from scratch every time.  What is asked
+        together will be asked together again, and merging does not change
+        any answer.
+        """
+        roots = {self._components.add(v) for v in named}
+        if len(roots) > 1:
+            return self._union(named)
+        return min(roots, default=-1)
+
+    def _solver_for_vars(self, named: set[int]) -> _S:
         """A solver holding just what can bear on the variables *named*.
 
         A constraint reaching none of them cannot move a bound over them, so
         leaving it out is exact, not an approximation -- and most of them
         reach nothing, so most never need encoding at all.
         """
-        roots = {self._components.add(v) for v in named} if named else set()
-        if len(roots) > 1:
-            # An objective spanning several components names no single one,
-            # so its solver would be built from scratch every time.  What is
-            # asked together will be asked together again, and merging does
-            # not change any answer.
-            roots = {self._union(named)}
-        key = (min(roots, default=-1), optimize)
-        cached = self._built.get(key)
+        root = self._root(named)
+        cached = self._built.get(root)
         if cached is not None:
             return cached
-        s = self._new(optimize)
-        for r in roots:
-            for c in self._group.get(r, ()):
-                self._encode(s, c)
-        self._built[key] = s
+        s = self._new()
+        for c in self._group.get(root, ()):
+            self._encode(s, c)
+        self._built[root] = s
         return s
 
     # -- queries -----------------------------------------------------------
@@ -399,26 +396,17 @@ class _ComponentSolver(Generic[_S]):
         lits = tuple(sorted(assuming))
         named = {v.index for t in objectives for v, _ in t.coeffs}
         with self._query(named):
-            if not self.bisect:
-                # one search answers the whole query, so one solver holds
-                # every objective's component
-                solver = self._solver_for_vars(named, optimize=True)
-                return self._maxima(solver, objectives, lits)
             # each objective alone, against its own component: merging every
             # component a query happens to name would only grow later queries
-            return [
-                self._maximum(
-                    self._solver_for_vars(self._term_vars(t), optimize=False), t, lits)
-                for t in objectives
-            ]
+            return [self._bisect(self._solver_for_vars(self._term_vars(t)), t, lits)
+                    for t in objectives]
 
     def reaches(
         self, objective: Term, k: int, assuming: frozenset[int] = frozenset(),
     ) -> bool:
         named = self._term_vars(objective)
         with self._query(named):
-            # a check needs no optimizer, whichever way this backend maximizes
-            solver = self._solver_for_vars(named, optimize=False)
+            solver = self._solver_for_vars(named)
             return self._reaches(solver, objective, k, tuple(sorted(assuming)))
 
     @contextmanager
@@ -472,19 +460,6 @@ class _ComponentSolver(Generic[_S]):
         for _, k in objective.coeffs:
             scale = max(scale, abs(k))
         return (self._span + abs(objective.const)) * scale
-
-    def _maxima(
-        self, solver: _S, objectives: Sequence[Term], lits: tuple[int, ...],
-    ) -> list[int | float]:
-        """Each objective's maximum from the one optimizing *solver*, where
-        not :attr:`bisect`: one :meth:`_maximum` apiece."""
-        return [self._maximum(solver, t, lits) for t in objectives]
-
-    def _maximum(
-        self, solver: _S, objective: Term, lits: tuple[int, ...],
-    ) -> int | float:
-        """*objective*'s maximum."""
-        return self._bisect(solver, objective, lits)
 
     def _bisect(
         self, solver: _S, objective: Term, lits: tuple[int, ...],
