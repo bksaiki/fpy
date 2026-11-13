@@ -9,18 +9,17 @@ to a representative super-format. The precondition therefore holds by
 construction rather than by ``assume(...)`` filtering.
 """
 
-from typing import Callable, TypeAlias
+from collections.abc import Callable
+
+from hypothesis import given
+from hypothesis import strategies as st
 
 import fpy2 as fp
-
-from hypothesis import given, strategies as st
-
 from fpy2.analysis.format_infer import AbstractFormat
 from fpy2.number.context.mp_fixed import MPFixedFormat
 from fpy2.number.context.mps_float import MPSFloatFormat
 
 from ...generators import real_floats
-
 
 # ---------------------------------------------------------------------------
 # Types
@@ -28,9 +27,9 @@ from ...generators import real_floats
 
 # (p, exp, b) triple representing an abstract format A(p, exp, b).
 # p is `float('inf')` for the fixed-point case, otherwise a positive int.
-Prec: TypeAlias = int | float
-Format: TypeAlias = tuple[Prec, int, fp.RealFloat]
-MinimalFn: TypeAlias = Callable[[Format], Format]
+type Prec = int | float
+type Format = tuple[Prec, int, fp.RealFloat]
+type MinimalFn = Callable[[Format], Format]
 
 
 # ---------------------------------------------------------------------------

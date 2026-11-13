@@ -51,12 +51,11 @@ Known-deferred surface (productions whose generators raise
 import dataclasses
 from collections.abc import Callable, Iterable
 from enum import Flag, auto
-from typing import Any, TypeAlias, TypeVar
+from typing import Any
 
 from hypothesis import strategies as st
 
 import fpy2 as fp
-
 from fpy2.ast.fpyast import (
     Abs,
     Add,
@@ -76,11 +75,11 @@ from fpy2.ast.fpyast import (
     Enumerate,
     Exp,
     Expr,
-    Hexnum,
     ForeignVal,
     ForStmt,
     FuncDef,
     FuncMeta,
+    Hexnum,
     If1Stmt,
     IfExpr,
     IfStmt,
@@ -93,8 +92,8 @@ from fpy2.ast.fpyast import (
     ListTypeAnn,
     Log,
     Mul,
-    Neg,
     NamedUnaryOp,
+    Neg,
     Not,
     Or,
     Range1,
@@ -117,16 +116,15 @@ from fpy2.ast.fpyast import (
     WhileStmt,
     Zip,
 )
-from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType, Type
 from fpy2.env import ForeignEnv
+from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType, Type
 from fpy2.utils import CompareOp, NamedId, UnderscoreId
-
 
 # ---------------------------------------------------------------------------
 # Types
 # ---------------------------------------------------------------------------
 
-TypeEnv: TypeAlias = dict[NamedId, Type]
+type TypeEnv = dict[NamedId, Type]
 """Mapping from in-scope names to their FPy types."""
 
 
@@ -158,22 +156,19 @@ def _var_of_type(
     return st.sampled_from(names).map(_node(Var))
 
 
-_T = TypeVar('_T')
-
-
 # Hypothesis reads a lambda's source each time one is passed to `.map`; a named
 # function it identifies by name.
 
-def _node(ctor: Callable[..., _T], *head: Any) -> Callable[[Any], _T]:
+def _node[T](ctor: Callable[..., T], *head: Any) -> Callable[[Any], T]:
     """``x -> ctor(*head, x, None)``."""
-    def node(x: Any) -> _T:
+    def node(x: Any) -> T:
         return ctor(*head, x, None)
     return node
 
 
-def _node_of(ctor: Callable[..., _T], *head: Any) -> Callable[[Iterable[Any]], _T]:
+def _node_of[T](ctor: Callable[..., T], *head: Any) -> Callable[[Iterable[Any]], T]:
     """``xs -> ctor(*head, *xs, None)``."""
-    def node(xs: Iterable[Any]) -> _T:
+    def node(xs: Iterable[Any]) -> T:
         return ctor(*head, *xs, None)
     return node
 
@@ -186,9 +181,9 @@ def _compare(oab: tuple[CompareOp, Expr, Expr]) -> Compare:
     return Compare([oab[0]], [oab[1], oab[2]], None)
 
 
-def _node_fresh(ctor: Callable[..., _T], name: str) -> Callable[[Expr], _T]:
+def _node_fresh[T](ctor: Callable[..., T], name: str) -> Callable[[Expr], T]:
     """``x -> ctor(_func_sym(name), x, None)``, with a symbol of its own each time."""
-    def node(x: Expr) -> _T:
+    def node(x: Expr) -> T:
         return ctor(_func_sym(name), x, None)
     return node
 
@@ -328,10 +323,7 @@ class StmtProd(Flag):
            | INDEXED_ASSIGN | TUPLE_UNPACK_ASSIGN)
 
 
-_F = TypeVar('_F', bound=Flag)
-
-
-def _check_flag(include: _F, expected: type[_F]) -> _F:
+def _check_flag[F: Flag](include: F, expected: type[F]) -> F:
     """Assert that ``include`` is a :class:`Flag` of the expected type and
     return it unchanged; raise :class:`TypeError` otherwise.  Callers
     handle the ``None`` case (fall back to the grammar default) before
