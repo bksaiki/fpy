@@ -5,7 +5,7 @@ Two tiers:
 
 1. Directed checks (need only `fpy2`): the paper's Eq. 10 / Table 8
    example, special values, signed zeros, the `e_zero` tie-breaking
-   corner case, and the FMA chain against `math.fma`.
+   corner case, and the FMA chain against MPFR's `fma` (gmpy2).
 
 2. A randomized differential sweep against the MMA-Sim reference
    implementation (https://github.com/microsoft/MMA-Sim), comparing
@@ -28,6 +28,8 @@ import sys
 # the parent for `models`, this directory for `common`
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import gmpy2
 
 import fpy2 as fp
 from models import nv
@@ -88,8 +90,6 @@ def check_directed():
     check('e2m1 exponent floor', float(m([0.5, 0.5], [0.5, -0.5], 2.0**-27)) == 0.0)
 
 def check_fma(trials):
-    from fractions import Fraction
-
     def rand_f64():
         return struct.unpack('<d', random.randbytes(8))[0]
 
@@ -101,18 +101,13 @@ def check_fma(trials):
         b = [rand_f64() for _ in range(k)]
         c = rand_f64()
         ref = c
-        for x, y in zip(a, b):
-            try:
-                ref = math.fma(x, y, ref)
-            except OverflowError:
-                # math.fma raises where IEEE returns an infinity;
-                # recover its sign exactly and keep folding
-                s = Fraction(x) * Fraction(y) + Fraction(ref)
-                ref = math.inf if s > 0 else -math.inf
+        with gmpy2.ieee(64):
+            for x, y in zip(a, b):
+                ref = float(gmpy2.fma(x, y, ref))
         mine = float(model(a, b, c))
         if not (ref == mine or (math.isnan(ref) and math.isnan(mine))):
             fails += 1
-    check(f'fma_dpa vs math.fma ({trials} trials)', fails == 0, f'{fails} mismatches')
+    check(f'fma_dpa vs gmpy2.fma ({trials} trials)', fails == 0, f'{fails} mismatches')
 
 ###########################################################
 # Tier 2: randomized differential sweep vs MMA-Sim (needs torch)

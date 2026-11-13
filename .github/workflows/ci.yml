@@ -25,8 +25,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -42,9 +42,9 @@ jobs:
       matrix:
         python-version: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -58,8 +58,8 @@ jobs:
     name: "Lint"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: "3.12"
@@ -77,13 +77,13 @@ jobs:
       matrix:
         python-version: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -101,8 +101,8 @@ jobs:
     name: "Unit tests (macOS)"
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: "3.12"
@@ -115,13 +115,13 @@ jobs:
   #   name: "FPCore tests"
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v7
   #     - name: "Checkout fpbench/fpbench"
-  #       uses: actions/checkout@v4
+  #       uses: actions/checkout@v7
   #       with:
   #         repository: fpbench/fpbench
   #         path: ~/fpbench
-  #     - uses: astral-sh/setup-uv@v5
+  #     - uses: astral-sh/setup-uv@v10
   #       with:
   #         enable-cache: true
   #         python-version: "3.12"
@@ -134,13 +134,13 @@ jobs:
     name: "C++ tests"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: "3.12"
@@ -156,8 +156,8 @@ jobs:
     name: "MMA-Sim tests"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: "3.12"
@@ -174,13 +174,13 @@ jobs:
     name: "Sweep"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           python-version: "3.12"
