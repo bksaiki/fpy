@@ -35,23 +35,22 @@ from compile import (
     _HARD,
     _HARD_EVERY,
     DESIGNS,
-    Build,
     _filename,
     _fmt,
-    _length,
+    _length,  # noqa: F401 -- other modules read `ct._length`
     _row,
     _same,
     in_processes,
 )
+from designs import compile_matmul, typed
 
 import fpy2 as fp
-from fpy2.backend.triton import KernelSource, TritonCompiler, launch, unavailable
+from fpy2.backend.triton import KernelSource, launch, unavailable
 from fpy2.backend.triton.launcher import MODULE_PREAMBLE
 from fpy2.backend.triton.storage import choose_storage_scalar
 from fpy2.backend.triton.types import TritonScalar
 from fpy2.number.context import Format
 from fpy2.types import Type
-from fpy2.utils import NamedId
 
 if TYPE_CHECKING:
     import torch
@@ -63,103 +62,6 @@ _BLOCK = 64
 _BLOCK_M = 4
 """`--run`'s tile height: taller than the default `-m`, so the mask on the
 rows past the end is exercised."""
-
-
-def _matmul(design: fp.Function, arity: int) -> fp.Function:
-    """*design* as a matmul: `out[i][j]` is row `i` of `A` against row `j` of
-    `BT`, and a scale is indexed the way its operand is."""
-    if arity == 3:
-        @fp.fpy(ctx=fp.REAL)
-        def matmul3(A, BT, C, out, BLOCK):
-            for i in range(len(out)):
-                row = out[i]
-                for j in range(len(row)):
-                    row[j] = design(A[i], BT[j], C[i][j])
-            return out
-        return matmul3
-    if arity == 5:
-        @fp.fpy(ctx=fp.REAL)
-        def matmul5(A, BT, C, xs, ys, out, BLOCK):
-            for i in range(len(out)):
-                row = out[i]
-                for j in range(len(row)):
-                    row[j] = design(A[i], BT[j], C[i][j], xs[i], ys[j])
-            return out
-        return matmul5
-    raise ValueError(f'no matmul wrapper for {arity} arguments')
-
-
-def typed(build: Build, k: int | None) -> tuple[fp.Function, list[Type]]:
-    """The function :func:`compile_matmul` compiles for *build*, and its
-    argument types at *k* (`None`: the design's own): a block-scaled design's
-    chain of instructions (:func:`_chained`), its scales one per instruction
-    or group."""
-    design, (a, b, c, *scales) = build()
-    assert isinstance(a, _L) and isinstance(b, _L)
-    k0 = _length(a)
-    k = k0 if k is None else k
-    if k % k0:
-        raise ValueError(f'k = {k} is not a multiple of the design\'s {k0}')
-    if not scales:
-        return design, [_L(a.elt, k), _L(b.elt, k), c]
-    sx = scales[0]
-    per = _length(sx) if isinstance(sx, _L) else None
-    s, elt = k // k0 * (per or 1), getattr(sx, 'elt', sx)
-    return _chained(design, k0, per), [_L(a.elt, k), _L(b.elt, k), c, _L(elt, s), _L(elt, s)]
-
-
-def compile_matmul(
-    build: Build, k: int | None,
-) -> tuple[KernelSource, fp.Function, list[Type]]:
-    """The kernel for one design as a matmul, the function it computes and its
-    argument types at *k* (:func:`typed`); raises whatever refused it.  The
-    sizes are the kernel's to be told, so one kernel runs at any `k`."""
-    f, arg_types = typed(build, k)
-    a, b, c, *scales = arg_types
-    sym = [_L(a.elt, NamedId('k')), _L(b.elt, NamedId('k')), c,
-           *(_L(t.elt, NamedId('s')) for t in scales)]
-    return _compile(f, sym), f, arg_types
-
-
-def _compile(f: fp.Function, arg_types: list[Type]) -> KernelSource:
-    """*f*, one output from `(A, B, C, *scales)` of *arg_types*, as a matmul
-    kernel with `m` and `n` symbolic, a scale indexed as its operand."""
-    a, b, c, *scales = arg_types
-    m, n = NamedId('m'), NamedId('n')
-    square = _L(_L(c, n), m)
-    return TritonCompiler(
-        drop_asserts=True, unfold=TritonCompiler.UnfoldMode.DOUBLE_ROUND,
-    ).compile(
-        _matmul(f, len(arg_types)), ctx=fp.REAL,
-        arg_types=[_L(a, m), _L(b, n), square,
-                   *(_L(t, d) for t, d in zip(scales, (m, n))),
-                   square, _R(fp.INTEGER)],
-    )
-
-
-def _chained(design: fp.Function, k0: int, per: int | None) -> fp.Function:
-    """A block-scaled *design*, one instruction of *k0* elements, chained over
-    its scales: instruction `t` takes its elements, its scales (one, or
-    *per*), and the last one's result as its accumulator."""
-    if per is None:
-        @fp.fpy(ctx=fp.REAL)
-        def chain1(A, B, c, xs, ys):
-            d = c
-            for t in range(len(xs)):
-                i = t * k0
-                d = design(A[i:i + k0], B[i:i + k0], d, xs[t], ys[t])
-            return d
-        return chain1
-    g = k0 // per
-
-    @fp.fpy(ctx=fp.REAL)
-    def chain(A, B, c, xs, ys):
-        d = c
-        for t in range(0, len(xs), per):
-            i = t * g
-            d = design(A[i:i + k0], B[i:i + k0], d, xs[t:t + per], ys[t:t + per])
-        return d
-    return chain
 
 
 def _kernel_named(name: str, k: int | None) -> tuple[KernelSource | None, str, str]:

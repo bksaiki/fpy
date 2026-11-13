@@ -8,6 +8,7 @@ arithmetic, following [MMA-Sim](https://github.com/microsoft/MMA-Sim)
 models/nv.py      NVIDIA: make_t_fdpa, make_t_fdpa_chain, make_st_fdpa, make_gst_fdpa
 models/amd.py     AMD:    make_e_fdpa, make_ftz_addmul, make_tr_fdpa, make_gtr_fdpa
 models/utils.py   shared helpers, and make_fma_dpa
+designs.py        DESIGNS (every modeled instruction), and compiling them to C++ and Triton
 tests/            validation against the reference implementation
 ```
 
