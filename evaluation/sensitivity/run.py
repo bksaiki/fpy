@@ -34,6 +34,7 @@ sys.path[:0] = [str(_ROOT / 'evaluation' / 'common' / 'mma'), str(_ROOT / 'examp
 sys.path.append(str(_ROOT / 'evaluation'))  # last: `config`, not shadowing this `run`
 
 import config
+import cvc5_solver  # adds backend `cvc5`
 from compile import DESIGNS, _filename
 
 from fpy2.analysis.digit_bound import BACKENDS, SolverStats, make_solver, solver_backend
@@ -65,7 +66,7 @@ def compile_once(
     from compile import cpp_compiler, prepare
 
     build = dict(DESIGNS)[name]
-    # untimed: a backend's first solver loads its module (cvc5's, lazily)
+    # untimed: a backend's first solver may warm up its library
     make_solver(backend)
     start = time.perf_counter()
     with solver_backend(

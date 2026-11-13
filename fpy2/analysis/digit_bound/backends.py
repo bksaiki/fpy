@@ -1,9 +1,9 @@
 """
 Which solver backend a store gets.
 
-z3 is the default.  The others exist to be measured against it: ``z3-opt``
-is z3 finding each maximum with ``Optimize`` rather than by bisection, and
-``cvc5`` imports its solver only when asked for.
+z3 is the default.  ``z3-opt``, z3 finding each maximum with ``Optimize``
+rather than by bisection, exists to be measured against it; so may others a
+caller adds to :data:`BACKENDS`.
 The environment variable ``FPY_DIGIT_BOUND_SOLVER`` names the default, so a
 test suite can run under any backend unchanged; :func:`solver_backend`
 chooses one for a block of code, and keeps what it makes.
@@ -27,11 +27,6 @@ __all__ = [
 ]
 
 
-def _cvc5(**opts: Any) -> MeasuredSolver:
-    from .cvc5_solver import Cvc5Solver
-    return Cvc5Solver(**opts)
-
-
 def _z3_opt(**opts: Any) -> MeasuredSolver:
     return Z3Solver(bisect=False, **opts)
 
@@ -39,7 +34,6 @@ def _z3_opt(**opts: Any) -> MeasuredSolver:
 BACKENDS: dict[str, Callable[..., MeasuredSolver]] = {
     'z3': Z3Solver,
     'z3-opt': _z3_opt,
-    'cvc5': _cvc5,
 }
 """Each backend's constructor, by name."""
 
@@ -75,7 +69,7 @@ def solver_backend(name: str, **opts: Any) -> Iterator[list[MeasuredSolver]]:
     Yields the list of solvers made, which grows as they are; their
     :attr:`~MeasuredSolver.stats` together are what the block cost::
 
-        with solver_backend('cvc5') as solvers:
+        with solver_backend('z3-opt') as solvers:
             compile_design(build)
         total = sum((s.stats for s in solvers), SolverStats())
     """

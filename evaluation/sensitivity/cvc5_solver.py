@@ -1,21 +1,33 @@
 """
 A cvc5 backend for the digit-bound store, for comparison with z3.
 
-The same encoding as :class:`~fpy2.analysis.digit_bound.z3_solver.Z3Solver`,
-through cvc5's base API.  cvc5 does not optimize, so every maximum is found
+The same encoding as :class:`~fpy2.analysis.digit_bound.Z3Solver`, through
+cvc5's base API.  cvc5 does not optimize, so every maximum is found
 by bisection, as z3 finds it by default.
+
+Importing it adds backend ``cvc5`` to the core's
+:data:`~fpy2.analysis.digit_bound.BACKENDS`, so it also loads as a pytest
+plugin (``-p cvc5_solver``).
 """
 
 import cvc5
 from cvc5 import Kind
 
-from .solver import Constraint, Rel, Status, Term, _ComponentSolver, _Var
+from fpy2.analysis.digit_bound import BACKENDS
+from fpy2.analysis.digit_bound.solver import (
+    Constraint,
+    Rel,
+    Status,
+    Term,
+    _ComponentSolver,
+    _Var,
+)
 
 __all__ = ['Cvc5Solver']
 
 
 class Cvc5Solver(_ComponentSolver[cvc5.Solver]):
-    """:class:`~fpy2.analysis.digit_bound.solver.Solver` backed by cvc5.
+    """:class:`~fpy2.analysis.digit_bound.Solver` backed by cvc5.
 
     One incremental cvc5 solver per component, in ``QF_LIA``, over one term
     manager.  *timeout_ms* bounds each check (``tlimit-per``).
@@ -111,3 +123,6 @@ class Cvc5Solver(_ComponentSolver[cvc5.Solver]):
     def _value(self, into: cvc5.Solver, objective: Term) -> int | None:
         found = into.getValue(self._to_cvc5(objective))
         return found.getIntegerValue() if found.isIntegerValue() else None
+
+
+BACKENDS['cvc5'] = Cvc5Solver

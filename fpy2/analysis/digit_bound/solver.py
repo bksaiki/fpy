@@ -3,8 +3,8 @@ The solver interface for the digit-bound store.
 
 The constraint language -- affine terms over integer variables -- the
 interface a backend answers questions about it through, and what every
-backend shares.  Each backend is a module of its own: z3 in :mod:`z3_solver`,
-cvc5 beside it.  :mod:`fpy2.analysis.digit_bound.store`
+backend shares.  Each backend is a module of its own, as z3 is
+:mod:`z3_solver`.  :mod:`fpy2.analysis.digit_bound.store`
 states the constraints; nothing here walks an AST or knows what a variable
 means.
 """
@@ -190,8 +190,8 @@ class SolverStats:
     """
 
     solver_time: float = 0.0
-    """Seconds in the backend: stating constraints, which z3 and cvc5 encode
-    into live solvers as they arrive, and answering queries."""
+    """Seconds in the backend: stating constraints, which the backends
+    encode into live solvers as they arrive, and answering queries."""
     queries: int = 0
     """Calls to :meth:`Solver.maximize` and :meth:`Solver.reaches`."""
     degraded: int = 0

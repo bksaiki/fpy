@@ -7,9 +7,10 @@ is compiled to C++ as `compilation/compile_times.py` times it (the C++
 alone, without `compile_design`'s entry signature, which would run
 digit-bound inference a second time), once per backend and repeat.
 
-The backends are in `fpy2/analysis/digit_bound/`: `solver.py` (the
-interface, and the base every backend shares), `z3_solver.py` and
-`cvc5_solver.py`:
+The interface and the base every backend shares are
+`fpy2/analysis/digit_bound/solver.py`; the z3 backend is `z3_solver.py`
+beside it, and the cvc5 backend `cvc5_solver.py` here, which adds itself to
+the core's backends when imported:
 
 - `z3`: bisection over satisfiability checks, the default;
 - `z3-opt`: z3's `Optimize`, one search per query, all its objectives
@@ -68,10 +69,12 @@ backend fails a design z3 compiles; differing C++ is reported, not fatal.
 `evaluation/`).
 
 Any test suite runs under another backend with `FPY_DIGIT_BOUND_SOLVER`,
-from `evaluation/`:
+from `evaluation/`; `-p cvc5_solver` loads cvc5, which also adds it to the
+backend tests:
 
 ```sh
-FPY_DIGIT_BOUND_SOLVER=cvc5 uv run pytest -n 8 -q ../tests/unit/analysis/test_digit_bound.py
+FPY_DIGIT_BOUND_SOLVER=cvc5 PYTHONPATH=sensitivity uv run pytest -p cvc5_solver -n 8 -q \
+  ../tests/unit/analysis/test_digit_bound.py ../tests/unit/analysis/test_digit_bound_backends.py
 ```
 
 ## Tests
