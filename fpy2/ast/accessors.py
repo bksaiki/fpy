@@ -3,7 +3,7 @@ Where an AST node holds its blocks, sub-expressions and variables.
 """
 
 from collections.abc import Iterable
-from typing import Literal, TypeAlias
+from typing import Literal
 
 from .fpyast import (
     AssertStmt,
@@ -38,10 +38,10 @@ from .fpyast import (
 )
 from .visitor import DefaultVisitor
 
-BlockField: TypeAlias = Literal['body', 'ift', 'iff']
+type BlockField = Literal['body', 'ift', 'iff']
 """The fields a statement can hold a block in."""
 
-ExprField: TypeAlias = Literal[
+type ExprField = Literal[
     # of a statement
     'expr', 'indices', 'cond', 'iterable', 'ctx', 'test', 'msg',
     # of an expression

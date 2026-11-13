@@ -3,7 +3,6 @@ Abstract number system.
 """
 
 import math
-from typing import TypeAlias
 
 from ...number import Float, RealFloat, RoundingMode
 from ...number.context.efloat import EFloatFormat
@@ -24,7 +23,7 @@ __all__ = [
     'round_bound_out',
 ]
 
-AbstractableFormat: TypeAlias = (
+AbstractableFormat = (
     RealFormat
     | MPFixedFormat | MPBFixedFormat
     | ExpFormat

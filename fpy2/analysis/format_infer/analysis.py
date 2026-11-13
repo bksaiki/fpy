@@ -142,7 +142,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import reduce
-from typing import Any, TypeAlias
+from typing import Any
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
@@ -237,7 +237,7 @@ class _AtLeast:
     binade: int
 
 
-_Fact: TypeAlias = 'AbstractFormat | _AtLeast'
+type _Fact = AbstractFormat | _AtLeast
 """What a branch condition says about a variable it tests."""
 
 
@@ -380,7 +380,7 @@ class Special(enum.Enum):
         return self.name
 
 
-SetValue: TypeAlias = Fraction | NegZero | Special
+type SetValue = Fraction | NegZero | Special
 """A member of a :class:`SetFormat`: an exact rational, the negative zero, or
 an infinity / NaN."""
 
@@ -566,9 +566,9 @@ VAR_FORMAT = VarFormat()
 """The sole :class:`VarFormat`, mirroring :data:`REAL_FORMAT`."""
 
 
-ScalarFormatBound: TypeAlias = None | SetFormat | Format
-AbstractableFormatBound: TypeAlias = SetFormat | AbstractableFormat
-FormatBound: TypeAlias = (
+type ScalarFormatBound = None | SetFormat | Format
+AbstractableFormatBound = SetFormat | AbstractableFormat
+FormatBound = (
     None | VarFormat | SetFormat | Format | TupleFormat | ListFormat
 )
 """
@@ -1640,7 +1640,7 @@ def _literal_bound(e) -> FormatBound:
     return SetFormat.from_value(e.as_rational())
 
 
-_Path: TypeAlias = tuple[int | None, ...]
+type _Path = tuple[int | None, ...]
 """Steps into a value, each a list's elements (:data:`ELTS`) or a tuple's field."""
 
 

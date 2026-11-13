@@ -9,7 +9,6 @@ import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generic, TypeVar
 
 __all__ = [
     'Runner',
@@ -17,12 +16,8 @@ __all__ = [
 ]
 
 
-C = TypeVar("C") # Config type
-K = TypeVar("K") # Sample key type
-R = TypeVar("R") # Result type
-
 @dataclass(frozen=True)
-class SampleWorkerTask(Generic[K]):
+class SampleWorkerTask[K]:
     """
     Data class representing a worker configuration for sampling.
     """
@@ -39,7 +34,7 @@ class SampleWorkerTask(Generic[K]):
 
 
 @dataclass(frozen=True)
-class RunnerWorkerTask(Generic[C]):
+class RunnerWorkerTask[C]:
     """
     Data class representing a worker configuration for a `Runner`.
     """
@@ -55,7 +50,7 @@ class RunnerWorkerTask(Generic[C]):
     """the index of this worker"""
 
 
-class Runner(ABC, Generic[C, K, R]):
+class Runner[C, K, R](ABC):
     """
     Abstract base class defining a design-space explorer.
 

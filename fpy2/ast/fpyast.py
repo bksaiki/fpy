@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, Self, TypeAlias
+from typing import Any, Self
 
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
@@ -1853,7 +1853,7 @@ class FuncDef(Ast):
 ###########################################################
 # Type aliases
 
-FuncSymbol: TypeAlias = Var | Attribute
+type FuncSymbol = Var | Attribute
 """
 FPy function symbols have the recursive form
 

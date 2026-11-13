@@ -10,7 +10,6 @@ and :class:`fpy2.transform.LiftContext`.
 """
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -34,7 +33,7 @@ _TOP: _TopType = _TopType()
 
 # Internal lattice value: a public :data:`Value`, BOT (absent from
 # the map), or the ``_TOP`` sentinel.
-_Lattice: TypeAlias = Value | _TopType
+type _Lattice = Value | _TopType
 
 
 def base_env(func: FuncDef) -> dict[NamedId, object]:

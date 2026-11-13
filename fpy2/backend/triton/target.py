@@ -27,7 +27,6 @@ not the one FPy specifies is refused, never approximated.  Left out:
 import dataclasses
 import enum
 from functools import cache
-from typing import TypeAlias
 
 from ...ast.fpyast import (
     Abs,
@@ -108,7 +107,7 @@ class TritonOp:
                 return self.name.format(*args)
 
 
-OpTable: TypeAlias = dict[type[Expr], list[TritonOp]]
+type OpTable = dict[type[Expr], list[TritonOp]]
 
 
 @dataclasses.dataclass

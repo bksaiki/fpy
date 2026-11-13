@@ -3,7 +3,6 @@ Reaching definitions analysis.
 """
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -25,7 +24,7 @@ __all__ = [
 ]
 
 
-DefSite: TypeAlias = FuncDef | Argument | Assign | IndexedAssign | ForStmt | ContextStmt | ListComp
+type DefSite = FuncDef | Argument | Assign | IndexedAssign | ForStmt | ContextStmt | ListComp
 """
 AST nodes that can define variables.
 
@@ -44,7 +43,7 @@ def.  Such analyses should dispatch on ``isinstance(d.site, IndexedAssign)``
 to recognize in-place mutations and walk ``d.prev`` to find the original
 allocation site.
 """
-PhiSite: TypeAlias = If1Stmt | IfStmt | WhileStmt | ForStmt
+type PhiSite = If1Stmt | IfStmt | WhileStmt | ForStmt
 """AST nodes that can introduce phi nodes"""
 
 
@@ -110,7 +109,7 @@ class PhiDef:
         )
 
 
-Definition: TypeAlias = AssignDef | PhiDef
+Definition = AssignDef | PhiDef
 """definition: either an assignment or a phi node"""
 
 
@@ -149,7 +148,7 @@ def def_classes(defs: list[Definition]) -> dict[Definition, Definition]:
     return {d: uf.find(d) for d in defs}
 
 
-DefCtx: TypeAlias = dict[NamedId, Definition]
+type DefCtx = dict[NamedId, Definition]
 """mapping from variable name to definition"""
 
 @default_repr
@@ -320,7 +319,7 @@ class ReachingDefsAnalysis:
         return set(out_ctx.keys() - in_ctx.keys())
 
 
-_DefCtx: TypeAlias = dict[NamedId, int]
+type _DefCtx = dict[NamedId, int]
 """visitor context: mapping from variable name to definition index"""
 
 class _ReachingDefs(DefaultVisitor):

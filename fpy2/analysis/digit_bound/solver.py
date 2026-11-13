@@ -14,7 +14,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import astuple, dataclass
 from enum import Enum, auto
-from typing import Generic, NamedTuple, Protocol, TypeVar
+from typing import NamedTuple, Protocol
 
 from ...utils import Unionfind
 
@@ -220,16 +220,12 @@ class Status(Enum):
     UNKNOWN = auto()
 
 
-_S = TypeVar('_S')
-"""A backend's solver for one component."""
-
-
-class _ComponentSolver(Generic[_S]):
+class _ComponentSolver[S]:
     """What every backend shares: components, bisection, and the
     statistics.
 
     A backend supplies :meth:`_new`, :meth:`_encode`, :meth:`_check` and
-    :meth:`_value`.
+    :meth:`_value`; *S* is its solver for one component.
     """
 
     timeout_ms: int
@@ -250,7 +246,7 @@ class _ComponentSolver(Generic[_S]):
     _group: dict[int, list[Constraint]]
     """Constraints by component root, kept unencoded until asked for."""
 
-    _built: dict[int, _S]
+    _built: dict[int, S]
     """Each component's solver, by root.  Each is encoded once and then
     learns incrementally."""
 
@@ -284,22 +280,22 @@ class _ComponentSolver(Generic[_S]):
 
     # -- what a backend supplies -------------------------------------------
 
-    def _new(self) -> _S:
+    def _new(self) -> S:
         """An empty solver."""
         raise NotImplementedError
 
-    def _encode(self, into: _S, constraint: Constraint) -> None:
+    def _encode(self, into: S, constraint: Constraint) -> None:
         """State *constraint* into the solver *into*."""
         raise NotImplementedError
 
     def _check(
-        self, into: _S, lits: tuple[int, ...], bound: tuple[Term, int] | None = None,
+        self, into: S, lits: tuple[int, ...], bound: tuple[Term, int] | None = None,
     ) -> Status:
         """Is what *into* holds satisfiable where the literals *lits* hold,
         and, given *bound* ``(t, k)``, where ``t >= k``?"""
         raise NotImplementedError
 
-    def _value(self, into: _S, objective: Term) -> int | None:
+    def _value(self, into: S, objective: Term) -> int | None:
         """*objective*'s value in the model of *into*'s last satisfiable
         check, where it has one."""
         raise NotImplementedError
@@ -371,7 +367,7 @@ class _ComponentSolver(Generic[_S]):
             return self._union(named)
         return min(roots, default=-1)
 
-    def _solver_for_vars(self, named: set[int]) -> _S:
+    def _solver_for_vars(self, named: set[int]) -> S:
         """A solver holding just what can bear on the variables *named*.
 
         A constraint reaching none of them cannot move a bound over them, so
@@ -439,12 +435,12 @@ class _ComponentSolver(Generic[_S]):
         return status
 
     def _status(
-        self, into: _S, lits: tuple[int, ...], bound: tuple[Term, int] | None = None,
+        self, into: S, lits: tuple[int, ...], bound: tuple[Term, int] | None = None,
     ) -> Status:
         return self._record(self._check(into, lits, bound))
 
     def _reaches(
-        self, solver: _S, objective: Term, k: int, lits: tuple[int, ...],
+        self, solver: S, objective: Term, k: int, lits: tuple[int, ...],
     ) -> bool:
         """Can the objective reach *k*?
 
@@ -462,7 +458,7 @@ class _ComponentSolver(Generic[_S]):
         return (self._span + abs(objective.const)) * scale
 
     def _bisect(
-        self, solver: _S, objective: Term, lits: tuple[int, ...],
+        self, solver: S, objective: Term, lits: tuple[int, ...],
     ) -> int | float:
         """The maximum by refutation: ``max >= k`` is one satisfiability
         question, and monotone in *k*, so a bracket and a bisection inside it

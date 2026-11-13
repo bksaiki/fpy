@@ -1,7 +1,7 @@
 """FPy functions are the result of `@fpy` decorators."""
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Generic, Optional, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Optional
 
 from titanfp.fpbench.fpcast import FPCore
 
@@ -17,11 +17,7 @@ if TYPE_CHECKING:
     # `transform` imports `function` too (see `forward`)
     from .transform import Cursor, EditLog
 
-P = ParamSpec('P')
-R = TypeVar('R')
-
-
-class Function(Generic[P, R]):
+class Function[**P, R]:
     """
     FPy function.
 

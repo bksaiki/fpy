@@ -23,7 +23,6 @@ efficient dispatch to alternative engines without exception overhead.
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from fractions import Fraction
-from typing import TypeAlias
 
 from ..context import Context
 from ..number import Float
@@ -36,8 +35,8 @@ __all__ = [
 ]
 
 
-EngineArg: TypeAlias = Float | Fraction
-EngineRes: TypeAlias = Float | Fraction | None
+type EngineArg = Float | Fraction
+type EngineRes = Float | Fraction | None
 
 
 class Engine(ABC):

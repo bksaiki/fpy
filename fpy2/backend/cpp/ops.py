@@ -16,7 +16,6 @@ chosen when nothing matches exactly.
 
 import dataclasses
 import enum
-from typing import TypeAlias
 
 from ...ast.fpyast import Expr
 from ...number.context.context import Context
@@ -77,9 +76,9 @@ class CppOp:
         return out
 
 
-UnaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
-BinaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
-TernaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
+type UnaryOpTable = dict[type[Expr], list[CppOp]]
+type BinaryOpTable = dict[type[Expr], list[CppOp]]
+type TernaryOpTable = dict[type[Expr], list[CppOp]]
 
 
 @dataclasses.dataclass
