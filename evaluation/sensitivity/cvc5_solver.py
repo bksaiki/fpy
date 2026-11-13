@@ -76,7 +76,7 @@ class Cvc5Solver(_ComponentSolver[cvc5.Solver]):
             lit = self._lits[i] = self._tm.mkConst(self._tm.getBooleanSort(), f'g#{i}')
         return lit
 
-    def _new(self, optimize: bool) -> cvc5.Solver:
+    def _new(self) -> cvc5.Solver:
         s = cvc5.Solver(self._tm)
         s.setOption('incremental', 'true')
         s.setOption('produce-models', 'true')

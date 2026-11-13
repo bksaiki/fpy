@@ -1,6 +1,6 @@
 """
-Unit tests for the digit-bound solver backends: that each answers as z3 does,
-that each keeps its statistics, and how a store is given one.
+Unit tests for the digit-bound solver: its answers, its statistics, and how
+a store is given one.
 """
 
 import math
@@ -16,18 +16,11 @@ from fpy2.analysis.digit_bound import (
     solver_factory,
 )
 
-from .test_digit_bound import TestBisectionMatchesOptimization, TestFusedSum
-
-BACKENDS = {'z3': Z3Solver, 'z3-opt': partial(Z3Solver, bisect=False)}
-BACKEND_PARAMS = list(BACKENDS)
+from .test_digit_bound import TestFusedSum
 
 
-def make_solver(backend: str, **opts):
-    return BACKENDS[backend](**opts)
-
-
-def _store(backend: str) -> DigitBoundStore:
-    return DigitBoundStore(solver=make_solver(backend))
+def _store() -> DigitBoundStore:
+    return DigitBoundStore(solver=Z3Solver())
 
 
 def _checks(solver) -> list:
@@ -38,21 +31,11 @@ def _checks(solver) -> list:
     return made
 
 
-@pytest.mark.parametrize('backend', BACKEND_PARAMS)
-class TestEveryBackendAgrees:
-    """Each backend gives the answers z3 does, on the shapes the store builds."""
+class TestAnswers:
+    """The answers, on the shapes the store builds."""
 
-    @pytest.mark.parametrize(
-        'name,build,want', TestBisectionMatchesOptimization.CASES,
-        ids=[c[0] for c in TestBisectionMatchesOptimization.CASES])
-    def test_it_finds_the_maximum(self, backend, name, build, want):
-        s = _store(backend)
-        x, y = s.var('x'), s.var('y')
-        _, obj = build(s, x, y)
-        assert s.maximum(obj) == want
-
-    def test_a_guard_binds_only_when_assumed(self, backend):
-        s = _store(backend)
+    def test_a_guard_binds_only_when_assumed(self):
+        s = _store()
         x = s.var('x')
         s.le(x, 10)
         g = s.literal()
@@ -60,9 +43,9 @@ class TestEveryBackendAgrees:
         assert s.maximum(x) == 10
         assert s.maximum(x, frozenset({g})) == 3
 
-    def test_a_guarded_max(self, backend):
+    def test_a_guarded_max(self):
         """A `max` and a guard on one component, asked both ways around."""
-        s = _store(backend)
+        s = _store()
         x, y = s.var('x'), s.var('y')
         s.le(y, 3)
         s.le_max(x, [y, y + 5])
@@ -72,21 +55,21 @@ class TestEveryBackendAgrees:
         assert s.maximum(x, frozenset({g})) == 2
         assert s.maximum(x) == 8      # the literal is released after its query
 
-    def test_a_constant_term(self, backend):
-        s = _store(backend)
+    def test_a_constant_term(self):
+        s = _store()
         a = s.var('a')
         s.le(a, 1)
         assert s.maximum(a - a + 7) == 7
 
-    def test_the_fused_sum(self, backend):
+    def test_the_fused_sum(self):
         for F in (13, 24, 35):
             s, v = TestFusedSum._store(F)
-            s = _rebuilt(s, backend)
+            s = _rebuilt(s)
             assert s.prec(v['lp'], v['n'] + 1) == F + 2
             assert s.prec(v['lc'], v['n'] + 1) == F + 1
 
-    def test_a_decision_agrees_with_the_maximum(self, backend):
-        s = _store(backend)
+    def test_a_decision_agrees_with_the_maximum(self):
+        s = _store()
         x, y = s.var('x'), s.var('y')
         s.le(y, 3)
         s.le_max(x, [y, y + 5])
@@ -97,19 +80,19 @@ class TestEveryBackendAgrees:
             assert s.reaches([(term, k)], frozenset(lits)) == (
                 s.maximum(term, frozenset(lits)) >= k), (term, k, lits)
 
-    def test_a_variable_nothing_constrains_reaches_anything(self, backend):
+    def test_a_variable_nothing_constrains_reaches_anything(self):
         """Asked of the backend directly: the store settles a free term
         itself, so only a caller past it meets a component with nothing in
         it."""
-        s = _store(backend)
+        s = _store()
         x = s.var('x')
         assert s._solver.reaches(x, 10**6) is True
         assert s._solver.reaches(x - x + 3, 4) is False
 
-    def test_an_unrelated_large_constant_costs_nothing(self, backend):
+    def test_an_unrelated_large_constant_costs_nothing(self):
         """A component's bounds come from its own constants: one far away
         must not widen another's search, or its box."""
-        s = _store(backend)
+        s = _store()
         x, big = s.var('x'), s.var('big')
         s.le(big, 1 << 50)
         s.ge(big, -(1 << 50))
@@ -117,21 +100,20 @@ class TestEveryBackendAgrees:
         assert s.maximum(x) == 5
 
 
-def _rebuilt(store: DigitBoundStore, backend: str) -> DigitBoundStore:
-    """*store*'s constraints, restated into a store over *backend*."""
-    out = DigitBoundStore(solver=make_solver(backend))
+def _rebuilt(store: DigitBoundStore) -> DigitBoundStore:
+    """*store*'s constraints, restated into a store over a fresh solver."""
+    out = DigitBoundStore(solver=Z3Solver())
     out._vars = store._vars
     for c in store._constraints:
         out._add(c)
     return out
 
 
-@pytest.mark.parametrize('backend', BACKEND_PARAMS)
 class TestStatistics:
-    """Every backend counts what it was told and what it was asked."""
+    """The solver counts what it was told and what it was asked."""
 
-    def test_stating_constraints_is_timed(self, backend):
-        solver = make_solver(backend)
+    def test_stating_constraints_is_timed(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         x, y = s.var('x'), s.var('y')
         g = s.literal()
@@ -142,8 +124,8 @@ class TestStatistics:
         assert st.queries == 0
         assert st.solver_time > 0     # stating them is timed too
 
-    def test_queries_are_counted_and_timed(self, backend):
-        solver = make_solver(backend)
+    def test_queries_are_counted_and_timed(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
@@ -154,8 +136,8 @@ class TestStatistics:
         assert st.solver_time > 0
         assert st.degraded == 0
 
-    def test_each_query_is_traced(self, backend):
-        solver = make_solver(backend, keep_trace=True)
+    def test_each_query_is_traced(self):
+        solver = Z3Solver(keep_trace=True)
         s = DigitBoundStore(solver=solver)
         x, y, z = s.var('x'), s.var('y'), s.var('z')
         s.le(x, 3)
@@ -168,8 +150,8 @@ class TestStatistics:
         assert [q.constraints for q in trace] == [2, 1]
         assert sum(q.seconds for q in trace) <= solver.stats.solver_time
 
-    def test_a_query_leaves_components_apart_unless_it_optimizes(self, backend):
-        solver = make_solver(backend, keep_trace=True)
+    def test_a_query_leaves_components_apart(self):
+        solver = Z3Solver(keep_trace=True)
         s = DigitBoundStore(solver=solver)
         x, y, z = s.var('x'), s.var('y'), s.var('z')
         s.le(x, 3)
@@ -178,12 +160,11 @@ class TestStatistics:
         assert s.maximums([y, z]) == [3, 9]
         s.maximum(z + 1)
         trace = solver.trace
-        # the query saw both components; only an optimizer, which answers it
-        # in one search, merges them for good
-        assert [q.constraints for q in trace] == [3, 1 if solver.bisect else 3]
+        # the query saw both components, and left them apart
+        assert [q.constraints for q in trace] == [3, 1]
 
-    def test_queries_are_traced_only_when_asked(self, backend):
-        solver = make_solver(backend)
+    def test_queries_are_traced_only_when_asked(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
@@ -192,8 +173,8 @@ class TestStatistics:
         assert solver.stats.queries == 2
         assert solver.trace == []
 
-    def test_a_decision_is_one_query(self, backend):
-        solver = make_solver(backend)
+    def test_a_decision_is_one_query(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
@@ -202,20 +183,8 @@ class TestStatistics:
         assert solver.stats.queries == 1
         assert len(checks) == 1
 
-    def test_bisect_says_how_it_searches(self, backend):
-        """`bisect` is what the evaluation reports as the backend's method:
-        bisection finds a maximum by satisfiability checks, an optimizer
-        without any."""
-        solver = make_solver(backend)
-        s = DigitBoundStore(solver=solver)
-        x = s.var('x')
-        s.le(x, 1000)
-        checks = _checks(solver)
-        assert s.maximum(x) == 1000
-        assert bool(checks) == solver.bisect
-
-    def test_a_cached_answer_does_not_reach_the_solver(self, backend):
-        solver = make_solver(backend)
+    def test_a_cached_answer_does_not_reach_the_solver(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
@@ -267,31 +236,30 @@ def _tradeoff(s: DigitBoundStore):
     return [msb - lsb + 1, -lsb, msb]
 
 
-@pytest.mark.parametrize('backend', BACKEND_PARAMS)
 class TestMaximizeAll:
     """Several objectives asked together, each answered as if alone."""
 
-    def test_each_is_its_own_maximum(self, backend):
-        s = _store(backend)
+    def test_each_is_its_own_maximum(self):
+        s = _store()
         terms = _tradeoff(s)
         assert s.maximums(terms) == [9, 5, 10]
-        alone = _store(backend)
+        alone = _store()
         assert [alone.maximum(t) for t in _tradeoff(alone)] == [9, 5, 10]
 
-    def test_an_unsatisfiable_system_bounds_every_one_below(self, backend):
-        s = _store(backend)
+    def test_an_unsatisfiable_system_bounds_every_one_below(self):
+        s = _store()
         terms = _tradeoff(s)
         s.le(terms[2], -1)
         assert s.maximums(terms) == [-math.inf] * 3
 
-    def test_they_are_one_query(self, backend):
-        solver = make_solver(backend)
+    def test_they_are_one_query(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         s.maximums(_tradeoff(s))
         assert solver.stats.queries == 1
 
-    def test_settled_terms_do_not_reach_the_solver(self, backend):
-        solver = make_solver(backend)
+    def test_settled_terms_do_not_reach_the_solver(self):
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         terms = _tradeoff(s)
         s.maximum(terms[2])
@@ -301,17 +269,8 @@ class TestMaximizeAll:
         assert solver.stats.queries == 2
 
 
-class TestZ3OptimizesTogether:
-    """z3's optimizer answers several objectives in one check."""
-
-    def test_one_query_answers_them_all(self):
-        solver = make_solver('z3-opt')
-        s = DigitBoundStore(solver=solver)
-        assert s.maximums(_tradeoff(s)) == [9, 5, 10]
-        assert solver.stats.queries == 1
-
     def test_bisection_searches_each_in_turn(self):
-        solver = make_solver('z3')
+        solver = Z3Solver()
         s = DigitBoundStore(solver=solver)
         checks = _checks(solver)
         assert s.maximums(_tradeoff(s)) == [9, 5, 10]
@@ -319,7 +278,7 @@ class TestZ3OptimizesTogether:
         assert len(checks) > 3   # several checks per objective
 
     def test_an_unbounded_objective_is_inf(self):
-        s = _store('z3-opt')
+        s = _store()
         x, y = s.var('x'), s.var('y')
         s.le(x, 3)
         s.ge(y, 0)

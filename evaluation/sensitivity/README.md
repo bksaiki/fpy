@@ -9,8 +9,8 @@ digit-bound inference a second time), once per backend and repeat.
 
 The interface and the base every backend shares are
 `fpy2/analysis/digit_bound/solver.py`; the z3 backend is `z3_solver.py`
-beside it, and the cvc5 backend `cvc5_solver.py` here.  `backends.py` names
-them:
+beside it, and the others are here: `z3_opt_solver.py` and
+`cvc5_solver.py`.  `backends.py` names them:
 
 - `z3`: bisection over satisfiability checks, the default;
 - `z3-opt`: z3's `Optimize`, one search per query, all its objectives
