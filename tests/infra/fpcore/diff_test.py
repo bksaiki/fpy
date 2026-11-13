@@ -218,10 +218,10 @@ def _test_core(path: Path, index: int, trials: int, budget: float, seed: int):
         return f'skip {path.name} {name}: no input finished ({skipped} skipped)'
     return f'ok   {path.name} {name}: {compared} inputs ({in_pre} satisfy :pre, {skipped} skipped)'
 
-def test_ports(trials: int = 1000, seed: int = 0, budget: float = 30.0):
+def test_fpbench_examples(trials: int = 1000, seed: int = 0, budget: float = 30.0, jobs: int = 1):
     """
-    Checks every port against its FPBench source on up to `trials` inputs.
-    Each core gets at most `budget` seconds.
+    Checks every port against its FPBench source on up to `trials` inputs,
+    in `jobs` worker processes.  Each core gets at most `budget` seconds.
     """
     tasks = [
         (path, i, trials, budget, seed)
@@ -230,7 +230,7 @@ def test_ports(trials: int = 1000, seed: int = 0, budget: float = 30.0):
     ]
 
     failures: list[str] = []
-    with multiprocessing.Pool(initializer=_init_worker) as pool:
+    with multiprocessing.Pool(jobs, initializer=_init_worker) as pool:
         for line in pool.starmap(_test_core, tasks):
             print(line)
             if line.startswith('FAIL'):
@@ -245,5 +245,6 @@ if __name__ == '__main__':
     parser.add_argument('--trials', type=int, default=1000, help='inputs per core (default 1000)')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--budget', type=float, default=30.0, help='seconds per core (default 30)')
+    parser.add_argument('-j', '--jobs', type=int, default=1, help='worker processes (default 1)')
     args = parser.parse_args()
-    test_ports(args.trials, args.seed, args.budget)
+    test_fpbench_examples(args.trials, args.seed, args.budget, args.jobs)

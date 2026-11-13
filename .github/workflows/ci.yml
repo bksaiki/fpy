@@ -1,15 +1,22 @@
-name: Build and check
+name: CI
 
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# a newer push supersedes a running check of the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   FPBENCH: ~/fpbench
 
 jobs:
   # Verify the project builds and installs cleanly under each supported
-  # Python version, via both install paths.  ``uv`` is our primary
-  # workflow; the ``pip`` variant keeps the legacy ``pip install -e .[dev]``
-  # entry point from regressing.
+  # Python version.  ``uv`` is our primary workflow; the ``pip`` variant
+  # keeps the legacy ``pip install -e .[dev]`` entry point from regressing.
   build-uv:
     name: "Build (uv)"
     runs-on: ${{ matrix.os }}
@@ -17,10 +24,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13", "3.14"]
-
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -31,16 +37,14 @@ jobs:
 
   build-pip:
     name: "Build (pip)"
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ["3.12", "3.13", "3.14"]
-
+        python-version: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
@@ -50,83 +54,74 @@ jobs:
       - name: Install fpy2
         run: pip install -e .[dev]
 
-  mypy:
-    name: "Mypy analyzer"
+  lint:
+    name: "Lint"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           python-version: "3.12"
       - name: Install
         run: uv sync --locked
-      - name: Check
+      - name: Ruff
+        run: uv run ruff check fpy2/
+      - name: Mypy
         run: uv run mypy fpy2
 
-  ruff:
-    name: "Ruff linter"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: "3.12"
-      - name: Install
-        run: uv sync --locked
-      - name: Lint
-        run: uv run ruff check fpy2/
-
   unit:
-    name: "Unit Tests"
+    name: "Unit tests (${{ matrix.python-version }})"
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install
         run: uv sync --locked
-      - name: Unit Tests
+      - name: Unit tests
         run: uv run make unittest UNITTEST_JOBS=auto
-      - name: Infrastucture Tests
+      - name: Infrastructure tests
         run: uv run python -m tests.infra
 
   # macOS is arm64, where the C++ backend's float-to-integer conversions differ
   # from x86-64's -- the `unit` job above cannot see that difference.  Unit
   # tests only: the infrastructure tests need the FPBench corpus.
   unit-macos:
-    name: "Unit Tests (macOS)"
+    name: "Unit tests (macOS)"
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           python-version: "3.12"
       - name: Install
         run: uv sync --locked
-      - name: Unit Tests
+      - name: Unit tests
         run: uv run make unittest UNITTEST_JOBS=auto
 
   # fpcore:
   #   name: "FPCore tests"
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v7
   #     - name: "Checkout fpbench/fpbench"
-  #       uses: actions/checkout@v4
+  #       uses: actions/checkout@v7
   #       with:
   #         repository: fpbench/fpbench
   #         path: ~/fpbench
-  #     - uses: astral-sh/setup-uv@v5
+  #     - uses: astral-sh/setup-uv@v10.3.3
   #       with:
   #         enable-cache: true
   #         python-version: "3.12"
@@ -139,36 +134,53 @@ jobs:
     name: "C++ tests"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           python-version: "3.12"
       - name: Install
         run: uv sync --locked
-      - name: Tests (C++)
+      - name: C++ tests
         # `run` mode is a superset of `compile`: it compiles every corpus
         # function and additionally executes the bit-exact-eligible subset,
         # checking each output against the FPy interpreter.
         run: uv run python -m tests.infra.backend.cpp --mode run
 
+  mmasim:
+    name: "MMA-Sim tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --locked
+      - name: Models
+        working-directory: examples/mmasim
+        run: uv run pytest tests
+      - name: Compilation
+        # every design to C++ (compiled) and to a Triton kernel (emitted only)
+        run: uv run python -m tests.infra.backend.mmasim
+
   sweep:
     name: "Sweep"
     runs-on: ubuntu-latest
-    needs: unit
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: "Checkout fpbench/fpbench"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
           python-version: "3.12"
