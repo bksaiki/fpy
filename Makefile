@@ -47,6 +47,10 @@ cpptest:
 	@echo "Running C++ backend tests (compile + execute, bit-compare vs interpreter)..."
 	python3 -m tests.infra.backend.cpp --mode run
 
+mmasimtest:
+	@echo "Compiling the MMA-Sim designs to C++ and Triton..."
+	python3 -m tests.infra.backend.mmasim
+
 clean: clean-docs
 	@echo "Cleaning build artifacts..."
 	rm -rf build/ dist/ *.egg-info
@@ -64,6 +68,7 @@ help:
 	@echo "  make infratest     Run infrastructure testing"
 	@echo "  make unittest      Run unit tests"
 	@echo "  make cpptest       Compile + execute the C++ backend corpus (needs a C++ compiler)"
+	@echo "  make mmasimtest    Compile the MMA-Sim designs to C++ and Triton (needs a C++ compiler)"
 	@echo "  make lint          Run linters"
 	@echo "   - make mypy       Run mypy type checker"
 	@echo "   - make ruff       Run ruff linter"
@@ -80,4 +85,4 @@ help:
 	@echo "  make clean-docs    Clean documentation build artifacts"
 	@echo ""
 
-.PHONY: docs tests cpptest
+.PHONY: docs tests cpptest mmasimtest

@@ -156,6 +156,9 @@ jobs:
         # function and additionally executes the bit-exact-eligible subset,
         # checking each output against the FPy interpreter.
         run: uv run python -m tests.infra.backend.cpp --mode run
+      - name: Tests (MMA-Sim)
+        # every MMA-Sim design to C++ (compiled) and to a Triton kernel (emitted only)
+        run: uv run python -m tests.infra.backend.mmasim
 
   sweep:
     name: "Sweep"
