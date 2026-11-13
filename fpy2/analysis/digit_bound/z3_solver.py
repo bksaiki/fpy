@@ -11,6 +11,7 @@ from .solver import Constraint, Rel, Status, Term, _ComponentSolver, _Var
 
 __all__ = ['Z3Solver']
 
+
 class Z3Solver(_ComponentSolver[z3.Solver]):
     """:class:`~fpy2.analysis.digit_bound.solver.Solver` backed by z3.
 

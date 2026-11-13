@@ -12,7 +12,6 @@ from fpy2.analysis.digit_bound import (
     DigitBoundStore,
     SolverStats,
     Z3Solver,
-    default_solver,
     solver_factory,
 )
 
@@ -211,8 +210,8 @@ class TestChoosingABackend:
         make = partial(Z3Solver, timeout_ms=5)
         with solver_factory(make) as solvers:
             a, b = DigitBoundStore(), DigitBoundStore()
-            assert default_solver().timeout_ms == 5
-        assert [a._solver, b._solver] == solvers[:2]
+        assert solvers == [a._solver, b._solver]
+        assert a._solver.timeout_ms == 5
         # and only inside it
         assert DigitBoundStore()._solver.timeout_ms != 5
 
@@ -267,7 +266,6 @@ class TestMaximizeAll:
         assert s.maximums([*terms, free, terms[0]]) == [9, 5, 10, math.inf, 9]
         # `msb` alone, then the other two together
         assert solver.stats.queries == 2
-
 
     def test_bisection_searches_each_in_turn(self):
         solver = Z3Solver()

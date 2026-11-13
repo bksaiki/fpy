@@ -118,4 +118,3 @@ class Cvc5Solver(_ComponentSolver[cvc5.Solver]):
     def _value(self, into: cvc5.Solver, objective: Term) -> int | None:
         found = into.getValue(self._to_cvc5(objective))
         return found.getIntegerValue() if found.isIntegerValue() else None
-

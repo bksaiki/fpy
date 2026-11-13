@@ -5,6 +5,9 @@ another backend.  From `evaluation/`:
     PYTHONPATH=sensitivity uv run pytest -p solver_plugin --digit-bound-solver cvc5 ...
 """
 
+from collections.abc import Iterator
+from contextlib import nullcontext
+
 import pytest
 from backends import BACKENDS
 
@@ -17,10 +20,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _digit_bound_solver(request: pytest.FixtureRequest):
+def _digit_bound_solver(request: pytest.FixtureRequest) -> Iterator[None]:
     name = request.config.getoption('--digit-bound-solver')
-    if name is None:
-        yield
-        return
-    with solver_factory(BACKENDS[name]):
+    with solver_factory(BACKENDS[name]) if name else nullcontext():
         yield

@@ -17,7 +17,6 @@ from fpy2.analysis.digit_bound import (
     DigitBoundParams,
     DigitBoundStore,
     Term,
-    Z3Solver,
 )
 from fpy2.analysis.digit_bound.spaces import Binder, Key
 from fpy2.strategies import monomorphize
