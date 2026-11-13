@@ -37,7 +37,7 @@ from ..types import ListType, Type, VarType
 def _rational_literal(val: Fraction, loc):
     """AST literal for an exact rational: an ``Integer`` when integral,
     otherwise a ``rational`` literal."""
-    if val.denominator == 1:
+    if val.is_integer():
         return Integer(int(val), loc)
     return Rational(None, val.numerator, val.denominator, loc)
 

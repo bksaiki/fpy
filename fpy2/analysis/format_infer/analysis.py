@@ -612,7 +612,7 @@ def _concrete_int(fmt: FormatBound) -> int | None:
         (v,) = fmt.values
         # `NEG_ZERO` is not an integer: it is a distinct value that no `range`
         # bound may be, and it has no `denominator`.
-        if isinstance(v, Fraction) and v.denominator == 1:
+        if isinstance(v, Fraction) and v.is_integer():
             return v.numerator
     return None
 
@@ -1929,7 +1929,7 @@ class FormatAnalysis:
         if not isinstance(fmt, SetFormat) or len(fmt.values) != 1:
             return None
         (v,) = fmt.values
-        return int(v) if isinstance(v, Fraction) and v.denominator == 1 else None
+        return int(v) if isinstance(v, Fraction) and v.is_integer() else None
 
     def view_of_call(self, e: Call) -> 'FormatAnalysis | None':
         """The sub-analysis for *e*'s callee at this call site."""

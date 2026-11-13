@@ -82,7 +82,7 @@ shell.
 ### Installing from PyPI
 
 Requirements:
- - Python 3.11 or later
+ - Python 3.12 or later
 
 To install the latest stable release of FPy, run:
 ```bash
@@ -92,12 +92,12 @@ or, with `pip`:
 ```bash
 pip install fpy2
 ```
-The Triton backend also needs a GPU, with PyTorch and Triton installed separately.
+The Triton backend also needs PyTorch, Triton and a GPU: install `fpy2[triton]`.
 
 ### Installing from source
 
 Requirements:
- - Python 3.11 or later
+ - Python 3.12 or later
  - `make`
 
 #### With `uv` (preferred)

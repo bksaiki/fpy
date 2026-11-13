@@ -5,7 +5,6 @@ Decorators for the FPy language.
 import builtins
 import inspect
 from collections.abc import Callable
-from types import CodeType
 from typing import Any, ParamSpec, TypeVar, overload
 
 from .analysis import Reachability, SyntaxCheck
@@ -180,24 +179,12 @@ def _function_env(func: Callable) -> ForeignEnv:
 def _closure_names(func: Callable, env: ForeignEnv) -> set[str]:
     """Every name *func*'s body may read from its defining scope.
 
-    The nested code objects are walked because :func:`inspect.getclosurevars`
-    reads only one, and before PEP 709 (Python 3.12) a comprehension compiles
-    to its own -- so a name used only inside ``[... for x in xs]`` is otherwise
-    invisible, and `SyntaxCheck` would call it unbound.
-
     ``co_names`` also holds attribute names, so ``fp.logb`` contributes
     ``logb``; membership in *env* is the filter, as it is in
     ``getclosurevars``.
     """
     names = set(inspect.getclosurevars(func).nonlocals)
-    codes = [func.__code__]
-    while codes:
-        code = codes.pop()
-        names |= {n for n in code.co_names if n in env}
-        # a nested object's `co_freevars` name the enclosing function's locals,
-        # which are FPy locals rather than foreign
-        codes.extend(c for c in code.co_consts if isinstance(c, CodeType))
-    return names
+    return names | {n for n in func.__code__.co_names if n in env}
 
 
 def _apply_fpy_decorator(

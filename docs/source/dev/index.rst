@@ -8,7 +8,7 @@ installing FPy is actually different.
 
 Requirements:
 
-* Python 3.11 or later
+* Python 3.12 or later
 * `make`
 
 Installation

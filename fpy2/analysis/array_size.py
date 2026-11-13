@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
+from itertools import pairwise
 from typing import TypeAlias
 
 from ..ast.fpyast import *
@@ -824,10 +825,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
         """Whether *e* is provably an integer: an integral constant, a size
         query, a ``range`` target, or :meth:`_is_int_op` arithmetic."""
         val = self._get_eval(e)
-        if isinstance(val, Float):
+        if isinstance(val, Float | Fraction):
             return val.is_integer()
-        if isinstance(val, Fraction):
-            return val.denominator == 1
         e = self.def_use.defining_expr(e)
         match e:
             case Len() | Dim() | Size():
@@ -1046,7 +1045,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 for arg in test.args:
                     self._seed_from_assert(arg)
             case Compare():
-                for op, lhs, rhs in zip(test.ops, test.args, test.args[1:]):
+                for op, (lhs, rhs) in zip(test.ops, pairwise(test.args)):
                     if op == CompareOp.EQ:
                         self._relate_sizes(self._len_size(lhs), self._len_size(rhs))
             case _:

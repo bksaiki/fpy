@@ -42,12 +42,9 @@ def _log2_exact(x: EngineArg) -> int | None:
 def _int_value(x: EngineArg) -> int | None:
     """The value of `x` as an `int`, or `None` if it is not an integer."""
     match x:
-        case Float():
+        case Float() | Fraction():
             # `is_integer()` is false for Inf and NaN, so `int()` is safe here
             if not x.is_integer():
-                return None
-        case Fraction():
-            if x.denominator != 1:
                 return None
         case _:
             raise RuntimeError("unreachable case")

@@ -19,6 +19,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
+from itertools import pairwise
 
 from ...analysis import (
     ArraySizeAnalysis,
@@ -1643,10 +1644,7 @@ class _Emitter(Visitor):
     @staticmethod
     def _chain(e: Compare, codes: list[str]) -> str:
         """The links of *e* over *codes*, joined with `&`."""
-        links = [
-            f'({codes[i]} {op.symbol()} {codes[i + 1]})'
-            for i, op in enumerate(e.ops)
-        ]
+        links = [f'({a} {op.symbol()} {b})' for op, (a, b) in zip(e.ops, pairwise(codes))]
         return links[0] if len(links) == 1 else '(' + ' & '.join(links) + ')'
 
     def _emit_connective(self, e: And | Or) -> str:
@@ -1993,7 +1991,7 @@ class _Emitter(Visitor):
         """An exact literal as itself, where Triton holds it; else a refusal,
         since `num / denom` would be an operation where FPy has a constant."""
         # Triton refuses an integer literal no `int64` holds
-        if v.denominator == 1 and -2 ** 63 <= v.numerator < 2 ** 63:
+        if v.is_integer() and -2 ** 63 <= v.numerator < 2 ** 63:
             return str(v.numerator)
         exact = float(v)
         if Fraction(exact) == v:

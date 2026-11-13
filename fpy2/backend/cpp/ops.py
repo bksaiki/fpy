@@ -14,8 +14,6 @@ around ``with`` blocks.  ``CppEmitter._dispatch`` documents how a signature is
 chosen when nothing matches exactly.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import enum
 from typing import TypeAlias

@@ -233,7 +233,7 @@ def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     expression is a ``long``.  ``None`` means no integer literal fits and the
     caller must spell a float or refuse.
     """
-    if v.denominator != 1:
+    if not v.is_integer():
         return CppScalar.F64 if _as_exact_double(v) is not None else None
     n = abs(v.numerator)
     if n < 2 ** 31:
@@ -2340,7 +2340,7 @@ class CppEmitter(Visitor):
         fmt = self.format_info.by_expr.get(e)
         if isinstance(fmt, SetFormat):
             ok = all(
-                isinstance(v, Fraction) and v.denominator == 1
+                isinstance(v, Fraction) and v.is_integer()
                 and abs(v) < self._LDEXP_EXP_LIMIT
                 for v in fmt.values
             )
@@ -4141,7 +4141,7 @@ class CppEmitter(Visitor):
             (v,) = fmt.values
             # A `SetFormat` value may be `NEG_ZERO`, which is not an integer --
             # no `range` bound may be one, and it has no `denominator`.
-            if isinstance(v, Fraction) and v.denominator == 1:
+            if isinstance(v, Fraction) and v.is_integer():
                 return v.numerator
         return None
 

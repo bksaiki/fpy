@@ -24,8 +24,6 @@ not the one FPy specifies is refused, never approximated.  Left out:
   PTX's ``add.rz.f32``) are FP32 and FP64 only, and those are in the table.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import enum
 from functools import cache

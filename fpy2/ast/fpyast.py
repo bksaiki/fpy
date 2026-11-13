@@ -451,7 +451,7 @@ class RationalVal(RealVal):
 
     def is_integer(self) -> bool:
         """Returns true if the represented value is an integer."""
-        return self.as_rational().denominator == 1
+        return self.as_rational().is_integer()
 
 
 class Decnum(RationalVal):
