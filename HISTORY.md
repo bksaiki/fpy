@@ -1,5 +1,33 @@
 # Version History
 
+## 0.3.1 - 2026-11-13
+
+### Changes:
+ - require Python 3.12 or later
+ - dependencies: minimum versions instead of pins; add `fpy2[triton]` extra
+
+### Features:
+ - Frontend:
+   - `pre` and `spec` as `lambda`s over the arguments
+   - FPCore: import `:pre` and `:spec`
+ - Analysis:
+   - digit bound: tighter bounds
+ - Backend:
+   - FPCore: export `:pre` and `:spec`
+   - C++:
+     - add `namespace` option
+     - fuse reductions of unknown length
+     - unfold roundings whose position is known only at run time
+
+### Fixes:
+ - Frontend:
+   - FPCore: `fmin`/`fmax` with a NaN argument
+ - Analysis:
+   - digit bound: overflow handling
+ - Backend:
+   - FPCore: `!=` over more than two arguments
+   - C++: storage checks disagreed with storage selection on special values
+
 ## 0.3.0 - 2026-10-22
 
 ### License:
