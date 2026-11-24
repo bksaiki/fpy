@@ -3,7 +3,7 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
-from ...utils import DEFAULT, DefaultOr
+from ...utils import DEFAULT, DefaultOr, default_or
 from ..number import RNG, Float
 from ..round import OverflowMode, RoundingMode
 from .efloat import EFloatContext, EFloatFormat, EFloatNanKind
@@ -68,21 +68,16 @@ class IEEEContext(EFloatContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'IEEEContext':
-        if es is DEFAULT:
-            es = self.es
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
-        return IEEEContext(es, nbits, rm, overflow, num_randbits, rng=rng)
+        return IEEEContext(
+            default_or(es, self.es),
+            default_or(nbits, self.nbits),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+        )
 
     def format(self) -> IEEEFormat:
         return IEEEFormat(self.es, self.nbits)

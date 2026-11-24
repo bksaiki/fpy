@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal
+from typing import Literal, cast
 
 """
 Default value instead of `None`
@@ -21,3 +21,8 @@ DEFAULT = Default.DEFAULT
 
 
 type DefaultOr[T] = T | Literal[Default.DEFAULT]
+
+
+def default_or[T](x: object, default: T) -> T:
+    """*x*, or *default* where *x* is `DEFAULT`."""
+    return default if x is DEFAULT else cast(T, x)

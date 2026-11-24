@@ -65,28 +65,11 @@ from ...ast.fpyast import (
     Tgamma,
     Trunc,
 )
-from ...number import (
-    INTEGER,
-    RM,
-    SINT8,
-    SINT16,
-    SINT32,
-    SINT64,
-    UINT8,
-    UINT16,
-    UINT32,
-    UINT64,
-)
+from ...number import RM
 from ...number.context.context import Context
 from ...number.context.ieee754 import IEEEContext
-from .ops import (
-    BinaryOpTable,
-    CppOp,
-    CppOpStyle,
-    ScalarOpTable,
-    TernaryOpTable,
-    UnaryOpTable,
-)
+from ..storage import INT_CTXS
+from .ops import CppOp, CppOpStyle, OpTable, ScalarOpTable
 from .storage import choose_storage_scalar
 from .types import CppScalar
 
@@ -126,19 +109,8 @@ def _fp_ctxs(rms: tuple[RM, ...] = _FP_RMS) -> list[Context]:
     ]
 
 
-def _int_ctxs() -> list[Context]:
-    """Integer contexts the cpp backend dispatches against.
-    ``INTEGER`` is the unbounded fallback — kept for backward compat
-    with programs that don't pin a width."""
-    return [
-        SINT8, SINT16, SINT32, SINT64,
-        UINT8, UINT16, UINT32, UINT64,
-        INTEGER,
-    ]
-
-
 def _all_arith_ctxs(rms: tuple[RM, ...] = _FP_RMS) -> list[Context]:
-    return _fp_ctxs(rms) + _int_ctxs()
+    return [*_fp_ctxs(rms), *INT_CTXS]
 
 
 @cache
@@ -162,34 +134,11 @@ def _ty_of(ctx: Context) -> CppScalar:
     return choose_storage_scalar(ctx.format())
 
 
-# ---------------------------------------------------------------------
-# Per-arity factory helpers — generate signature sets parameterized
-# by the contexts above.
-
-def _fp_unary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
-    """Same-context FP-only unary signatures for one ``<cmath>``
-    function.  One sig per FP context: FP32 / FP64 × *rms*."""
-    return [
-        CppOp(name, (_ty_of(c),), c)
-        for c in _fp_ctxs(rms)
-    ]
-
-
-def _fp_binary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
-    """Same-context FP-only binary signatures for one ``<cmath>``
-    function (function-call form, not infix)."""
-    return [
-        CppOp(name, (_ty_of(c), _ty_of(c)), c)
-        for c in _fp_ctxs(rms)
-    ]
-
-
-def _fp_ternary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
-    """Same-context FP-only ternary signatures."""
-    return [
-        CppOp(name, (_ty_of(c),) * 3, c)
-        for c in _fp_ctxs(rms)
-    ]
+def _same(
+    name: str, ctxs: list[Context], arity: int, style: CppOpStyle = CppOpStyle.CALL,
+) -> list[CppOp]:
+    """Same-context signatures for one operation over *ctxs*."""
+    return [CppOp(name, (_ty_of(c),) * arity, c, style=style) for c in ctxs]
 
 
 # ---------------------------------------------------------------------
@@ -245,23 +194,19 @@ _TERNARY_CMATH = (
 # ---------------------------------------------------------------------
 # Per-arity table builders.
 
-def _make_unary_table(rms: tuple[RM, ...]) -> UnaryOpTable:
+def _make_unary_table(rms: tuple[RM, ...]) -> OpTable:
     fp = _fp_ctxs(rms)
-    ints = _int_ctxs()
-    same = _all_arith_ctxs(rms)
-    table: UnaryOpTable = {
-        Neg: [CppOp('-', (_ty_of(c),), c, style=CppOpStyle.PREFIX)
-              for c in same],
+    table: OpTable = {
+        Neg: _same('-', _all_arith_ctxs(rms), 1, CppOpStyle.PREFIX),
         # no unsigned row: an unsigned value is its own magnitude, and
         # `_emit_abs` emits the operand rather than a call
         Abs: (
-            [CppOp('std::fabs', (_ty_of(c),), c) for c in fp]
-            + [CppOp('std::abs', (_ty_of(c),), c)
-               for c in ints if _ty_of(c).is_signed()]
+            _same('std::fabs', fp, 1)
+            + _same('std::abs', [c for c in INT_CTXS if _ty_of(c).is_signed()], 1)
         ),
     }
     for op_cls, name in _UNARY_CMATH:
-        table[op_cls] = _fp_unary(name, rms)
+        table[op_cls] = _same(name, fp, 1)
 
     # ``logb`` under an integer output context lowers to
     # ``std::ilogb`` plus an explicit widening cast to the output's
@@ -272,33 +217,24 @@ def _make_unary_table(rms: tuple[RM, ...]) -> UnaryOpTable:
     table[Logb] = table[Logb] + [
         CppOp('std::ilogb', (_ty_of(fp_ctx),), int_ctx, cast_out=True)
         for fp_ctx in fp
-        for int_ctx in ints
+        for int_ctx in INT_CTXS
     ]
     return table
 
 
-def _make_binary_table(rms: tuple[RM, ...]) -> BinaryOpTable:
+def _make_binary_table(rms: tuple[RM, ...]) -> OpTable:
     same = _all_arith_ctxs(rms)
-    table: BinaryOpTable = {
-        op_cls: [
-            CppOp(name, (_ty_of(c), _ty_of(c)), c,
-                  style=CppOpStyle.INFIX)
-            for c in same
-        ]
-        for op_cls, name in (
-            (Add, '+'),
-            (Sub, '-'),
-            (Mul, '*'),
-            (Div, '/'),
-        )
+    table: OpTable = {
+        op_cls: _same(name, same, 2, CppOpStyle.INFIX)
+        for op_cls, name in ((Add, '+'), (Sub, '-'), (Mul, '*'), (Div, '/'))
     }
     for op_cls, name in _BINARY_CMATH:
-        table[op_cls] = _fp_binary(name, rms)
+        table[op_cls] = _same(name, _fp_ctxs(rms), 2)
     return table
 
 
-def _make_ternary_table(rms: tuple[RM, ...]) -> TernaryOpTable:
-    return {op_cls: _fp_ternary(name, rms) for op_cls, name in _TERNARY_CMATH}
+def _make_ternary_table(rms: tuple[RM, ...]) -> OpTable:
+    return {op_cls: _same(name, _fp_ctxs(rms), 3) for op_cls, name in _TERNARY_CMATH}
 
 
 # ---------------------------------------------------------------------

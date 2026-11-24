@@ -7,7 +7,7 @@ TODO: stochastic rounding
 
 from fractions import Fraction
 
-from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import Float, RealFloat
 from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import EncodableContext
@@ -329,20 +329,16 @@ class ExpContext(EncodableContext):
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'ExpContext':
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if eoffset is DEFAULT:
-            eoffset = self.eoffset
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExpContext')
 
-        return ExpContext(nbits, eoffset, rm, overflow, inf_value=inf_value)
+        return ExpContext(
+            default_or(nbits, self.nbits),
+            default_or(eoffset, self.eoffset),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            inf_value=default_or(inf_value, self.inf_value),
+        )
 
     def is_stochastic(self) -> bool:
         return False
@@ -372,22 +368,12 @@ class ExpContext(EncodableContext):
     def round_params(self) -> tuple[int | None, int | None]:
         return 1, None
 
-    def _overflow_to_infinity(self, s: bool):
+    def _overflow_to_infinity(self, s: bool) -> bool:
         """Should overflows round to infinity (rather than MAX_VAL)?"""
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return False
-            case RoundingDirection.RAZ:
-                return True
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return False
-            case _:
-                raise RuntimeError(f'unrechable {direction}')
+        return direction in (RoundingDirection.RAZ, RoundingDirection.RTE)
 
-    def _underflow_to_zero(self, s: bool):
+    def _underflow_to_zero(self, s: bool) -> bool:
         """
         Should underflows round to zero (rather than MIN_VAL)?
 
@@ -395,15 +381,7 @@ class ExpContext(EncodableContext):
         to the region between MAX_VAL and infinity.
         """
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return True
-            case RoundingDirection.RAZ:
-                return False
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return False
+        return direction in (RoundingDirection.RTZ, RoundingDirection.RTE)
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
@@ -462,10 +440,3 @@ class ExpContext(EncodableContext):
 
         return Float(x=rounded, ctx=self)
 
-    def round(self, x, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)

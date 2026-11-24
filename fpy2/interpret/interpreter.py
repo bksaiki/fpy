@@ -8,10 +8,7 @@ from typing import Any
 from ..ast.fpyast import Expr, FuncDef, NamedId
 from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
-from ..number import RM, Context, IEEEContext
-
-_PY_CTX = IEEEContext(11, 64, RM.RNE)
-"""the native Python floating-point context"""
+from ..number import FP64, Context
 
 
 class Interpreter(ABC):
@@ -56,20 +53,15 @@ class Interpreter(ABC):
         If `func` specifies a context, it will be used.
         Otherwise, the provided context `ctx` will be used.
         """
-        override_ctx = func.ctx
-        if override_ctx is None:
-            if ctx is None:
-                return _PY_CTX
-            else:
-                return ctx
-        else:
-            match override_ctx:
-                case Context():
-                    return override_ctx
-                case FPCoreContext():
-                    return override_ctx.to_context()
-                case _:
-                    raise RuntimeError('unreachable', override_ctx)
+        match func.ctx:
+            case None:
+                return FP64 if ctx is None else ctx
+            case Context():
+                return func.ctx
+            case FPCoreContext():
+                return func.ctx.to_context()
+            case _:
+                raise RuntimeError('unreachable', func.ctx)
 
 ###########################################################
 # Default interpreter
@@ -86,7 +78,7 @@ def set_default_interpreter(rt: Interpreter):
     """Sets the default FPy interpreter"""
     global _default_interpreter
     if not isinstance(rt, Interpreter):
-        raise TypeError(f'expected BaseInterpreter, got {rt}')
+        raise TypeError(f'expected \'Interpreter\', got {rt}')
     _default_interpreter = rt
 
 ###########################################################

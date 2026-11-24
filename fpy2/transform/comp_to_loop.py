@@ -429,20 +429,8 @@ class _CompToLoopInstance(SiteRewriter):
             if e not in self._strict
             else self._verify(e)
         )
-        if declined is not None:
-            self._refuse(e, declined.reason)
+        if not self._claim(e, None if declined is None else declined.reason):
             return super()._visit_expr(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
-            super()._visit_expr(e, ctx)
-            return e
 
         lowered = self._lower(e, ctx)
         self._replaced = True

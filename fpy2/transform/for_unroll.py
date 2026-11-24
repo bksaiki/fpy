@@ -26,7 +26,6 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
-from .path import StmtPath
 from .rename_target import RenameTarget
 from .utils import (
     SiteRewriter,
@@ -35,6 +34,7 @@ from .utils import (
     copy_target,
     infer_array_size,
     integer_ctx,
+    rem,
     static_size,
 )
 
@@ -76,9 +76,6 @@ def _sub(a: Expr, b: Expr) -> Sub:
 
 def _len(xs: Expr) -> Len:
     return Len(None, xs, None)
-
-def _fmod(a: Expr, b: Expr) -> Fmod:
-    return Fmod(None, a, b, None)
 
 def _range(start: Expr, stop: Expr, step: Expr) -> Range3:
     return Range3(None, start, stop, step, None)
@@ -159,16 +156,6 @@ class _ForUnroll(SiteRewriter):
         self.array_size = array_size
         self.use_fmod = use_fmod
 
-    def _rem(self, a: Expr, b: Expr) -> Expr:
-        """``a`` remainder ``b``, spelled as the caller asked.
-
-        The two differ on a negative dividend and every dividend here is a
-        length, so they agree; which one a backend can lower is what differs,
-        and that is the caller's to know."""
-        if self.use_fmod:
-            return _fmod(a, b)
-        return Mod(a, b, None)
-
     def _body_copy(
         self,
         target: Id | TupleBinding,
@@ -238,7 +225,7 @@ class _ForUnroll(SiteRewriter):
         and not a multiple of the step -- decided before an index is spent, so a
         listing and the rewrite agree.
         """
-        if self.strategy is not ForUnrollStrategy.STRICT or self.times <= 0:
+        if self.strategy is not ForUnrollStrategy.STRICT:
             return None
         k = self.times + 1
         size = static_size(self.array_size, stmt.iterable)
@@ -250,21 +237,12 @@ class _ForUnroll(SiteRewriter):
         )
 
     def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
-        block, pos = self._site
-        reason = self._refuses(stmt)
-        if reason is not None:
-            self._refuse(stmt, reason)
+        if self.times <= 0:
+            # a no-op: `where` still counts the loop, but a listing shows none
+            if not self.listing:
+                self._claim(stmt)
             return super()._visit_for(stmt, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        aimed = self._selects(block, pos, idx)
-        if aimed:
-            self._matched += 1
-        if not (aimed and self.times > 0):
-            return super()._visit_for(stmt, ctx)
-        if self.listing:
-            self.found.append(StmtPath(self._paths[id(block)], pos))
+        if not self._claim(stmt, self._refuses(stmt)):
             return super()._visit_for(stmt, ctx)
 
         # ``k`` consecutive elements are consumed per rewritten iteration.
@@ -310,7 +288,7 @@ class _ForUnroll(SiteRewriter):
             n = self.gensym.refresh(self.len_id)
             emitted.append(integer_ctx([
                 _assign(n, _len(_var(t))),
-                AssertStmt(_eq(self._rem(_var(n), _int(k)), _int(0)), None, None),
+                AssertStmt(_eq(rem(_var(n), _int(k), self.use_fmod), _int(0)), None, None),
             ], stmt.loc))
             emitted.append(self._main_loop(t, _var(n), k, stmt.target, body, stmt.loc, nested_gen))
 
@@ -342,7 +320,7 @@ class _ForUnroll(SiteRewriter):
             m = self.gensym.fresh('m')
             emitted.append(integer_ctx([
                 _assign(n, _len(_var(t))),
-                _assign(m, _sub(_var(n), self._rem(_var(n), _int(k)))),
+                _assign(m, _sub(_var(n), rem(_var(n), _int(k), self.use_fmod))),
             ], stmt.loc))
             emitted.append(self._main_loop(t, _var(m), k, stmt.target, body, stmt.loc, nested_gen))
 

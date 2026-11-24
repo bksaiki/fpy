@@ -3,7 +3,6 @@ Interpreter backed by Python bytecode.
 """
 
 import ast as pyast
-import copy
 import functools
 import inspect
 from collections.abc import Callable
@@ -201,22 +200,8 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
         raise TypeError(f'expected a list, got {lst}')
 
     n = len(lst)
-    if start is None:
-        start_idx = 0
-    else:
-        if not isinstance(start, RealValue):
-            raise TypeError(f'expected a real number slice bound, got {start}')
-        if not _is_integer(start):
-            raise TypeError(f'expected an integer slice bound, got {start}')
-        start_idx = int(start)
-    if stop is None:
-        stop_idx = n
-    else:
-        if not isinstance(stop, RealValue):
-            raise TypeError(f'expected a real number slice bound, got {stop}')
-        if not _is_integer(stop):
-            raise TypeError(f'expected an integer slice bound, got {stop}')
-        stop_idx = int(stop)
+    start_idx = 0 if start is None else _cvt_int(start)
+    stop_idx = n if stop is None else _cvt_int(stop)
 
     # Strict bounds: 0 <= start <= stop <= len(lst).
     if start_idx < 0:
@@ -235,56 +220,10 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
     return lst[start_idx:stop_idx]
 
 
-def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
-    if not isinstance(lst, list):
-        raise TypeError(f'expected a list, got {lst}')
-    array: list = copy.deepcopy(lst) # make a copy
-
-    slices: list[int] = []
-    for idx in idxs:
-        if not isinstance(idx, RealValue):
-            raise TypeError(f'expected a real number slice, got {idx}')
-        if not _is_integer(idx):
-            raise TypeError(f'expected an integer slice, got {idx}')
-        slices.append(int(idx))
-
-    for s in slices[:-1]:
-        array = array[s]
-        if not isinstance(array, list):
-            raise TypeError(f'expected a list, got {array}')
-
-    array[slices[-1]] = val
-    return array
-
-
 def _eval_range(start: Value | None, stop: Value, step: Value | None):
-    # start index
-    if start is None:
-        start_idx = 0
-    else:
-        if not isinstance(start, RealValue):
-            raise TypeError(f'expected a real number argument, got {start}')
-        if not _is_integer(start):
-            raise ValueError(f'expected an integer argument, got {start}')
-        start_idx = int(start)
-
-    # stop index
-    if not isinstance(stop, RealValue):
-        raise TypeError(f'expected a real number argument, got {stop}')
-    if not _is_integer(stop):
-        raise ValueError(f'expected an integer argument, got {stop}')
-    stop_idx = int(stop)
-
-    # step
-    if step is None:
-        step_val = 1
-    else:
-        if not isinstance(step, RealValue):
-            raise TypeError(f'expected a real number argument, got {step}')
-        if not _is_integer(step):
-            raise ValueError(f'expected an integer argument, got {step}')
-        step_val = int(step)
-
+    start_idx = 0 if start is None else _cvt_int(start)
+    stop_idx = _cvt_int(stop)
+    step_val = 1 if step is None else _cvt_int(step)
     return [
         Float.from_int(i, ctx=INTEGER, checked=False)
         for i in range(start_idx, stop_idx, step_val)
@@ -306,90 +245,47 @@ def _eval_sum(val: list[RealValue], ctx: Context):
             accum = ops.add(accum, x, ctx=ctx)
         return accum
 
-def _unchecked_min(vals: list[RealValue]):
-    # propagate any NaN input
-    for x in vals:
-        if isinstance(x, Float) and x.isnan:
-            return x
-
-    # cannot use the built-in min function because of signed zeros
-    result = vals[0]
-    for x in vals[1:]:
-        if x < result:
-            result = x
-        elif (x == result
-            and isinstance(x, Float) and isinstance(result, Float)
-            and x.s and not result.s):
-            result = x  # x is -0, result is +0 → prefer -0 for min
-    return result
-
-def _unchecked_max(vals: list[RealValue]):
+def _eval_extremum(is_min: bool, arg, args: tuple) -> RealValue:
     """
-    Performs IEEE 754 compliant maximum operation.
+    IEEE 754 `min` (*is_min*) or `max` over its arguments, or over the elements
+    of a lone list argument.
     - propagates NaN inputs (if any argument is NaN, the result is NaN).
-    - max(+0.0, -0.0) == max(-0.0, +0.0) == +0.0.
+    - -0.0 is below +0.0: min(+0.0, -0.0) == -0.0 and max(+0.0, -0.0) == +0.0.
     """
-    # propagate any NaN input
+    if args:
+        vals = [arg, *args]
+    else:
+        if not isinstance(arg, list):
+            raise TypeError(f'expected a list, got {arg}')
+        if len(arg) == 0:
+            raise ValueError(f'{"min" if is_min else "max"}() arg is an empty sequence')
+        vals = arg
+    for x in vals:
+        if not isinstance(x, RealValue):
+            raise TypeError(f'expected a real number argument, got {x}')
+
     for x in vals:
         if isinstance(x, Float) and x.isnan:
             return x
 
-    # cannot use the built-in max function because of signed zeros
+    # not the built-in `min`/`max`, which ignore the sign of zero
     result = vals[0]
     for x in vals[1:]:
-        if x > result:
-            result = x
-        elif (x == result
+        beyond = x < result if is_min else x > result
+        signed_zero = (
+            x == result
             and isinstance(x, Float) and isinstance(result, Float)
-            and not x.s and result.s):
-            result = x  # x is +0, result is -0 → prefer +0 for max
+            and x.s != result.s and x.s == is_min
+        )
+        if beyond or signed_zero:
+            result = x
     return result
 
 def _eval_min(arg, *args):
-    """
-    Performs IEEE 754 compliant minimum operation.
-    - propagates NaN inputs (if any argument is NaN, the result is NaN).
-    - min(+0.0, -0.0) == min(-0.0, +0.0) == -0.0.
-    """
-    if args:
-        # if there are additional values, combine them with the first value into a single list
-        vals = [arg] + list(args)
-    else:
-        # if there are no additional values, we assume its a non-empty list
-        if not isinstance(arg, list):
-            raise TypeError(f'expected a list, got {arg}')
-        if len(arg) == 0:
-            raise ValueError('min() arg is an empty sequence')
-        vals = arg
-
-    # every element must be a real number
-    for x in vals:
-        if not isinstance(x, RealValue):
-            raise TypeError(f'expected a real number argument, got {x}')
-
-    # call the underlying NaN-propagating minimum function
-    return _unchecked_min(vals)
-
+    return _eval_extremum(True, arg, args)
 
 def _eval_max(arg, *args):
-    if args:
-        # if there are additional values, combine them with the first value into a single list
-        vals = [arg] + list(args)
-    else:
-        # if there are no additional values, we assume its a non-empty list
-        if not isinstance(arg, list):
-            raise TypeError(f'expected a list, got {arg}')
-        if len(arg) == 0:
-            raise ValueError('max() arg is an empty sequence')
-        vals = arg
-
-    # every element must be a real number
-    for x in vals:
-        if not isinstance(x, RealValue):
-            raise TypeError(f'expected a real number argument, got {x}')
-
-    # call the underlying NaN-propagating maximum function
-    return _unchecked_max(vals)
+    return _eval_extremum(False, arg, args)
 
 def _eval_len(x):
     # `len` is list-only in FPy (matches `TypeInfer`); native `len` would
@@ -546,7 +442,6 @@ def make_namespace() -> dict[str, object]:
         '__fpy_fraction': Fraction,
         '__fpy_negzero': _neg_zero,
         '__fpy_index': _cvt_index,
-        '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
         '__fpy_min': _eval_min,

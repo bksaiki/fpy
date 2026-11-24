@@ -100,192 +100,21 @@ See :mod:`fpy2.transform.iter_elim` for the machinery this shares with
 ``enumerate(...)`` patterns.
 """
 
-from typing import Any
-
-from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
-from ..ast.fpyast import (
-    Assign,
-    Expr,
-    ForStmt,
-    FuncDef,
-    Len,
-    ListComp,
-    ListRef,
-    NamedId,
-    Range1,
-    Stmt,
-    StmtBlock,
-    TupleBinding,
-    TupleExpr,
-    UnderscoreId,
-    Var,
-    Zip,
-)
-from ..ast.visitor import DefaultTransformVisitor
-from ..utils import Gensym, Id
-from .iter_elim import (
-    Ctx,
-    Plan,
-    SubstNames,
-    clone,
-    comp_binding_is_pairs,
-    destructure_subst,
-    index_access,
-    is_access_path,
-    plan_for_zip,
-)
+from ..analysis import DefineUse, SyntaxCheck
+from ..ast.fpyast import Expr, FuncDef, UnderscoreId, Zip
+from ..utils import Id
+from .iter_elim import IterElimInstance, Plan, Slot, plan_for_zip
 
 
-def _plan(target: Id | TupleBinding, iterable: Expr) -> Plan | None:
-    """How *target* reads one element of *iterable*, or ``None`` when this
-    transform does not apply.
-
-    Fires iff *iterable* is a :class:`Zip` whose element *target* can read by
-    indexing the ``zip``'s own arguments — either destructuring them
-    positionally, or binding the whole tuple to one name (rebuilt per
-    iteration).  See :func:`fpy2.transform.iter_elim.plan_for_zip`.
-    """
-    if not isinstance(iterable, Zip):
-        return None
-    return plan_for_zip(list(iterable.args), target)
-
-
-class _ZipElimInstance(DefaultTransformVisitor):
-    """Single-use visitor that drives the rewrite."""
-
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
-        super().__init__()
-        self.func = func
-        self.gensym = Gensym(reserved=def_use.names())
-
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
-
-    # ------------------------------------------------------------------
-    # Block walk with stmt → stmts expansion
-
-    def _visit_block(self, block: StmtBlock, ctx: Any):
-        # Local Ctx so each block has its own preamble buffer; the
-        # outer caller's ctx (if any) is irrelevant — preambles
-        # always belong to the block introducing them.
-        block_ctx = Ctx.default()
-        for stmt in block.stmts:
-            new_stmt, _ = self._visit_statement(stmt, block_ctx)
-            block_ctx.stmts.append(new_stmt)
-        return StmtBlock(block_ctx.stmts), ctx
-
-    # ------------------------------------------------------------------
-    # For loops
-
-    def _visit_for(self, stmt: ForStmt, ctx: Ctx):
-        plan = _plan(stmt.target, stmt.iterable)
-        if plan is None:
-            return super()._visit_for(stmt, ctx)
-        # Recursively rewrite the body first, in case it contains
-        # nested zip patterns.
-        body, _ = self._visit_block(stmt.body, ctx)
-        return self._rewrite_for(stmt, plan, body, ctx), ctx
-
-    def _rewrite_for(
-        self, stmt: ForStmt, plan: Plan, new_body: StmtBlock, ctx: Ctx,
-    ) -> ForStmt:
-        # Bind each zip arg to a fresh ``_srcK`` before the loop.
-        # Even ``UnderscoreId`` binding slots get a temp for the
-        # source so any side-effect in the arg fires exactly once.
-        src_names: list[NamedId] = []
-        for arg in plan.args:
-            src = self.gensym.fresh('_src')
-            ctx.stmts.append(Assign(src, None, arg, None))
-            src_names.append(src)
-
-        idx = self.gensym.fresh('_i')
-        # A tupled plan feeds every source into one slot; otherwise each slot
-        # reads its own.  `plan.tupled` is the discriminator, not the source
-        # count: `zip(xs)` is tupled over one source and still yields 1-tuples.
-        groups = [src_names] if plan.tupled else [[s] for s in src_names]
-        per_iter: list[Stmt] = []
-        for slot, srcs in zip(plan.slots, groups):
-            if isinstance(slot, UnderscoreId):
-                continue
-            refs = [ListRef(Var(s, None), Var(idx, None), None) for s in srcs]
-            # A nested slot becomes `(a, b) = src[i]` — the backends already
-            # destructure, so a statement context needs no `fst`/`snd`.
-            value = TupleExpr(refs, None) if plan.tupled else refs[0]
-            per_iter.append(Assign(slot, None, value, None))
-
-        return ForStmt(
-            idx,
-            Range1(None, Len(None, Var(src_names[0], None), None), None),
-            StmtBlock(per_iter + list(new_body.stmts)),
-            stmt.loc,
-        )
-
-    # ------------------------------------------------------------------
-    # List comprehensions
-
-    def _visit_list_comp(self, e: ListComp, ctx: Any):
-        new_targets: list[Id | TupleBinding] = []
-        new_iterables: list[Expr] = []
-        subst: dict[NamedId, Expr] = {}
-
-        for target, iterable in zip(e.targets, e.iterables):
-            new_iter = self._visit_expr(iterable, ctx)
-            # A later stage's iterable may reference an earlier stage's
-            # target (``[... for a, b in zip(xs, ys) for c in a]``), whose
-            # name no longer exists once that stage is rewritten.
-            if subst:
-                new_iter = SubstNames(subst)._visit_expr(new_iter, ctx)
-            rewritten = self._rewrite_comp_stage(target, new_iter, subst)
-            if rewritten is None:
-                new_targets.append(self._visit_binding(target, ctx))
-                new_iterables.append(new_iter)
-            else:
-                new_target, new_iterable = rewritten
-                new_targets.append(new_target)
-                new_iterables.append(new_iterable)
-
-        # Walk `elt` normally first, so nested zip patterns inside it are
-        # rewritten too, then substitute.
-        new_elt = self._visit_expr(e.elt, ctx)
-        if subst:
-            new_elt = SubstNames(subst)._visit_expr(new_elt, ctx)
-        return ListComp(new_targets, new_iterables, new_elt, e.loc)
-
-    def _rewrite_comp_stage(
-        self,
-        target: Id | TupleBinding,
-        iterable: Expr,
-        subst: dict[NamedId, Expr],
-    ) -> tuple[Id, Expr] | None:
-        """The rewritten ``(target, iterable)`` for one comprehension stage,
-        extending *subst* with the accessors its slots need; ``None`` to leave
-        the stage as it is."""
-        plan = _plan(target, iterable)
-        if plan is None:
+class _ZipElimInstance(IterElimInstance):
+    def _match(self, target: Slot, iterable: Expr) -> tuple[Id, Plan] | None:
+        """Fires iff *iterable* is a :class:`Zip` whose element *target* can
+        read by indexing the ``zip``'s own arguments: see
+        :func:`fpy2.transform.iter_elim.plan_for_zip`."""
+        if not isinstance(iterable, Zip):
             return None
-        # Sources are inlined and re-evaluated per iteration (a comp has no
-        # preamble to bind them once), so each must be pure and O(1).
-        if not all(is_access_path(a) for a in plan.args):
-            return None
-
-        idx = self.gensym.fresh('_i')
-        if plan.tupled:
-            # A whole-element slot is a name or a discard, so no `fst`/`snd`
-            # chain is involved and `comp_binding_is_pairs` has nothing to say.
-            slot = plan.slots[0]
-            if isinstance(slot, NamedId):
-                subst[slot] = TupleExpr(
-                    [index_access(arg, idx)() for arg in plan.args], None,
-                )
-        else:
-            # `fst`/`snd` are pair-only, so a destructuring slot of arity != 2
-            # can't be reached; leave the stage rather than emit an ill-typed
-            # `snd`-of-non-pair.
-            if not all(comp_binding_is_pairs(slot) for slot in plan.slots):
-                return None
-            for slot, arg in zip(plan.slots, plan.args):
-                destructure_subst(slot, index_access(arg, idx), subst)
-        return idx, Range1(None, Len(None, clone(plan.args[0]), None), None)
+        plan = plan_for_zip(list(iterable.args), target)
+        return None if plan is None else (UnderscoreId(), plan)
 
 
 class ZipElim:

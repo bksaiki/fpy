@@ -129,19 +129,7 @@ class _FuncInline(SiteRewriter):
             return super()._visit_call(e, ctx)
 
         # a refusal is not a site, so it takes no index
-        reason = _refuses(e, strict=e in self._strict)
-        if reason is not None:
-            self._refuse(e, reason)
-            return super()._visit_call(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            # a candidate site, but not the selected one
-            return super()._visit_call(e, ctx)
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
+        if not self._claim(e, _refuses(e, strict=e in self._strict)):
             return super()._visit_call(e, ctx)
 
         # Inline the callee body.  Acyclicity is guaranteed by the

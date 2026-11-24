@@ -4,7 +4,7 @@ but with subnormalization and a maximum value, that is multi-precision
 and bounded. Hence, "MP-B."
 """
 
-from ...utils import DEFAULT, DefaultOr, default_repr
+from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import SizedContext, zero_sign
@@ -464,43 +464,22 @@ class MPBFloatContext(SizedContext):
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'MPBFloatContext':
-        if pmax is DEFAULT:
-            pmax = self.pmax
-        if emin is DEFAULT:
-            emin = self.emin
-        if maxval is DEFAULT:
-            maxval = self.pos_maxval
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if neg_maxval is DEFAULT:
-            neg_maxval = self.neg_maxval
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
-        if enable_nan is DEFAULT:
-            enable_nan = self.enable_nan
-        if enable_inf is DEFAULT:
-            enable_inf = self.enable_inf
-        if enable_neg_zero is DEFAULT:
-            enable_neg_zero = self.enable_neg_zero
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPBFloatContext(
-            pmax, emin, maxval, rm, overflow, num_randbits,
-            neg_maxval=neg_maxval,
-            rng=rng,
-            enable_nan=enable_nan,
-            enable_inf=enable_inf,
-            enable_neg_zero=enable_neg_zero,
-            nan_value=nan_value,
-            inf_value=inf_value
+            default_or(pmax, self.pmax),
+            default_or(emin, self.emin),
+            default_or(maxval, self.pos_maxval),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            default_or(num_randbits, self.num_randbits),
+            neg_maxval=default_or(neg_maxval, self.neg_maxval),
+            rng=default_or(rng, self.rng),
+            enable_nan=default_or(enable_nan, self.enable_nan),
+            enable_inf=default_or(enable_inf, self.enable_inf),
+            enable_neg_zero=default_or(enable_neg_zero, self.enable_neg_zero),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value)
         )
 
     def is_stochastic(self) -> bool:
@@ -551,20 +530,10 @@ class MPBFloatContext(SizedContext):
             return x < self.neg_maxval
         return x > self.pos_maxval
 
-    def _overflow_to_infinity(self, s: bool):
+    def _overflow_to_infinity(self, s: bool) -> bool:
         """Should overflows round to infinity (rather than MAX_VAL)?"""
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return False
-            case RoundingDirection.RAZ:
-                return True
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return True
-            case _:
-                raise RuntimeError(f'unreachable {direction}')
+        return direction != RoundingDirection.RTZ
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
@@ -611,12 +580,8 @@ class MPBFloatContext(SizedContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._overflow_to_infinity(rounded.s):
-                        # the operand is a finite value whose magnitude ran out
-                        # of format, so its sign is carried through -- as every
-                        # other arm here does -- even where the infinity itself
-                        # is substituted
                         if self.enable_inf:
-                            result = Float(x=x, isinf=True, ctx=self)
+                            result = Float(s=rounded.s, isinf=True, ctx=self)
                         elif self.inf_value is None:
                             raise ValueError('Cannot round to infinity under this context')
                         else:
@@ -636,14 +601,6 @@ class MPBFloatContext(SizedContext):
 
         # step 6. return rounded result
         return Float(x=rounded, s=zero_sign(rounded, self.enable_neg_zero), ctx=self)
-
-    def round(self, x, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)
 
     def zero(self, s: bool = False) -> Float:
         """Returns a signed 0 under this context."""

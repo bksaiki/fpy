@@ -2,7 +2,7 @@
 Where an AST node holds its blocks, sub-expressions and variables.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Literal
 
 from .fpyast import (
@@ -24,7 +24,11 @@ from .fpyast import (
     ListExpr,
     ListRef,
     ListSlice,
+    NamedBinaryOp,
     NamedId,
+    NamedNaryOp,
+    NamedTernaryOp,
+    NamedUnaryOp,
     NaryOp,
     NullaryOp,
     ReturnStmt,
@@ -147,3 +151,38 @@ def vars_in(node: Expr | Stmt) -> list[Var]:
 def names_in(node: Expr | Stmt) -> set[NamedId]:
     """The names of :func:`vars_in`."""
     return {v.name for v in vars_in(node)}
+
+
+def operands(e: Expr) -> list[Expr]:
+    """The direct operands, left to right, of an operation."""
+    match e:
+        case NullaryOp():
+            return []
+        case UnaryOp():
+            return [e.arg]
+        case BinaryOp():
+            return [e.first, e.second]
+        case TernaryOp():
+            return [e.first, e.second, e.third]
+        case NaryOp():
+            return list(e.args)
+        case _:
+            raise RuntimeError(f'not an operation: {e!r}')
+
+
+def rebuild(e: Expr, args: Sequence[Expr]) -> Expr:
+    """*e* with its operands replaced: the inverse of :func:`operands`."""
+    ctor: Callable[..., Expr] = type(e)
+    match e:
+        case NullaryOp():
+            return ctor(e.func, e.loc)
+        case NamedUnaryOp() | NamedBinaryOp() | NamedTernaryOp():
+            return ctor(e.func, *args, e.loc)
+        case UnaryOp() | BinaryOp() | TernaryOp():
+            return ctor(*args, e.loc)
+        case NamedNaryOp():
+            return ctor(e.func, list(args), e.loc)
+        case NaryOp():
+            return ctor(list(args), e.loc)
+        case _:
+            raise RuntimeError(f'not an operation: {e!r}')

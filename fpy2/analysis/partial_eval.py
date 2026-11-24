@@ -11,6 +11,7 @@ and :class:`fpy2.transform.LiftContext`.
 
 from dataclasses import dataclass
 
+from ..ast.accessors import operands, rebuild
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..fpc_context import FPCoreContext
@@ -99,13 +100,8 @@ class _PartialEvalInstance(DefaultVisitor):
             if not isinstance(val, _TopType):
                 self.by_expr[e] = val
 
-    def _meet(self, a, b):
-        """SCCP meet — ``None`` is BOT (unit), :data:`_TOP` is top;
-        anything else is a :data:`Value`."""
-        if a is None:
-            return b
-        if b is None:
-            return a
+    def _meet(self, a: _Lattice, b: _Lattice) -> _Lattice:
+        """SCCP meet: :data:`_TOP` is top; anything else is a :data:`Value`."""
         if a is _TOP or b is _TOP:
             return _TOP
         return a if a == b else _TOP
@@ -118,9 +114,7 @@ class _PartialEvalInstance(DefaultVisitor):
         for phi in self.def_use.phis[stmt]:
             lhs = self.by_def.get(self.def_use.defs[phi.lhs], _TOP)
             rhs = self.by_def.get(self.def_use.defs[phi.rhs], _TOP)
-            merged = self._meet(lhs, rhs)
-            if merged is not None:
-                self.by_def[phi] = merged
+            self.by_def[phi] = self._meet(lhs, rhs)
 
     def _visit_bool(self, e: BoolVal, ctx: Context | None):
         self.by_expr[e] = e.val
@@ -165,59 +159,31 @@ class _PartialEvalInstance(DefaultVisitor):
         if ctx is not None:
             self._record(e, self._try_eval(e, ctx))
 
+    def _fold_op(self, e: UnaryOp | BinaryOp | TernaryOp | NaryOp, ctx: Context | None):
+        """Visits the operation *e*, folding it where every operand is a value."""
+        args = operands(e)
+        for arg in args:
+            self._visit_expr(arg, ctx)
+        if ctx is not None and args and all(self._is_value(arg) for arg in args):
+            lits = [self._lit(arg) for arg in args]
+            self._record(e, self._try_eval(rebuild(e, lits), ctx))
+
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
-        self._visit_expr(e.arg, ctx)
-        if self._is_value(e.arg) and ctx is not None:
-            e_arg = self._lit(e.arg)
-            if isinstance(e, NamedUnaryOp):
-                e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
-            else:
-                e_eval = type(e)(e_arg, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
+        self._fold_op(e, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        if self._is_value(e.first) and self._is_value(e.second) and ctx is not None:
-            e_fst = self._lit(e.first)
-            e_snd = self._lit(e.second)
-            if isinstance(e, NamedBinaryOp):
-                e_eval: BinaryOp = type(e)(e.func, e_fst, e_snd, e.loc)
-            else:
-                e_eval = type(e)(e_fst, e_snd, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
+        self._fold_op(e, ctx)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        self._visit_expr(e.third, ctx)
-        if self._is_value(e.first) and self._is_value(e.second) and self._is_value(e.third) and ctx is not None:
-            e_fst = self._lit(e.first)
-            e_snd = self._lit(e.second)
-            e_trd = self._lit(e.third)
-            if isinstance(e, NamedTernaryOp):
-                e_eval: TernaryOp = type(e)(e.func, e_fst, e_snd, e_trd, e.loc)
-            else:
-                e_eval = type(e)(e_fst, e_snd, e_trd, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
+        self._fold_op(e, ctx)
 
     def _visit_naryop(self, e: NaryOp, ctx: Context | None):
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
         if isinstance(e, Empty):
             # ``empty()`` constructs uninitialized values
-            return
-        if (
-            ctx is not None
-            and len(e.args) > 0
-            and all(self._is_value(arg) for arg in e.args)
-        ):
-            e_args = [self._lit(arg) for arg in e.args]
-            if isinstance(e, NamedNaryOp):
-                e_eval: NaryOp = type(e)(e.func, e_args, e.loc)
-            else:
-                e_eval = type(e)(e_args, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
+            for arg in e.args:
+                self._visit_expr(arg, ctx)
+        else:
+            self._fold_op(e, ctx)
 
     def _visit_compare(self, e: Compare, ctx: Context | None):
         for arg in e.args:
@@ -379,10 +345,7 @@ class _PartialEvalInstance(DefaultVisitor):
                 new = self._meet(lhs, rhs)
                 old = self.by_def.get(phi)
                 if new != old:
-                    if new is None:
-                        self.by_def.pop(phi, None)
-                    else:
-                        self.by_def[phi] = new
+                    self.by_def[phi] = new
                     changed = True
             if not changed:
                 return

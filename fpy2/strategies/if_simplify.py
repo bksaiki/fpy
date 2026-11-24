@@ -71,7 +71,7 @@ def simplify_if(
             return y
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(
         SimplifyIf.apply_with_edits(func.ast, func.rebase(where), strict=strict)

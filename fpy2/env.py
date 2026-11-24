@@ -51,42 +51,23 @@ class ForeignEnv:
 
     def get(self, key, default=None) -> Any:
         """Like `get()` for `dict` instances."""
-        if key in self.nonlocals:
-            return self.nonlocals[key].cell_contents
-        if key in self.globals:
-            return self.globals[key]
-        if key in self.builtins:
-            return self.builtins[key]
-        return default
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
-    def merge(self, other: 'ForeignEnv', keys: Iterable[str] | None = None) -> 'ForeignEnv':
-        """
-        Merge two environments.
+    def merge(self, other: 'ForeignEnv', keys: Iterable[str]) -> 'ForeignEnv':
+        """This environment with *other*'s bindings of *keys* added."""
+        keys = set(keys)
 
-        Optionally, specify `keys` to restrict which keys to merge.
-        """
-        if keys is not None:
-            keys = set(keys)
+        def with_keys[V](mine: dict[str, V], theirs: dict[str, V]) -> dict[str, V]:
+            return mine | {k: v for k, v in theirs.items() if k in keys}
 
-        globals = self.globals.copy()
-        if keys is None:
-            globals.update(other.globals)
-        else:
-            globals.update({k: v for k, v in other.globals.items() if k in keys})
-
-        nonlocals = self.nonlocals.copy()
-        if keys is None:
-            nonlocals.update(other.nonlocals)
-        else:
-            nonlocals.update({k: v for k, v in other.nonlocals.items() if k in keys})
-
-        builtins = self.builtins.copy()
-        if keys is None:
-            builtins.update(other.builtins)
-        else:
-            builtins.update({k: v for k, v in other.builtins.items() if k in keys})
-
-        return ForeignEnv(globals, nonlocals, builtins)
+        return ForeignEnv(
+            with_keys(self.globals, other.globals),
+            with_keys(self.nonlocals, other.nonlocals),
+            with_keys(self.builtins, other.builtins),
+        )
 
 
 def fpy_alias(env: ForeignEnv | None) -> str | None:

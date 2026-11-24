@@ -65,26 +65,12 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
             for u in us:
                 self.use_to_def[u] = d
 
-    def names(self) -> set[NamedId]:
-        """Returns the set of variable names with definitions."""
-        return set(self.name_to_defs.keys())
-
     def format(self) -> str:
         lines: list[str] = []
         for name, ds in self.name_to_defs.items():
             lines.append(f'def `{name}`:')
             for d in ds:
-                idx = self.def_to_idx[d]
-                match d:
-                    case AssignDef():
-                        site = self._format_site(d.site.format())
-                        prev = 'None' if d.prev is None else str(d.prev)
-                        lines.append(f' {idx}: {d.name} [{prev}] @ {site}')
-                    case PhiDef():
-                        site = self._format_site(d.site.format())
-                        lines.append(f' {idx}: {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
-                    case _:
-                        raise RuntimeError(f'unexpected definition {d}')
+                lines.append(self._format_def(d))
                 lines.append(f' use `{name}`:')
                 for u in self.uses[d]:
                     site = self._format_site(u.format())

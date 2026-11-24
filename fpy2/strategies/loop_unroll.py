@@ -57,7 +57,7 @@ def unroll_while(
             return x
     """
     if not isinstance(func, Function):
-            raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
     if not isinstance(times, int):
         raise TypeError(f"Expected an \'int\' for times, got {times}")
     if times < 1:
@@ -139,7 +139,7 @@ def unroll_for(
             return acc
     """
     if not isinstance(func, Function):
-            raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
     if not isinstance(times, int):
         raise TypeError(f"Expected an \'int\' for times, got {times}")
     if times < 1:

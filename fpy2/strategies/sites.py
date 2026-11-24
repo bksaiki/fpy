@@ -170,7 +170,7 @@ def sites(
         [body[0] at `f.py:8:8`, body[1] at `f.py:10:8`]
     """
     if not isinstance(func, Function):
-        raise TypeError(f'Expected a \'Function\', got {func}')
+        raise TypeError(f"Expected a 'Function', got {func}")
     lister = _SITES.get(strategy)
     if lister is None:
         name = getattr(strategy, '__name__', strategy)
@@ -230,7 +230,7 @@ def refusals(
           'constructor call to shift symbolically'), ...]
     """
     if not isinstance(func, Function):
-        raise TypeError(f'Expected a \'Function\', got {func}')
+        raise TypeError(f"Expected a 'Function', got {func}")
     if strategy not in _SITES:
         name = getattr(strategy, '__name__', strategy)
         raise ValueError(f'`{name}` takes no `where`, so it has no sites to refuse')

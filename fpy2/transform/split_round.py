@@ -126,7 +126,7 @@ from ..ast.fpyast import (
     UnaryOp,
     Var,
 )
-from ..number import REAL, Context, Float, RealFloat
+from ..number import REAL, Context, Float, RealFloat, same_value
 from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
@@ -272,9 +272,7 @@ class _SplitRoundInstance(RoundingRewriter):
             for v in probes:
                 once = target.round(v)
                 twice = target.round(self.ctx.round(v))
-                # `str` rather than `==`: it separates the zeros and is total on
-                # NaN, which compares equal to nothing
-                if str(once) != str(twice):
+                if not same_value(once, twice):
                     return False
         except (ValueError, OverflowError):
             # a context that cannot represent a probe -- `enable_nan=False`, or

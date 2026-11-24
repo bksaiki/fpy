@@ -55,6 +55,6 @@ def lift_context(func: Function) -> Function:
             return acc
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(LiftContext.apply_with_edits(func.ast))

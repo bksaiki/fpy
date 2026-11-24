@@ -199,16 +199,13 @@ class _TypeInferInstance(Visitor):
         self,
         func: FuncDef,
         def_use: DefineUseAnalysis,
-        sigs: dict[FuncDef, 'FunctionType'] | None = None,
+        sigs: dict[FuncDef, 'FunctionType'],
     ):
         self.func = func
         self.def_use = def_use
-        # Generalized signatures of already-checked callees, keyed by
-        # ``FuncDef``.  `TypeInfer.check` pre-fills this in leaves-first
-        # call-graph order, so a call's `_visit_call` is a lookup rather
-        # than a recursive re-check.  Empty/partial caches fall back to
-        # lazy checking (see `_visit_call`).
-        self.sigs = {} if sigs is None else sigs
+        # every callee's generalized signature: `TypeInfer.check` checks
+        # callees first
+        self.sigs = sigs
         self.by_def = {}
         self.by_expr = {}
         self.ret_type = None
@@ -532,6 +529,17 @@ class _TypeInferInstance(Visitor):
                 self._unify(rhs, RealType(None))
         return BoolType()
 
+    def _apply(self, kind: str, name: str, sig: FunctionType, arg_tys: list[Type]) -> Type:
+        """The result type of calling the *kind* *name*, of signature *sig*,
+        with arguments of types *arg_tys*."""
+        fn_ty = cast(FunctionType, self._instantiate(sig))
+        if len(fn_ty.arg_types) != len(arg_tys):
+            actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
+            raise TypeInferError(f'{kind} `{name}` has signature `{fn_ty.format()}`, but calling with `{actual_sig}`')
+        for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
+            self._unify(arg_ty, expect_ty)
+        return fn_ty.return_type
+
     def _visit_call(self, e: Call, ctx: None) -> Type:
         # get around circular imports
         from ..function import Function
@@ -546,41 +554,9 @@ class _TypeInferInstance(Visitor):
             case Primitive():
                 # calling a primitive
 
-                # type check the primitive and instantiate
-                fn_ty = TypeInfer.infer_primitive(e.fn)
-                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
-
-                # check arity
-                if len(fn_ty.arg_types) != len(e.args):
-                    actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
-                    raise TypeInferError(f'primitive {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}``')
-                # merge arguments
-                for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
-                    self._unify(arg_ty, expect_ty)
-
-                return fn_ty.return_type
+                return self._apply('primitive', e.fn.name, TypeInfer.infer_primitive(e.fn), arg_tys)
             case Function():
-                # calling a function: look up the callee's generalized
-                # signature and instantiate it at this site.  `check`
-                # pre-fills `sigs` in leaves-first call-graph order, so
-                # this is normally a hit; the miss branch lazily checks
-                # a callee that wasn't walked (and can't loop — `check`
-                # runs a `CallGraph` acyclicity guard at its entry).
-                callee = e.fn.ast
-                if callee not in self.sigs:
-                    self.sigs[callee] = TypeInfer.check(callee).fn_type
-                fn_ty = cast(FunctionType, self._instantiate(self.sigs[callee]))
-
-                # check arity
-                if len(fn_ty.arg_types) != len(e.args):
-                    # no function signature / signature mismatch
-                    actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
-                    raise TypeInferError(f'function {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}`')
-                # merge arguments
-                for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
-                    self._unify(arg_ty, expect_ty)
-
-                return fn_ty.return_type
+                return self._apply('function', e.fn.name, self.sigs[e.fn.ast], arg_tys)
             case type() if issubclass(e.fn, Context):
                 # calling context constructor
                 # TODO: type check constructor arguments based on Python typing hints
@@ -705,6 +681,25 @@ class _TypeInferInstance(Visitor):
         d_new = self.def_use.find_def_from_site(stmt.var, stmt)
         self.by_def[d_new] = self.by_def[d]
 
+    def _merge_phis(self, stmt: If1Stmt | IfStmt):
+        """Types each phi after *stmt* as its unified operands."""
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self._set_type(phi, self._unify(lhs_ty, rhs_ty))
+
+    def _enter_loop(self, stmt: WhileStmt | ForStmt):
+        """Types each loop phi of *stmt* as its entry value."""
+        for phi in self.def_use.phis[stmt]:
+            self._set_type(phi, self.by_def[self.def_use.defs[phi.lhs]])
+
+    def _exit_loop(self, stmt: WhileStmt | ForStmt):
+        """Unifies each loop phi of *stmt*'s entry and back-edge types."""
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self._unify(lhs_ty, rhs_ty)
+
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         # type check condition
         cond_ty = self._visit_expr(stmt.cond, None)
@@ -713,12 +708,7 @@ class _TypeInferInstance(Visitor):
         # type check body
         self._visit_block(stmt.body, None)
 
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            ty = self._unify(lhs_ty, rhs_ty)
-            self._set_type(phi, ty)
+        self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # type check condition
@@ -729,18 +719,10 @@ class _TypeInferInstance(Visitor):
         self._visit_block(stmt.ift, None)
         self._visit_block(stmt.iff, None)
 
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            ty = self._unify(lhs_ty, rhs_ty)
-            self._set_type(phi, ty)
+        self._merge_phis(stmt)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        # add types to phi variables
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self._set_type(phi, lhs_ty)
+        self._enter_loop(stmt)
 
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
@@ -748,11 +730,7 @@ class _TypeInferInstance(Visitor):
         # type check body
         self._visit_block(stmt.body, None)
 
-        # unify phi variables
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self._unify(lhs_ty, rhs_ty)
+        self._exit_loop(stmt)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         # unify with a list (constrains an open type, raises on a non-list)
@@ -761,19 +739,12 @@ class _TypeInferInstance(Visitor):
         self._unify(iter_ty, ListType(elt_ty))
         self._visit_binding(stmt, stmt.target, elt_ty)
 
-        # add types to phi variables
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self._set_type(phi, lhs_ty)
+        self._enter_loop(stmt)
 
         # type check body
         self._visit_block(stmt.body, None)
 
-        # unify phi variables
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self._unify(lhs_ty, rhs_ty)
+        self._exit_loop(stmt)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         ty = self._visit_expr(stmt.ctx, None)
@@ -871,36 +842,6 @@ class _TypeInferInstance(Visitor):
         return TypeAnalysis(fn_ty, by_defs, by_expr, self.tvars, self.def_use)
 
 ###########################################################
-# Primitives
-
-class _TypeInferPrimitive:
-    """
-    Type inference for primitives.
-
-    Converts typing annotations to types.
-    """
-
-    prim: Primitive
-    gensym: Gensym
-
-    def __init__(self, prim: Primitive):
-        self.prim = prim
-        self.gensym = Gensym()
-
-    def _fresh_type_var(self) -> VarType:
-        """Generates a fresh type variable."""
-        return VarType(self.gensym.fresh('t'))
-
-    def _ann_to_type(self, ty: TypeAnn | None) -> Type:
-        return _ann_to_type(ty, self._fresh_type_var)
-
-    def infer(self) -> FunctionType:
-        arg_tys = [self._ann_to_type(ty) for ty in self.prim.arg_types]
-        ret_ty = self._ann_to_type(self.prim.ret_type)
-        return FunctionType(None, arg_tys, ret_ty)
-
-
-###########################################################
 # Type checker
 
 class TypeInfer:
@@ -964,5 +905,10 @@ class TypeInfer:
         if not isinstance(prim, Primitive):
             raise TypeError(f'expected a \'Primitive\', got `{prim}`')
 
-        inst = _TypeInferPrimitive(prim)
-        return inst.infer()
+        gensym = Gensym()
+
+        def fresh() -> VarType:
+            return VarType(gensym.fresh('t'))
+
+        arg_tys = [_ann_to_type(ty, fresh) for ty in prim.arg_types]
+        return FunctionType(None, arg_tys, _ann_to_type(prim.ret_type, fresh))

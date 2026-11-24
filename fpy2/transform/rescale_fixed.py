@@ -432,9 +432,6 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
                 built = scaled
             return built
 
-        if _replace_arg(e, info.position, info.index, lambda x: x) is None:
-            # the position is written some other way
-            return None
         return _Shift(ctx=build_ctx, up=up, down=down, preamble=preamble)
 
     def _ladder(self, e: Expr, target: NamedId, out: list, shift: _Shift) -> None:

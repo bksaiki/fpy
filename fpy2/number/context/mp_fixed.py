@@ -6,7 +6,7 @@ Hence, "MP-F".
 
 from fractions import Fraction
 
-from ...utils import DEFAULT, DefaultOr, default_repr
+from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import RoundingMode
 from .context import OrdinalContext, zero_sign
@@ -341,36 +341,18 @@ class MPFixedContext(OrdinalContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'MPFixedContext':
-        if nmin is DEFAULT:
-            nmin = self.nmin
-        if rm is DEFAULT:
-            rm = self.rm
-        if enable_nan is DEFAULT:
-            enable_nan = self.enable_nan
-        if enable_inf is DEFAULT:
-            enable_inf = self.enable_inf
-        if enable_neg_zero is DEFAULT:
-            enable_neg_zero = self.enable_neg_zero
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')
         return MPFixedContext(
-            nmin,
-            rm,
-            num_randbits,
-            rng=rng,
-            enable_nan=enable_nan,
-            enable_inf=enable_inf,
-            enable_neg_zero=enable_neg_zero,
-            nan_value=nan_value,
-            inf_value=inf_value
+            default_or(nmin, self.nmin),
+            default_or(rm, self.rm),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+            enable_nan=default_or(enable_nan, self.enable_nan),
+            enable_inf=default_or(enable_inf, self.enable_inf),
+            enable_neg_zero=default_or(enable_neg_zero, self.enable_neg_zero),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value)
         )
 
     def is_stochastic(self) -> bool:
@@ -464,10 +446,3 @@ class MPFixedContext(OrdinalContext):
         # step 4. wrap the value in a Float
         return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
-    def round(self, x, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)

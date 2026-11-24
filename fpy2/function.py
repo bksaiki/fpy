@@ -103,7 +103,7 @@ class Function[**P, R]:
     def with_rt(self, rt: 'Interpreter'):
         from .interpret import Interpreter
         if not isinstance(rt, Interpreter):
-            raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
+            raise TypeError(f'expected \'Interpreter\', got {rt}')
         # the same program, so it keeps the same place in the chain
         return Function(self.ast, runtime=rt, parent=self.parent, edits=self.edits)
 

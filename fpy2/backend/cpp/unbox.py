@@ -157,14 +157,11 @@ class UnboxAnalysis:
         -- and through a value container, so a write to a row needs the whole
         thing non-const.  A boxed level stops that.
         """
-        depth = 0
         while isinstance(ty, CppList) and not ty.boxed:
-            if region is None:
-                return True
-            if region in self.written:
+            if region is None or region in self.written:
                 return True
             region = self.alias.region_at(region)
-            ty, depth = ty.elt, depth + 1
+            ty = ty.elt
         return False
 
     def annotate(self, e: Expr, ty: CppType) -> CppType:

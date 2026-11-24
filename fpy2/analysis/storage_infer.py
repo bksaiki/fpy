@@ -49,8 +49,8 @@ from .format_infer import (
     TupleFormat,
     VarFormat,
     is_bottom,
+    to_abstract,
 )
-from .format_infer.analysis import _to_abstract
 from .format_infer.format import RealFloat
 from .reaching_defs import AssignDef, Definition, def_classes
 from .value_class import ClassBound, ListClass, TupleClass, ValueClass
@@ -158,14 +158,6 @@ class StorageAnalysis:
         return self.class_storage[self.def_class[d]]
 
 
-def _lift(bound: FormatBound) -> AbstractFormat | None:
-    """*bound* as an :class:`AbstractFormat`, which is what carries ``<=``, or
-    ``None`` for a bound with no scalar reading."""
-    if isinstance(bound, AbstractableFormat | SetFormat):
-        return _to_abstract(bound)
-    return None
-
-
 def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
     """Why an *exact* bound exceeds every rung, or ``''`` where that is not what
     happened.
@@ -262,7 +254,7 @@ def of_bound(
             'is the active rounding context symbolic?  Try monomorphizing the '
             'function with a concrete context.'
         )
-    af = _lift(bound)
+    af = to_abstract(bound)
     if af is None:
         raise StorageSelectionError(
             f'cannot compare {bound!r} against the storage formats; '
@@ -319,7 +311,7 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
         ))
     afs = []
     for s in storages:
-        af = _lift(s)
+        af = to_abstract(s)
         assert af is not None, (
             f'cannot join a non-numeric storage with a numeric one: {storages!r}'
         )

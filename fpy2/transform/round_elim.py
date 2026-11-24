@@ -103,26 +103,23 @@ from ..analysis.hoistability import force_names
 from ..ast.fpyast import (
     Abs,
     Add,
-    Assign,
     Cast,
-    ContextStmt,
     Expr,
-    ForeignVal,
     FuncDef,
     Mul,
+    NamedId,
     Neg,
     Round,
     Stmt,
     StmtBlock,
     Sub,
-    UnderscoreId,
     Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..number.context.context import Context
 from ..utils import Gensym
-from .utils import name_forced, operands, rebuild
+from .utils import lift_op, name_forced
 
 
 @dataclasses.dataclass
@@ -278,8 +275,8 @@ class _RoundElimInstance(DefaultTransformVisitor):
     #    with the (recursively-rewritten) argument.  Pure node-level
     #    rewrite, no preamble required, works at any expression
     #    position (including inside ListComp / IfExpr branches).
-    #  - Eliminable arithmetic op that is strict → per-op hoist (see
-    #    :meth:`_hoist`).
+    #  - Eliminable arithmetic op that is strict → per-op hoist into
+    #    ``with fp.REAL:`` (see :func:`lift_op`).
     #  - Anything else → recurse via the base visitor (children may
     #    still be individually eliminable).
     #
@@ -292,77 +289,17 @@ class _RoundElimInstance(DefaultTransformVisitor):
             and self._is_eliminable(e)
         )
 
+    def _fresh(self) -> NamedId:
+        return self.gensym.fresh('_t')
+
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
         if isinstance(e, (Round, Cast)) and self._is_eliminable(e):
             rebuilt = self._visit_expr(e.arg, ctx)
         elif self._hoisted(e):
-            rebuilt = self._hoist(e, ctx)
+            rebuilt = Var(lift_op(e, REAL, ctx.stmts, lambda x: self._visit_expr(x, ctx), self._fresh), e.loc)
         else:
             rebuilt = super()._visit_expr(e, ctx)
-        fresh = lambda: self.gensym.fresh('_t')
-        return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
-
-    def _hoist(self, e: Expr, ctx: _Ctx) -> Expr:
-        """Per-op hoist: compute *e* under ``with fp.REAL:`` and
-        return ``Var(_tN)`` for the original expression site.
-
-        Each operand is visited with the same *ctx* so nested
-        eliminable ops hoist at their own level — the result is a
-        ``Var`` that we can plug directly into our reconstructed
-        op.  Operands that survive the visit as non-``Var``
-        expressions (literals, non-eliminable ops, ``Round`` nodes
-        that weren't collapsed) are bound to a temp under the
-        *current* context before being passed into the REAL block.
-        The bind preserves every round inside the operand at its
-        original scope: explicit ``Round`` / ``Cast`` nodes,
-        implicit rounds on non-eliminable arithmetic, all fire as
-        originally written.
-
-        The REAL block consumes only ``Var`` references — it can
-        never accidentally re-evaluate a subexpression at the wrong
-        context.  Idempotence falls out: a second pass sees only
-        ``Var``-argumented ops under REAL (and bare assigns under
-        the original context), none of which trigger another hoist.
-
-        Trade-off: the unconditional bind produces redundant
-        ``_t = literal`` lines and per-op REAL blocks for nested
-        eliminations.  The recommended cleanup chain —
-        :class:`fpy2.transform.ConstFold` then
-        :class:`fpy2.transform.CopyPropagate` then
-        :class:`fpy2.transform.DeadCodeEliminate` — collapses both,
-        the last dropping a block once nothing under it reads the
-        context; the local rewrite stays simple at the cost of slack
-        in the intermediate AST.
-        """
-        # Inherit *e*'s location for hoist-introduced nodes so
-        # downstream errors that reference the temps point back at
-        # the original source position.
-        loc = e.loc
-        new_operands: list[Expr] = []
-        for operand in operands(e):
-            new_operand = self._visit_expr(operand, ctx)
-            if isinstance(new_operand, Var):
-                # Bind would be a pure copy — no rounds to preserve
-                # inside a name lookup.  Use the ``Var`` directly.
-                new_operands.append(new_operand)
-                continue
-            # Bind under the current context.  Anything not a
-            # ``Var`` is conservatively assumed to contain a round
-            # (literal, non-eliminable op, ``Round`` node, …);
-            # binding fires those rounds at their original scope
-            # before the REAL block sees the value.
-            t_op = self.gensym.fresh('_t')
-            ctx.stmts.append(Assign(t_op, None, new_operand, loc))
-            new_operands.append(Var(t_op, loc))
-
-        rebuilt = rebuild(e, new_operands)
-        result_name = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(result_name, None, rebuilt, loc)])
-        wrapped = ContextStmt(
-            UnderscoreId(), ForeignVal(REAL, loc), block, loc,
-        )
-        ctx.stmts.append(wrapped)
-        return Var(result_name, loc)
+        return name_forced(e, rebuilt, ctx.force, ctx.stmts, self._fresh)
 
 
 class RoundElim:

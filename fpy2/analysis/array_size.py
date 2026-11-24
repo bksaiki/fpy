@@ -396,12 +396,6 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
-    def _get_eval(self, e: Expr) -> Value | None:
-        if e in self.partial_eval.by_expr:
-            return self.partial_eval.by_expr[e]
-        else:
-            return None
-
     def _join_size(self, a: ArraySize, b: ArraySize) -> ArraySize:
         """Lattice join: equal sizes (same int, or co-representative size
         variables) survive as their representative — concrete when the
@@ -731,7 +725,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         len(ys))``, whose size is otherwise unknown and whose list is then a
         ``std::vector`` where the sizes are right there in the types.
         """
-        val = self._get_eval(e)
+        val = self.partial_eval.by_expr.get(e)
         if isinstance(val, Float | Fraction):
             return int(INTEGER.round(val))
         # through a name: a size query bound to one is still that query
@@ -744,7 +738,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Dim():
                 bound = self.by_expr.get(e.arg)
                 if isinstance(bound, ListSize):
-                    return self._list_depth(bound)
+                    return list_depth(bound)
             case Size():
                 d = self._const_int(e.second)
                 if d is None:
@@ -807,11 +801,6 @@ class _ArraySizeInferInstance(DefaultVisitor):
             return False
         return scope.ctx.representable_under(Float.from_int(value, ctx=INTEGER))
 
-    @staticmethod
-    def _list_depth(bound: ArraySizeBound) -> int:
-        """Number of nested list dimensions in *bound* (== ``dim``)."""
-        return list_depth(bound)
-
     def _is_exact(self, e: ContextUseSite) -> bool:
         """True iff *e* is evaluated under the exact (``REAL``) rounding
         context, so its arithmetic introduces no rounding.  Only called on
@@ -823,7 +812,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _is_int_valued(self, e: Expr) -> bool:
         """Whether *e* is provably an integer: an integral constant, a size
         query, a ``range`` target, or :meth:`_is_int_op` arithmetic."""
-        val = self._get_eval(e)
+        val = self.partial_eval.by_expr.get(e)
         if isinstance(val, Float | Fraction):
             return val.is_integer()
         e = self.def_use.defining_expr(e)
@@ -947,16 +936,19 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self.by_def[d_def] = new_ty
 
 
+    def _merge_phis(self, stmt: If1Stmt | IfStmt):
+        """Sizes each phi after *stmt* as its unified operands."""
+        for phi in self.def_use.phis[stmt]:
+            lhs = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs, rhs)
+
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
         with self._branch():
             self._visit_block(stmt.body, ctx)
 
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+        self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -964,11 +956,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             self._visit_block(stmt.ift, ctx)
             self._visit_block(stmt.iff, ctx)
 
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+        self._merge_phis(stmt)
 
     def _iterate_to_fixpoint(self, phis, run_body):
         """

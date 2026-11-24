@@ -110,6 +110,7 @@ from ..number import (
     MPSFloatContext,
     RealFloat,
     RoundingMode,
+    same_value,
 )
 from ..utils import CompareOp, Gensym
 from .cursor import Cursor, EditLog
@@ -117,11 +118,10 @@ from .utils import (
     Declined,
     RoundingScopes,
     ScopedRoundingRewriter,
-    agrees,
     attribute,
+    bind_alias,
     check_where,
     number_literal,
-    same_value,
     shift,
     sign_choice,
     try_round,
@@ -327,7 +327,7 @@ class _Prober:
         for pos, neg in ((_NAN, Float(x=_NAN, s=True)), (_POS_INF, _NEG_INF)):
             want = (try_round(self.ctx, pos), try_round(self.ctx, neg))
             got = (self._emitted(pos, src), self._emitted(neg, src))
-            if all(agrees(a, b) for a, b in zip(want, got)):
+            if all(same_value(a, b) for a, b in zip(want, got)):
                 out.append(None)
             elif want[0] is None or want[1] is None:
                 # the source rejects it where the rewrite would not, and a
@@ -440,7 +440,6 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
     gensym: Gensym
     where: int | Cursor | None
     alias: str | None
-    used_alias: bool
     site_idx: int
 
     def __init__(
@@ -456,19 +455,10 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         # the name the program calls `fpy2` by, which the emitted context is
         # written with; without one it falls back to the context value itself
         self.alias = fpy_alias(func.env)
-        self.used_alias = False
 
     def apply(self) -> FuncDef:
         func = self._visit_function(self.func, None)
-        if self.used_alias:
-            # the emitted context names `fpy2`, which the environment binds
-            # but the body may not have referred to before
-            assert self.alias is not None
-            meta = replace(
-                func.meta, free_vars=func.free_vars | {NamedId(self.alias)},
-            )
-            func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
-        return func
+        return bind_alias(func, self.alias) if self.edits else func
 
     def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
         """The rounding's format, if its bound can be taken out of it."""
@@ -520,7 +510,6 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         # the rounding, under the format the bound came out of: with nothing
         # left to overflow, it only rounds
         t = self.gensym.fresh('t')
-        self.used_alias |= self.alias is not None
         rounding = ContextStmt(
             UnderscoreId(), _unbounded_expr(src.unbounded, self.alias, loc),
             StmtBlock([Assign(t, None, Round(None, arg(), loc), loc)]), loc,

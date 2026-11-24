@@ -121,7 +121,7 @@ def split(
             return acc
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     if isinstance(factor, int):
         if factor < 1:

@@ -76,9 +76,7 @@ class CppOp:
         return out
 
 
-type UnaryOpTable = dict[type[Expr], list[CppOp]]
-type BinaryOpTable = dict[type[Expr], list[CppOp]]
-type TernaryOpTable = dict[type[Expr], list[CppOp]]
+type OpTable = dict[type[Expr], list[CppOp]]
 
 
 @dataclasses.dataclass
@@ -90,6 +88,6 @@ class ScalarOpTable:
     looks up signatures by ``(op type, operand C++ types, active
     rounding context)`` at each dispatch site.
     """
-    unary: UnaryOpTable
-    binary: BinaryOpTable
-    ternary: TernaryOpTable
+    unary: OpTable
+    binary: OpTable
+    ternary: OpTable

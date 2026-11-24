@@ -71,7 +71,7 @@ can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.  The
 rewrite needs ``fpy2`` in scope, since it names the context constructor.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum, auto
 
 from ..analysis import (
@@ -132,6 +132,7 @@ from .utils import (
     RoundingScopes,
     ScopedRoundingRewriter,
     attribute,
+    bind_alias,
     check_where,
     number_literal,
     sign_choice,
@@ -378,20 +379,10 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
         # the name the program calls `fpy2` by: the rewrite constructs a
         # context per value, so it has to name the constructor
         self.alias = fpy_alias(func.env)
-        self.used_alias = False
 
     def apply(self) -> FuncDef:
         func = self._visit_function(self.func, None)
-        if self.used_alias:
-            # the emitted contexts name `fpy2`, which the environment binds
-            # but the body may not have referred to before
-            assert self.alias is not None
-            meta = replace(
-                func.meta,
-                free_vars=func.free_vars | {NamedId(self.alias)},
-            )
-            func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
-        return func
+        return bind_alias(func, self.alias) if self.edits else func
 
     def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
         """The rounding's context, if it can be lowered to fixed-point."""
@@ -404,7 +395,6 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
         assert isinstance(e, Round) and self.alias is not None
         loc = e.loc
         alias = self.alias
-        self.used_alias = True
         name = self._arg_name(e, out)
 
         def arg() -> Var:

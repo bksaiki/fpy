@@ -74,25 +74,21 @@ class Type(ABC):
         """Returns this type as a formatted string."""
         ...
 
-    @abstractmethod
     def free_type_vars(self) -> set[NamedId]:
-        """Returns the free type variables in the type."""
-        ...
+        """Returns the free type variables in the type: none, by default."""
+        return set()
 
-    @abstractmethod
     def free_context_vars(self) -> set[NamedId]:
-        """Returns the free context variables in the type."""
-        ...
+        """Returns the free context variables in the type: none, by default."""
+        return set()
 
-    @abstractmethod
     def subst_type(self, subst: dict[NamedId, 'Type']) -> 'Type':
-        """Substitutes type variables in the type."""
-        ...
+        """Substitutes type variables in the type: none to substitute, by default."""
+        return self
 
-    @abstractmethod
     def subst_context(self, subst: dict[NamedId, ContextParam]) -> 'Type':
-        """Substitutes context variables in the type."""
-        ...
+        """Substitutes context variables in the type: none to substitute, by default."""
+        return self
 
     def is_monomorphic(self) -> bool:
         """The type has no free variables."""
@@ -128,14 +124,8 @@ class VarType(Type):
     def free_type_vars(self) -> set[NamedId]:
         return { self.name }
 
-    def free_context_vars(self) -> set[NamedId]:
-        return set()
-
     def subst_type(self, subst: dict[NamedId, Type]) -> Type:
         return subst.get(self.name, self)
-
-    def subst_context(self, subst: dict[NamedId, ContextParam]) -> Type:
-        return self
 
 
 class BoolType(Type):
@@ -152,18 +142,6 @@ class BoolType(Type):
 
     def format(self) -> str:
         return "bool"
-
-    def free_type_vars(self) -> set[NamedId]:
-        return set()
-
-    def free_context_vars(self) -> set[NamedId]:
-        return set()
-
-    def subst_type(self, subst: dict[NamedId, Type]) -> Type:
-        return self
-
-    def subst_context(self, subst: dict[NamedId, ContextParam]) -> Type:
-        return self
 
 
 class RealType(Type):
@@ -198,18 +176,6 @@ class RealType(Type):
         else:
             return f"real[{self.fmt}]"
 
-    def free_type_vars(self) -> set[NamedId]:
-        return set()
-
-    def free_context_vars(self) -> set[NamedId]:
-        return set()
-
-    def subst_type(self, subst: dict[NamedId, Type]) -> Type:
-        return self
-
-    def subst_context(self, subst: dict[NamedId, ContextParam]) -> Type:
-        return self
-
 
 class ContextType(Type):
     """Rounding context type."""
@@ -225,18 +191,6 @@ class ContextType(Type):
 
     def format(self) -> str:
         return "context"
-
-    def free_type_vars(self) -> set[NamedId]:
-        return set()
-
-    def free_context_vars(self) -> set[NamedId]:
-        return set()
-
-    def subst_type(self, subst: dict[NamedId, Type]) -> Type:
-        return self
-
-    def subst_context(self, subst: dict[NamedId, ContextParam]) -> Type:
-        return self
 
 
 class TupleType(Type):

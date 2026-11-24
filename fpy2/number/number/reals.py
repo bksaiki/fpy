@@ -135,27 +135,16 @@ class RealFloat(numbers.Rational):
             self._exp = 0
 
         # flags
-        if x is None:
-            self._flags = Flags(
-                invalid=invalid,
-                divzero=divzero,
-                overflow=overflow,
-                tiny_pre=tiny_pre,
-                tiny_post=tiny_post,
-                inexact=inexact,
-                carry=carry
-            )
-        else:
-            self._flags = Flags(
-                x=x._flags,
-                invalid=invalid,
-                divzero=divzero,
-                overflow=overflow,
-                tiny_pre=tiny_pre,
-                tiny_post=tiny_post,
-                inexact=inexact,
-                carry=carry
-            )
+        self._flags = Flags(
+            x=None if x is None else x._flags,
+            invalid=invalid,
+            divzero=divzero,
+            overflow=overflow,
+            tiny_pre=tiny_pre,
+            tiny_post=tiny_post,
+            inexact=inexact,
+            carry=carry
+        )
 
 
     def __repr__(self):
@@ -358,7 +347,7 @@ class RealFloat(numbers.Rational):
             case Fraction():
                 other = RealFloat.from_rational(other)
             case _:
-                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+                raise TypeError(f'unsupported operand type(s) for *: \'RealFloat\' and \'{type(other)}\'')
 
         s = self._s != other._s
         if self._c == 0 or other._c == 0:
@@ -1087,7 +1076,7 @@ class RealFloat(numbers.Rational):
         if max_p is None:
             p = None
             if min_n is None:
-                raise ValueError(f'must specify {max_p} or {min_n}')
+                raise ValueError('must specify max_p or min_n')
             else:
                 # fixed-point rounding => limited by n
                 n = min_n
@@ -1427,9 +1416,6 @@ class RealFloat(numbers.Rational):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if num_randbits is not None and not isinstance(num_randbits, int):
             raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
-
-        if max_p is None and min_n is None:
-            raise ValueError(f'must specify {max_p} or {min_n}')
 
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)

@@ -151,14 +151,9 @@ class CallGraphAnalysis:
         return func in self.nodes
 
 
-# DFS colors for cycle detection.
-_GRAY = 1   # on the current DFS stack (in progress)
-_BLACK = 2  # fully visited
-
-
 class _CallGraphInstance:
-    """Builds the call graph via a three-color DFS, accumulating the
-    edge maps and a leaves-first (post-order) traversal order."""
+    """Builds the call graph via a DFS, accumulating the edge maps and a
+    leaves-first (post-order) traversal order."""
 
     func: FuncDef
     nodes: set[FuncDef]
@@ -166,6 +161,8 @@ class _CallGraphInstance:
     callers: dict[FuncDef, list[FuncDef]]
     call_sites: dict[FuncDef, list[Call]]
     order: list[FuncDef]
+    _stack: list[FuncDef]
+    """functions being visited, outermost first"""
 
     def __init__(self, func: FuncDef):
         self.func = func
@@ -174,17 +171,7 @@ class _CallGraphInstance:
         self.callers = {}
         self.call_sites = {}
         self.order = []
-        # DFS bookkeeping.
-        self._color: dict[FuncDef, int] = {}
-        self._stack: list[FuncDef] = []
-        # Memoized per-body call collection (a callee reached from
-        # multiple sites is only scanned once).
-        self._body_calls: dict[FuncDef, list[Call]] = {}
-
-    def _calls_in(self, fdef: FuncDef) -> list[Call]:
-        if fdef not in self._body_calls:
-            self._body_calls[fdef] = _CallCollector().collect(fdef)
-        return self._body_calls[fdef]
+        self._stack = []
 
     def _resolve_callee(self, fdef: FuncDef, call: Call) -> Function | None:
         """The user-defined :class:`Function` a call targets, or ``None`` for
@@ -207,7 +194,6 @@ class _CallGraphInstance:
         return None
 
     def _visit(self, fdef: FuncDef):
-        self._color[fdef] = _GRAY
         self._stack.append(fdef)
         self.nodes.add(fdef)
         self.callees.setdefault(fdef, [])
@@ -215,7 +201,7 @@ class _CallGraphInstance:
         self.call_sites.setdefault(fdef, [])
 
         seen: set[FuncDef] = set()
-        for call in self._calls_in(fdef):
+        for call in _CallCollector().collect(fdef):
             fn = self._resolve_callee(fdef, call)
             if fn is None:
                 # primitive / builtin / context constructor / a name that
@@ -230,19 +216,17 @@ class _CallGraphInstance:
             self.callees[fdef].append(callee)
             self.callers.setdefault(callee, []).append(fdef)
 
-            c = self._color.get(callee)
-            if c == _GRAY:
+            if callee in self._stack:
                 cycle = self._stack[self._stack.index(callee):] + [callee]
                 path = ' -> '.join(f.name for f in cycle)
                 raise CallGraphError(
                     f'recursion is not supported in FPy, but the call '
                     f'graph contains a cycle: {path}'
                 )
-            elif c is None:
+            elif callee not in self.nodes:
                 self._visit(callee)
 
         self._stack.pop()
-        self._color[fdef] = _BLACK
         self.order.append(fdef)
 
     def analyze(self) -> CallGraphAnalysis:

@@ -150,19 +150,6 @@ class OrdinalFormat(Format):
             step = 1 if xord < yord else -1
             return self.from_ordinal(xord + step, infval=allow_inf)
 
-    def _next_away(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
-        """
-        Returns the next representable value after `x` away from `y`.
-        """
-        if y.isinf:
-            step = 1 if y.s else -1
-            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
-        else:
-            xord = self.to_ordinal(x)
-            yord = self.to_ordinal(y)
-            step = -1 if xord < yord else 1
-            return self.from_ordinal(xord + step, infval=allow_inf)
-
     def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
         Returns the next representable value after `x` towards `y`.
@@ -225,7 +212,9 @@ class OrdinalFormat(Format):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value away from zero', x)
-        return self._next_away(x, self.from_ordinal(0), allow_inf)
+        # zero is ordinal 0, so away from it is one ordinal further from 0
+        xord = self.to_ordinal(x)
+        return self.from_ordinal(xord + (-1 if xord < 0 else 1), infval=allow_inf)
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """

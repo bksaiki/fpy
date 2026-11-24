@@ -25,9 +25,9 @@ __all__ = [
 ]
 
 ###########################################################
-# Rounding modes
+# Rounding and overflow modes
 
-_round_mode = {
+_RM_FROM_FPC = {
     'nearestEven': RM.RNE,
     'nearestAway': RM.RNA,
     'toPositive': RM.RTP,
@@ -35,37 +35,20 @@ _round_mode = {
     'toZero': RM.RTZ,
     'awayZero': RM.RAZ,
 }
+_RM_TO_FPC = {v: k for k, v in _RM_FROM_FPC.items()}
 
-def _round_mode_to_fpy(mode: str):
-    if mode not in _round_mode:
-        raise ValueError(f'Unknown rounding mode: {mode}')
-    return _round_mode[mode]
-
-def _round_mode_from_fpc(mode: RM):
-    _invert_round_mode = { v: k for k, v in _round_mode.items() }
-    if mode not in _invert_round_mode:
-        raise ValueError(f'Unknown rounding mode: {mode}')
-    return _invert_round_mode[mode]
-
-###########################################################
-# Overflow mode
-
-_overflow_mode = {
+_OV_FROM_FPC = {
     'wrap': OV.WRAP,
     'clamp': OV.SATURATE,
     'infinity': OV.OVERFLOW,
 }
+_OV_TO_FPC = {v: k for k, v in _OV_FROM_FPC.items()}
 
-def _overflow_mode_to_fpc(mode: str):
-    if mode not in _overflow_mode:
-        raise ValueError(f'Unknown overflow mode: {mode}')
-    return _overflow_mode[mode]
 
-def _overflow_mode_from_fpc(mode: OV):
-    _invert_overflow_mode = { v: k for k, v in _overflow_mode.items() }
-    if mode not in _invert_overflow_mode:
-        raise ValueError(f'Unknown overflow mode: {mode}')
-    return _invert_overflow_mode[mode]
+def _lookup[K, V](table: dict[K, V], key: K, what: str) -> V:
+    if key not in table:
+        raise ValueError(f'Unknown {what}: {key}')
+    return table[key]
 
 ###########################################################
 # FPCore (legacy) context
@@ -147,7 +130,7 @@ class FPCoreContext:
 
         match ctx:
             case IEEEContext():
-                rm = _round_mode_from_fpc(ctx.rm)
+                rm = _lookup(_RM_TO_FPC, ctx.rm, 'rounding mode')
                 match (ctx.es, ctx.nbits):
                     case (15, 128):
                         return FPCoreContext(precision='binary128', round=rm)
@@ -162,7 +145,7 @@ class FPCoreContext:
                     case _:
                         return FPCoreContext(precision=['float', ctx.es, ctx.nbits], round=rm)
             case MPFixedContext():
-                rm = _round_mode_from_fpc(ctx.rm)
+                rm = _lookup(_RM_TO_FPC, ctx.rm, 'rounding mode')
                 if ctx.nmin == -1:
                     return FPCoreContext(precision='integer', round=rm)
                 else:
@@ -170,8 +153,8 @@ class FPCoreContext:
             case FixedContext():
                 if not ctx.signed:
                     raise RuntimeError('Cannot convert unsigned FixedContext to an FPCore context')
-                rm = _round_mode_from_fpc(ctx.rm)
-                of = _overflow_mode_from_fpc(ctx.overflow)
+                rm = _lookup(_RM_TO_FPC, ctx.rm, 'rounding mode')
+                of = _lookup(_OV_TO_FPC, ctx.overflow, 'overflow mode')
                 return FPCoreContext(precision=['fixed', ctx.nbits, ctx.scale], round=rm, overflow=of)
             case _ if ctx is REAL:
                 return FPCoreContext(precision='real')
@@ -188,26 +171,27 @@ class FPCoreContext:
         ov = self.props.get('overflow', 'infinity')
         if 'n' in self.props and 'precision' not in self.props:
             # FPy's own property for an unbounded fixed-point context (`from_context`)
-            return MPFixedContext(int(self.props['n']), _round_mode_to_fpy(rnd))
+            return MPFixedContext(int(self.props['n']), _lookup(_RM_FROM_FPC, rnd, 'rounding mode'))
         try:
+            rm = _lookup(_RM_FROM_FPC, rnd, 'rounding mode')
             match prec:
                 # IEEE 754 long form
                 case ['float', es, nbits]:
-                    return IEEEContext(int(es), int(nbits), _round_mode_to_fpy(rnd))
+                    return IEEEContext(int(es), int(nbits), rm)
                 # IEEE 754 shorthands
                 case 'binary128':
-                    return FP128.with_params(rm=_round_mode_to_fpy(rnd))
+                    return FP128.with_params(rm=rm)
                 case 'binary80':
-                    return IEEEContext(15, 79, _round_mode_to_fpy(rnd))
+                    return IEEEContext(15, 79, rm)
                 case 'binary64':
-                    return FP64.with_params(rm=_round_mode_to_fpy(rnd))
+                    return FP64.with_params(rm=rm)
                 case 'binary32':
-                    return FP32.with_params(rm=_round_mode_to_fpy(rnd))
+                    return FP32.with_params(rm=rm)
                 case 'binary16':
-                    return FP16.with_params(rm=_round_mode_to_fpy(rnd))
+                    return FP16.with_params(rm=rm)
                 # fixed-point context
                 case ['fixed', nbits, scale]:
-                    return FixedContext(True, int(scale), int(nbits), _round_mode_to_fpy(rnd), _overflow_mode_to_fpc(ov))
+                    return FixedContext(True, int(scale), int(nbits), rm, _lookup(_OV_FROM_FPC, ov, 'overflow mode'))
                 # integer context
                 case 'integer':
                     return INTEGER

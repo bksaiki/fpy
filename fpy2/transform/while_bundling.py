@@ -97,9 +97,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
             return StmtBlock(stmts)
         else:
             # transformation is not needed
-            cond = self._visit_expr(stmt.cond, ctx)
-            body, _ = self._visit_block(stmt.body, ctx)
-            s = WhileStmt(cond, body, None)
+            s, _ = super()._visit_while(stmt, ctx)
             return StmtBlock([s])
 
 

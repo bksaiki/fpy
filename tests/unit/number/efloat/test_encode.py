@@ -15,7 +15,7 @@ _common: list[EFloatContext] = [
 
 
 class EncodeTestCase():
-    """Testing `ExtFloatContext.encode()`"""
+    """Testing `EFloatContext.encode()`"""
 
     def test_common(self):
         # iterate over common contexts
@@ -39,7 +39,7 @@ class EncodeTestCase():
 
 
 class EncodeRoundTripTestCase():
-    """Testing `ExtFloatContext.encode()` and `ExtFloatContext.decode()`"""
+    """Testing `EFloatContext.encode()` and `EFloatContext.decode()`"""
 
     def test_common(self):
         # iterate over common contexts

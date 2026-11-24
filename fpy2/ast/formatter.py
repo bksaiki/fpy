@@ -63,15 +63,6 @@ class _FormatterInstance(Visitor):
     def _add_line(self, line: str, indent: int):
         self.fmt += '    ' * indent + line + '\n'
 
-    def _visit_function_name(self, func: Var | Attribute, ctx: _Ctx) -> str:
-        match func:
-            case Var():
-                return self._visit_var(func, ctx)
-            case Attribute():
-                return self._visit_attribute(func, ctx)
-            case _:
-                raise RuntimeError('unreachable', func)
-
     def _fpy_qualified(self, name: str) -> str:
         """Render an `fpy2` symbol as `<alias>.<name>` when the enclosing
         function imports `fpy2` under a module alias, else bare `name`."""
@@ -86,7 +77,7 @@ class _FormatterInstance(Visitor):
         (synthesized by a rewrite pass)."""
         func = getattr(e, 'func', None)
         if func is not None:
-            return self._visit_function_name(func, ctx)
+            return self._visit_expr(func, ctx)
         return self._fpy_qualified(CANONICAL_OP_NAMES[type(e)])
 
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
@@ -198,7 +189,7 @@ class _FormatterInstance(Visitor):
                 raise RuntimeError('unreachable', e)
 
     def _visit_call(self, e: Call, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._visit_expr(e.func, ctx)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         args += [f'{k}={self._visit_expr(v, ctx)}' for k, v in e.kwargs]
         arg_str = ', '.join(args)
@@ -211,38 +202,18 @@ class _FormatterInstance(Visitor):
         return f'{first} {s}'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
-        num_elts = len(e.elts)
-        if num_elts == 0:
-            return '()'
-        elif num_elts == 1:
-            elt = self._visit_expr(e.elts[0], ctx)
-            return f'({elt},)'
-        else:
-            elts = [self._visit_expr(elt, ctx) for elt in e.elts]
-            return f'({", ".join(elts)})'
+        elts = [self._visit_expr(elt, ctx) for elt in e.elts]
+        return f'({elts[0]},)' if len(elts) == 1 else f'({", ".join(elts)})'
 
     def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
-        num_elts = len(e.elts)
-        if num_elts == 0:
-            return '[]'
-        elif num_elts == 1:
-            elt = self._visit_expr(e.elts[0], ctx)
-            return f'[{elt}]'
-        else:
-            elts = [self._visit_expr(elt, ctx) for elt in e.elts]
-            return f'[{", ".join(elts)}]'
+        elts = [self._visit_expr(elt, ctx) for elt in e.elts]
+        return f'[{", ".join(elts)}]'
 
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
-        targets: list[str] = []
-        for target in e.targets:
-            match target:
-                case Id():
-                    targets.append(str(target))
-                case TupleBinding():
-                    s = self._visit_tuple_binding(target)
-                    targets.append(f'({s})')
-                case _:
-                    raise RuntimeError('unreachable', target)
+        targets = [
+            f'({self._format_target(t)})' if isinstance(t, TupleBinding) else self._format_target(t)
+            for t in e.targets
+        ]
 
         elt = self._visit_expr(e.elt, ctx)
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
@@ -270,6 +241,15 @@ class _FormatterInstance(Visitor):
         value = self._visit_expr(e.value, ctx)
         return f'{value}.{e.attr}'
 
+    def _format_target(self, target: Id | TupleBinding) -> str:
+        match target:
+            case Id():
+                return str(target)
+            case TupleBinding():
+                return self._visit_tuple_binding(target)
+            case _:
+                raise RuntimeError('unreachable', target)
+
     def _visit_tuple_binding(self, vars: TupleBinding) -> str:
         elt_strs: list[str] = []
         for var in vars:
@@ -292,14 +272,7 @@ class _FormatterInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
-        match stmt.target:
-            case Id():
-                self._add_line(f'{stmt.target!s} = {val}', ctx)
-            case TupleBinding():
-                vars_str = self._visit_tuple_binding(stmt.target)
-                self._add_line(f'{vars_str} = {val}', ctx)
-            case _:
-                raise NotImplementedError('unreachable', stmt.target)
+        self._add_line(f'{self._format_target(stmt.target)} = {val}', ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
@@ -333,16 +306,8 @@ class _FormatterInstance(Visitor):
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
-        match stmt.target:
-            case Id():
-                target = str(stmt.target)
-            case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target)
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
-
         iterable = self._visit_expr(stmt.iterable, ctx)
-        self._add_line(f'for {target} in {iterable}:', ctx)
+        self._add_line(f'for {self._format_target(stmt.target)} in {iterable}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):

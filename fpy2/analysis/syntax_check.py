@@ -5,7 +5,6 @@ from typing import Self
 
 from ..ast.fpyast import *
 from ..ast.visitor import Visitor
-from .live_vars import LiveVars
 
 
 class FPySyntaxError(Exception):
@@ -252,18 +251,6 @@ class SyntaxCheckInstance(Visitor):
             raise FPySyntaxError('attribute base in function position must be either a variable or another attribute')
         self._visit_expr(e.value, ctx)
 
-    @staticmethod
-    def _binding_names(binding: Id | TupleBinding) -> set[NamedId]:
-        match binding:
-            case NamedId():
-                return {binding}
-            case UnderscoreId():
-                return set()
-            case TupleBinding():
-                return binding.names()
-            case _:
-                raise RuntimeError('unreachable', binding)
-
     def _visit_binding(
         self,
         binding: Id | TupleBinding,
@@ -340,7 +327,7 @@ class SyntaxCheckInstance(Visitor):
         )
         # the target is scoped to the loop: it neither shadows an outer
         # definition (`fresh`) nor escapes past the loop
-        return env.merge(body_env).remove(self._binding_names(stmt.target))
+        return env.merge(body_env).remove(stmt.target.names())
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env = ctx.env

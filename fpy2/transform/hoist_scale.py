@@ -20,7 +20,6 @@ from ..analysis.array_size import ListSize, size_eq, trip_count
 from ..analysis.value_class import ValueClass, is_positive_literal
 from ..ast import *
 from .cursor import Cursor, EditLog
-from .error import TransformDeclined
 from .hoist_invariant import _from_before, _Nodes, _own_exprs
 from .path import walk_blocks
 from .utils import RoundingScopes, SiteRewriter, check_where
@@ -336,22 +335,6 @@ class _HoistScale(SiteRewriter):
         self._drop = {}
         self._wrap = {}
 
-    def _claims(self, red: _Reduction, why: str | None) -> bool:
-        if why is not None:
-            if self._refuse(red, why) and not self.listing:
-                raise TransformDeclined(f'cannot hoist the factor: {why}')
-            return False
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(red, idx):
-            return False
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(red)
-            return False
-        return True
-
     def _visit_expr(self, e: Expr, ctx):
         if (elt := self._drop.get(id(e))) is not None:
             return self._visit_expr(elt, ctx)
@@ -377,7 +360,7 @@ class _HoistScale(SiteRewriter):
                             'no scaled list write fills the reduction'
                             if site is None else _why_not(site, self.facts)
                         )
-                        if not self._claims(red, why):
+                        if not self._claim(red, why, 'cannot hoist the factor'):
                             continue
                         assert site is not None
                         self._drop[id(site.prod)] = site.elt

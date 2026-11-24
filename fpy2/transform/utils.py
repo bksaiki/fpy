@@ -4,7 +4,7 @@ rewrites.
 """
 
 from collections.abc import Callable, Container
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..analysis import (
@@ -17,16 +17,17 @@ from ..analysis import (
 )
 from ..analysis.format_infer import FormatAnalysis, FormatInfer
 from ..analysis.hoistability import ATOMIC, Hoistability, force_names
+from ..ast.accessors import operands, rebuild
 from ..ast.fpyast import (
     Assign,
     Attribute,
-    BinaryOp,
     Cast,
     ConstInf,
     ConstNan,
     ContextStmt,
     Decnum,
     Expr,
+    Fmod,
     ForeignVal,
     ForStmt,
     FuncDef,
@@ -36,22 +37,15 @@ from ..ast.fpyast import (
     IfStmt,
     Integer,
     Location,
-    NamedBinaryOp,
+    Mod,
     NamedId,
-    NamedNaryOp,
-    NamedTernaryOp,
-    NamedUnaryOp,
-    NaryOp,
     Neg,
-    NullaryOp,
     Rational,
     Round,
     Signbit,
     Stmt,
     StmtBlock,
-    TernaryOp,
     TupleBinding,
-    UnaryOp,
     UnderscoreId,
     Var,
 )
@@ -71,7 +65,6 @@ from .cursor import (
     Edit,
     ExprCursor,
     StmtCursor,
-    contains,
     expr_sites,
     not_a_statement,
     region_of,
@@ -138,6 +131,14 @@ def copy_target(target: Id | TupleBinding) -> Id | TupleBinding:
             raise RuntimeError(f'Unexpected target {target}')
 
 
+def rem(a: Expr, b: Expr, use_fmod: bool) -> Expr:
+    """`a` remainder `b`, as `fmod` or `%`.
+
+    The two differ only on a negative dividend, and callers pass a non-negative
+    one, so they agree; which one a backend can emit is the caller's to know."""
+    return Fmod(None, a, b, None) if use_fmod else Mod(a, b, None)
+
+
 def attribute(alias: str, *names: str, loc: Location | None = None) -> Attribute:
     """The dotted name `alias.names[0].names[1]...`."""
     e: Expr = Var(NamedId(alias), loc)
@@ -181,13 +182,6 @@ def try_round(ctx: Context, x: Float | RealFloat) -> Float | None:
         return None
 
 
-def agrees(a: Float | None, b: Float | None) -> bool:
-    """Whether two rounding outcomes match, a refusal counting as an outcome."""
-    if a is None or b is None:
-        return a is None and b is None
-    return same_value(a, b)
-
-
 def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> Expr:
     """
     The result for a positive or negative `operand`, chosen by its sign.
@@ -203,48 +197,39 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     )
 
 
-def operands(e: Expr) -> list[Expr]:
-    """The direct operands, left to right, of an operation.
+def lift_op(
+    e: Expr, ctx: Context, out: list[Stmt],
+    visit: Callable[[Expr], Expr], fresh: Callable[[], NamedId],
+) -> NamedId:
+    """Compute the operation *e* alone under *ctx*, in a block appended to
+    *out*; returns the name holding the result.
 
-    Shared by the rounding rewrites so they cannot disagree about the shape of
-    what they lift.  Every arity is handled, not just arithmetic: the rounding
-    rules hold for any real-valued function, so `sqrt` and `fma` are lifted the
-    same way a multiply is.
+    Each operand that survives *visit* as a non-``Var`` is bound under the
+    original scope first, so the block covers this operation and nothing else.
     """
-    match e:
-        case NullaryOp():
-            return []
-        case UnaryOp():
-            return [e.arg]
-        case BinaryOp():
-            return [e.first, e.second]
-        case TernaryOp():
-            return [e.first, e.second, e.third]
-        case NaryOp():
-            return list(e.args)
-        case _:
-            raise RuntimeError(f'not an operation: {e!r}')
+    loc = e.loc
+    args: list[Expr] = []
+    for operand in operands(e):
+        new = visit(operand)
+        if not isinstance(new, Var):
+            # a name lookup rounds nothing, so its bind would be a pure copy
+            t = fresh()
+            out.append(Assign(t, None, new, loc))
+            new = Var(t, loc)
+        args.append(new)
+    result = fresh()
+    block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
+    out.append(ContextStmt(UnderscoreId(), ForeignVal(ctx, loc), block, loc))
+    return result
 
 
-def rebuild(e: Expr, args: list[Expr]) -> Expr:
-    """*e* with its operands replaced: the inverse of :func:`operands`."""
-    # a `Named*` op carries the symbol it was written with; a nullary one always
-    # does, since it has nothing else to identify it.  The arities are settled by
-    # the match, which mypy cannot follow through the star-args.
-    named = isinstance(
-        e, (NullaryOp, NamedUnaryOp, NamedBinaryOp, NamedTernaryOp, NamedNaryOp),
-    )
-    head = (e.func,) if named else ()   # type: ignore[attr-defined]
-    ctor: Any = type(e)
-    match e:
-        case NullaryOp():
-            return ctor(*head, e.loc)
-        case NaryOp():
-            return ctor(*head, args, e.loc)
-        case UnaryOp() | BinaryOp() | TernaryOp():
-            return ctor(*head, *args, e.loc)
-        case _:
-            raise RuntimeError(f'not an operation: {e!r}')
+def bind_alias(func: FuncDef, alias: str | None) -> FuncDef:
+    """*func* with `alias`, the name of `fpy2` an emitted context is written
+    with, among its free variables."""
+    if alias is None:
+        return func
+    meta = replace(func.meta, free_vars=func.free_vars | {NamedId(alias)})
+    return FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
 
 
 def name_forced(
@@ -397,7 +382,7 @@ class SiteRewriter(DefaultTransformVisitor):
     only such a rewrite can be aimed with an :class:`ExprCursor`"""
     listing: bool = False
     """report the sites this rewrite would act on, instead of acting on them"""
-    found: list[StmtPath]
+    found: list[Stmt]
     """the statement sites, while listing"""
     found_exprs: list[Expr]
     """the expression sites, while listing"""
@@ -477,19 +462,8 @@ class SiteRewriter(DefaultTransformVisitor):
         if self._expr_sited:
             marked = {id(e) for e in self.found_exprs}
             return list(expr_sites(self.func, lambda e: id(e) in marked, within))
-        if within is not None:
-            # checked even when nothing was found, so an empty listing rejects a
-            # `within` naming nothing of the kind as a populated one would
-            if within.func is not self.func:
-                raise TransformReferenceError(
-                    f'`{within}` names part of another program'
-                )
-            if isinstance(within, ExprCursor):
-                raise not_a_statement(within)
-        cursors: list[Cursor] = [StmtCursor(self.func, q) for q in self.found]
-        if within is None:
-            return cursors
-        return [c for c in cursors if contains(within, c)]
+        marked = {id(s) for s in self.found}
+        return list(stmt_sites(self.func, lambda s: id(s) in marked, within))
 
     def list_refusals(
         self, within: Cursor | None = None
@@ -522,6 +496,37 @@ class SiteRewriter(DefaultTransformVisitor):
         if named:
             self.declined.append(why)
         return named
+
+    def _claim(
+        self, node: Expr | Stmt, why: str | None = None, declined: str | None = None,
+    ) -> bool:
+        """Whether to rewrite *node*, the candidate at the current site.
+
+        A refusal (`why`) takes no index; where an explicit cursor names it and
+        `declined` is given, it raises with that prefix.  While listing, a site
+        is recorded rather than taken.
+        """
+        if why is not None:
+            if self._refuse(node, why) and declined is not None and not self.listing:
+                raise TransformDeclined(f'{declined}: {why}')
+            return False
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if isinstance(node, Expr):
+            selected = self._selects_expr(node, idx)
+        else:
+            selected = self._selects(*self._site, idx)
+        if not selected:
+            return False
+        self._matched += 1
+        if not self.listing:
+            return True
+        if isinstance(node, Expr):
+            self.found_exprs.append(node)
+        else:
+            self.found.append(node)
+        return False
 
     def check_site(self, what: str) -> None:
         """Rejects an explicit `where` that named no candidate, or one whose
@@ -674,7 +679,7 @@ class ExprSiteRewriter(PreambleScoped):
     """A rewrite whose sites are expressions and whose replacement needs a
     statement slot.
 
-    Holds the walk the rounding rewrites share: decide the refusal before an
+    Holds the walk the expression-site rewrites share: decide the refusal before an
     index is spent, count the site, and either list it or emit.  A subclass
     says which expressions it considers (`_candidate`), whether one may be
     rewritten (`_check`), and what replaces it (`_emit`).
@@ -722,18 +727,7 @@ class ExprSiteRewriter(PreambleScoped):
             Declined(self._no_slot) if ctx is None or e not in self._strict
             else self._check(e)
         )
-        if isinstance(info, Declined):
-            self._refuse(e, info.reason)
-            return super()._visit_expr(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
+        if not self._claim(e, info.reason if isinstance(info, Declined) else None):
             return super()._visit_expr(e, ctx)
 
         self._replaced = True
@@ -747,7 +741,7 @@ class RoundingRewriter(ExprSiteRewriter):
     :class:`fpy2.transform.RoundInsert` gives an exact operation a format;
     :class:`fpy2.transform.SplitRound` splits a rounded one through an
     intermediate.  A subclass says which operations it considers
-    (:meth:`_candidate`), whether one may be rewritten (:meth:`_verify`), and
+    (:meth:`_candidate`), whether one may be rewritten (:meth:`_check`), and
     what stands in its place (:meth:`_wrap`).
     """
 
@@ -771,39 +765,14 @@ class RoundingRewriter(ExprSiteRewriter):
         self.gensym = Gensym(reserved=scopes.def_use.names())
         self.where = where
 
-    def _check(self, e: Expr) -> 'Declined | None':
-        """`None` where *e* may be rewritten, else why not."""
-        raise NotImplementedError
-
     def _wrap(self, t: NamedId, loc: Location | None) -> Expr:
         """What replaces the operation, given the temporary holding it."""
         raise NotImplementedError
 
     def _emit(self, e: Expr, info, out: list) -> Expr:
-        """Compute *e* alone under `self.ctx`; return :meth:`_wrap` of it.
-
-        Each operand that survives the visit as a non-``Var`` is bound under the
-        *original* scope first, so the emitted block covers this operation and
-        nothing else.
-        """
-        loc = e.loc
-        args: list[Expr] = []
-        for operand in operands(e):
-            new = self._visit_expr(operand, out)
-            if isinstance(new, Var):
-                # a name lookup rounds nothing, so the bind would be a pure copy
-                args.append(new)
-                continue
-            t = self.gensym.fresh('_t')
-            out.append(Assign(t, None, new, loc))
-            args.append(Var(t, loc))
-
-        result = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
-        out.append(ContextStmt(
-            UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
-        ))
-        return self._wrap(result, loc)
+        """:func:`lift_op` of *e* under `self.ctx`, then :meth:`_wrap`."""
+        t = lift_op(e, self.ctx, out, lambda x: self._visit_expr(x, out), self._fresh)
+        return self._wrap(t, e.loc)
 
 
 class ScopedRoundingRewriter(ExprSiteRewriter):

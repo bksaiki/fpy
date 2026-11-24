@@ -23,24 +23,6 @@ class _ForBundlingInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _visit_tuple_binding(self, binding: TupleBinding, rename: dict[NamedId, NamedId] | None = None):
-        new_vars: list[Id | TupleBinding] = []
-        for var in binding:
-            match var:
-                case NamedId():
-                    if rename is None:
-                        new_vars.append(var)
-                    else:
-                        new_vars.append(rename.get(var, var))
-                case UnderscoreId():
-                    new_vars.append(var)
-                case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(var, rename))
-                case _:
-                    raise NotImplementedError(f'unreachable {var}')
-        return TupleBinding(new_vars, binding.loc)
-
-
     def _visit_for(self, stmt: ForStmt, ctx: None) -> StmtBlock:
         # let x_0, ..., x_N be variables mutated in the for loop
         # let x_0', ..., x_N', t be fresh variables
@@ -101,7 +83,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
                 case Id():
                     target: Id | TupleBinding = stmt.target
                 case TupleBinding():
-                    target = self._visit_tuple_binding(stmt.target, rename)
+                    target = RenameTarget.apply_binding(stmt.target, rename)
                 case _:
                     raise RuntimeError('unreachable', stmt.target)
 
@@ -131,17 +113,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             return StmtBlock(stmts)
         else:
             # transformation is not needed
-            match stmt.target:
-                case Id():
-                    target = stmt.target
-                case TupleBinding():
-                    target = self._visit_tuple_binding(stmt.target, None)
-                case _:
-                    raise RuntimeError('unreachable', stmt.target)
-
-            iterable = self._visit_expr(stmt.iterable, None)
-            body, _ = self._visit_block(stmt.body, None)
-            s = ForStmt(target, iterable, body, None)
+            s, _ = super()._visit_for(stmt, None)
             return StmtBlock([s])
 
 

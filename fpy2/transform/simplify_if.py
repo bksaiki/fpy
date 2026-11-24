@@ -24,10 +24,9 @@ from ..number import (
 from ..primitive import Primitive
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
-from .cursor import Cursor, EditLog, StmtPath
-from .error import TransformDeclined
+from .cursor import Cursor, EditLog
 from .rename_target import RenameTarget
-from .utils import SiteRewriter, check_where
+from .utils import SiteRewriter, check_where, clone
 
 # Scoped statements (`with`) are absent on purpose: the scan descends into
 # them, since their contents become unconditional too.
@@ -54,12 +53,6 @@ bounds the blowup when arms nest.
 """
 
 
-def _clone(e: Expr) -> Expr:
-    """A substituted expression cannot be shared between two occurrences: the
-    analyses key on node identity."""
-    return DefaultTransformVisitor()._visit_expr(e, None)
-
-
 class _Subst(DefaultTransformVisitor):
     """Replaces names by expressions, one fresh copy per occurrence."""
 
@@ -69,7 +62,7 @@ class _Subst(DefaultTransformVisitor):
 
     def _visit_var(self, e: Var, ctx: None):
         sub = self.env.get(e.name)
-        return Var(e.name, e.loc) if sub is None else _clone(sub)
+        return Var(e.name, e.loc) if sub is None else clone(sub)
 
     def apply(self, e: Expr) -> Expr:
         return self._visit_expr(e, None)
@@ -296,27 +289,12 @@ class _SimplifyIfInstance(SiteRewriter):
     def _claims(self, stmt: Stmt, *bodies: StmtBlock) -> bool:
         """Whether to rewrite here.  A refusal that was aimed at is raised
         rather than skipped: a named site this pass cannot take is an error."""
-        block, pos = self._site
         why: str | None = None
         for body in bodies:
             why = _why_unhoistable(body, self.ctx_use, self.strict)
             if why is not None:
                 break
-
-        if why is not None:
-            if self._refuse(stmt, why) and not self.listing:
-                raise TransformDeclined(f'cannot rewrite `if` to `if` expression: {why}')
-            return False
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects(block, pos, idx):
-            return False
-        self._matched += 1
-        if self.listing:
-            self.found.append(StmtPath(self._paths[id(block)], pos))
-            return False
-        return True
+        return self._claim(stmt, why, 'cannot rewrite `if` to `if` expression')
 
     def _emit(self, ctx: list[Stmt], stmts: list[Stmt]):
         """Give the enclosing block *stmts* in place of the `if`, returning the

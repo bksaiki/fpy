@@ -35,15 +35,10 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
-from .utils import PreambleScoped, check_where, name_forced
-
-_NO_SLOT = (
-    'the iterable has no statement-level position for the bindings the '
-    'rewrite emits'
-)
+from .utils import ExprSiteRewriter, check_where
 
 
-class _UnfoldIterInstance(PreambleScoped):
+class _UnfoldIterInstance(ExprSiteRewriter):
     """Rewrites one derived iterable into the comprehension it stands for.
 
     A subclass says which node it takes (`_node`) and what the comprehension
@@ -51,7 +46,10 @@ class _UnfoldIterInstance(PreambleScoped):
     minting the index, refusing where no statement reaches -- is shared.
     """
 
-    _expr_sited = True
+    _no_slot = (
+        'the iterable has no statement-level position for the bindings the '
+        'rewrite emits'
+    )
 
     _node: type
     """the surface node this pass unfolds"""
@@ -66,9 +64,6 @@ class _UnfoldIterInstance(PreambleScoped):
         self.temp_id = NamedId('t') if temp_id is None else temp_id
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.where = where
-
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
 
     def _fresh(self) -> NamedId:
         return self.gensym.refresh(self.temp_id)
@@ -86,7 +81,13 @@ class _UnfoldIterInstance(PreambleScoped):
 
     # ------------------------------------------------------------------
 
-    def _emit(self, e: Expr, out: list[Stmt]) -> Expr:
+    def _candidate(self, e: Expr) -> bool:
+        return isinstance(e, self._node)
+
+    def _check(self, e: Expr) -> None:
+        return None
+
+    def _emit(self, e: Expr, info: None, out: list[Stmt]) -> Expr:
         """The comprehension *e* stands for, with its arguments named."""
         loc = e.loc
         if not e.args:   # type: ignore[attr-defined]
@@ -102,12 +103,12 @@ class _UnfoldIterInstance(PreambleScoped):
                 # twice, and the two lists would be distinct objects
                 args.append(new)
                 continue
-            t = self.gensym.refresh(self.temp_id)
+            t = self._fresh()
             out.append(Assign(t, None, new, loc))
             args.append(Var(t, loc))
 
         out.extend(self._pre(args, loc))
-        i = self.gensym.refresh(self.temp_id)
+        i = self._fresh()
         return ListComp(
             [i], [Range1(None, Len(None, args[0], loc), loc)],
             self._elt(args, i, loc), loc,
@@ -120,29 +121,6 @@ class _UnfoldIterInstance(PreambleScoped):
     _visit_if1 = DefaultTransformVisitor._visit_if1
     _visit_if = DefaultTransformVisitor._visit_if
     _visit_context = DefaultTransformVisitor._visit_context
-
-    def _visit_expr(self, e: Expr, ctx):
-        if not isinstance(e, self._node):
-            return super()._visit_expr(e, ctx)
-
-        # a refusal is not a site, so it is decided before an index is spent
-        if ctx is None or e not in self._strict:
-            self._refuse(e, _NO_SLOT)
-            return super()._visit_expr(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
-            return super()._visit_expr(e, ctx)
-
-        emitted = self._emit(e, ctx)
-        self._replaced = True
-        return name_forced(e, emitted, self._force, ctx, self._fresh)
 
 
 class _UnfoldZipInstance(_UnfoldIterInstance):

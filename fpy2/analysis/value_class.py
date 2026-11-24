@@ -669,6 +669,7 @@ class _ValueClassInstance(DefaultVisitor):
         alias: AliasAnalysis,
         arg_classes: Sequence[ValueClass | None] | None = None,
         cache: _CalleeCache | None = None,
+        reach: ReachabilityAnalysis | None = None,
     ):
         self.func = func
         self.type_info = type_info
@@ -684,7 +685,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._scanned = {}
         self._scan_clocks = {}
         self._sizes_cache = None
-        self._reach_cache = None
+        self._reach_cache = reach
         self._fills_cache = None
         self.by_def = {}
         self.by_expr = {}
@@ -1635,7 +1636,7 @@ class _ValueClassInstance(DefaultVisitor):
             # the call graph is acyclic (`TypeInfer.check`), so this terminates
             type_info, ctx_use, alias, reach = self._cache.analyses(callee)
             info = _ValueClassInstance(
-                callee, type_info, ctx_use, alias, arg_classes, self._cache,
+                callee, type_info, ctx_use, alias, arg_classes, self._cache, reach,
             ).analyze()
             ret = _BOT
             for stmt in reach.ret_stmts:
@@ -1781,7 +1782,7 @@ class _ValueClassInstance(DefaultVisitor):
     def _falls_through(self, block: StmtBlock) -> bool:
         if self._reach_cache is None:
             self._reach_cache = Reachability.analyze(self.func)
-        return not block.stmts or self._reach_cache.has_exit.get(block.stmts[-1], True)
+        return self._reach_cache.falls_through(block)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)

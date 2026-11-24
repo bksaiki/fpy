@@ -51,7 +51,7 @@ def simplify(
                 return (3 * x)
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_ast(Simplify.apply(
         func.ast,

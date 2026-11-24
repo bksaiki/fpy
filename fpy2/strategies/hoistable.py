@@ -80,6 +80,6 @@ def to_hoistable(func: Function) -> Function:
     :func:`fpy2.strategies.to_anf` would name both products.
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_ast(Hoistable.apply(func.ast))

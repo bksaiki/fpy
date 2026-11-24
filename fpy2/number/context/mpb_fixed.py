@@ -3,7 +3,7 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
-from ...utils import DEFAULT, DefaultOr, default_repr
+from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import SizedContext, zero_sign
@@ -391,45 +391,21 @@ class MPBFixedContext(SizedContext):
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'MPBFixedContext':
-        if nmin is DEFAULT:
-            nmin = self.nmin
-        if maxval is DEFAULT:
-            maxval = self.pos_maxval
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if neg_maxval is DEFAULT:
-            neg_maxval = self.neg_maxval
-        if rng is DEFAULT:
-            rng = self.rng
-        if enable_nan is DEFAULT:
-            enable_nan = self.enable_nan
-        if enable_inf is DEFAULT:
-            enable_inf = self.enable_inf
-        if enable_neg_zero is DEFAULT:
-            enable_neg_zero = self.enable_neg_zero
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPBFixedContext(
-            nmin=nmin,
-            maxval=maxval,
-            rm=rm,
-            num_randbits=num_randbits,
-            overflow=overflow,
-            neg_maxval=neg_maxval,
-            rng=rng,
-            enable_nan=enable_nan,
-            enable_inf=enable_inf,
-            enable_neg_zero=enable_neg_zero,
-            nan_value=nan_value,
-            inf_value=inf_value
+            nmin=default_or(nmin, self.nmin),
+            maxval=default_or(maxval, self.pos_maxval),
+            rm=default_or(rm, self.rm),
+            num_randbits=default_or(num_randbits, self.num_randbits),
+            overflow=default_or(overflow, self.overflow),
+            neg_maxval=default_or(neg_maxval, self.neg_maxval),
+            rng=default_or(rng, self.rng),
+            enable_nan=default_or(enable_nan, self.enable_nan),
+            enable_inf=default_or(enable_inf, self.enable_inf),
+            enable_neg_zero=default_or(enable_neg_zero, self.enable_neg_zero),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value)
         )
 
     @property
@@ -488,20 +464,10 @@ class MPBFixedContext(SizedContext):
             return x < self.neg_maxval
         return x > self.pos_maxval
 
-    def _overflow_to_infinity(self, s: bool):
+    def _overflow_to_infinity(self, s: bool) -> bool:
         """Should overflows round to infinity (rather than MAX_VAL)?"""
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return False
-            case RoundingDirection.RAZ:
-                return True
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return True
-            case _:
-                raise RuntimeError(f'unrechable {direction}')
+        return direction != RoundingDirection.RTZ
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
@@ -586,12 +552,3 @@ class MPBFixedContext(SizedContext):
         # step 5. return the rounded value.
         return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
-    def round(self, x, *, exact: bool = False):
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False):
-        if not isinstance(n, int):
-            raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)

@@ -90,15 +90,12 @@ class Context(ABC):
         """
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
-        try:
-            self_fmt = self.format()
-        except NotImplementedError:
-            self_fmt = None
-        try:
-            other_fmt = other.format()
-        except NotImplementedError:
-            other_fmt = None
-        return self_fmt == other_fmt
+        return self.format() == other.format()
+
+    def _bind(self, y: Float) -> Float:
+        """*y*, a value of this context's format, as one of this context."""
+        y._ctx = self
+        return y
 
     def representable_under(self, x: Float | RealFloat) -> bool:
         """
@@ -140,9 +137,7 @@ class Context(ABC):
 
     def normalize(self, x: Float) -> Float:
         """Returns the canonical form of `x` under this context."""
-        y = self.format().normalize(x)
-        y._ctx = self
-        return y
+        return self._bind(self.format().normalize(x))
 
     @abstractmethod
     def rounding_mode(self) -> RoundingMode | None:
@@ -168,7 +163,6 @@ class Context(ABC):
         """
         ...
 
-    @abstractmethod
     def round(self, x, *, exact: bool = False) -> Float:
         """
         Rounds any number according to this context.
@@ -176,9 +170,8 @@ class Context(ABC):
         If `exact=True`, then the rounding operation will raise a `ValueError`
         if rounding produces an inexact result.
         """
-        ...
+        return self._round_at(self._round_prepare(x), None, exact)
 
-    @abstractmethod
     def round_at(self, x, n: int, *, exact: bool = False) -> Float:
         """
         Rounding any number of a representable value with
@@ -196,7 +189,14 @@ class Context(ABC):
         If `exact=True`, then the rounding operation will raise a `ValueError`
         if rounding produces an inexact result.
         """
-        ...
+        if not isinstance(n, int):
+            raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
+        return self._round_at(self._round_prepare(x), n, exact)
+
+    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
+        """Rounds *x*, already prepared, with no digit below position *n*
+        (`None`: precision alone decides)."""
+        raise NotImplementedError
 
     def round_integer(self, x) -> Float:
         """
@@ -295,9 +295,7 @@ class OrdinalContext(Context):
         logical ordinal value after +/-MAX_VAL. This option is only
         valid when the context has a maximum value.
         """
-        y = self.format().from_ordinal(x, infval)
-        y._ctx = self
-        return y
+        return self._bind(self.format().from_ordinal(x, infval))
 
     def minval(self, s: bool = False) -> Float:
         """
@@ -306,9 +304,7 @@ class OrdinalContext(Context):
 
         This value will map to +/-1 through `to_ordinal()`.
         """
-        y = self.format().minval(s)
-        y._ctx = self
-        return y
+        return self._bind(self.format().minval(s))
 
     def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
@@ -320,21 +316,7 @@ class OrdinalContext(Context):
         - `x` is infinite and `allow_inf` is `False`
         - `x == y`
         """
-        if not self.representable_under(x):
-            raise ValueError('x is not representable under this context', x)
-        if not self.representable_under(y):
-            raise ValueError('y is not representable under this context', y)
-        if x.isnan:
-            raise ValueError('x is NaN', x)
-        if y.isnan:
-            raise ValueError('y is NaN', y)
-        if not allow_inf and x.isinf:
-            raise ValueError('x is infinite', x)
-        if x == y:
-            raise ValueError('x and y are equal so there is no next value towards y', x, y)
-        z = self.format().next_towards(x, y, allow_inf)
-        z._ctx = self
-        return z
+        return self._bind(self.format().next_towards(x, y, allow_inf))
 
     def next_towards_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -346,17 +328,7 @@ class OrdinalContext(Context):
         - `x` is infinite and `allow_inf` is `False`
         - `x == 0`
         """
-        if not self.representable_under(x):
-            raise ValueError('x is not representable under this context', x)
-        if x.isnan:
-            raise ValueError('x is NaN', x)
-        if not allow_inf and x.isinf:
-            raise ValueError('x is infinite', x)
-        if x == 0:
-            raise ValueError('x is zero so there is no next value towards zero', x)
-        y = self.format().next_towards_zero(x, allow_inf)
-        y._ctx = self
-        return y
+        return self._bind(self.format().next_towards_zero(x, allow_inf))
 
     def next_away_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -368,17 +340,7 @@ class OrdinalContext(Context):
         - `x` is infinite and `allow_inf` is `False`
         - `x == 0`
         """
-        if not self.representable_under(x):
-            raise ValueError('x is not representable under this context', x)
-        if x.isnan:
-            raise ValueError('x is NaN', x)
-        if not allow_inf and x.isinf:
-            raise ValueError('x is infinite', x)
-        if x == 0:
-            raise ValueError('x is zero so there is no next value away from zero', x)
-        y = self.format().next_away_zero(x, allow_inf)
-        y._ctx = self
-        return y
+        return self._bind(self.format().next_away_zero(x, allow_inf))
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -390,17 +352,7 @@ class OrdinalContext(Context):
         - `x` is infinite and `allow_inf` is `False`
         - `x == +inf`
         """
-        if not self.representable_under(x):
-            raise ValueError('x is not representable under this context', x)
-        if x.isnan:
-            raise ValueError('x is NaN', x)
-        if not allow_inf and x.isinf:
-            raise ValueError('x is infinite', x)
-        if x.isinf and not x.s:
-            raise ValueError('x cannot be positive infinity', x)
-        y = self.format().next_up(x, allow_inf)
-        y._ctx = self
-        return y
+        return self._bind(self.format().next_up(x, allow_inf))
 
     def next_down(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -412,17 +364,7 @@ class OrdinalContext(Context):
         - `x` is infinite and `allow_inf` is `False`
         - `x == -inf`
         """
-        if not self.representable_under(x):
-            raise ValueError('x is not representable under this context', x)
-        if x.isnan:
-            raise ValueError('x is NaN', x)
-        if not allow_inf and x.isinf:
-            raise ValueError('x is infinite', x)
-        if x.isinf and x.s:
-            raise ValueError('x cannot be negative infinity', x)
-        y = self.format().next_down(x, allow_inf)
-        y._ctx = self
-        return y
+        return self._bind(self.format().next_down(x, allow_inf))
 
 
 class SizedContext(OrdinalContext):
@@ -455,36 +397,28 @@ class SizedContext(OrdinalContext):
         If `self.maxval() == 0`, then this context cannot represent
         any finite, non-zero values.
         """
-        y = self.format().maxval(s)
-        y._ctx = self
-        return y
+        return self._bind(self.format().maxval(s))
 
     def infval(self, s: bool = False) -> Float:
         """
         Returns the (signed) value that is the "next" value after
         the maximum representable value under this context.
         """
-        y = self.format().infval(s)
-        y._ctx = self
-        return y
+        return self._bind(self.format().infval(s))
 
     def largest(self) -> Float:
         """
         Returns the largest representable value (towards positive infinity)
         under this context.
         """
-        y = self.format().largest()
-        y._ctx = self
-        return y
+        return self._bind(self.format().largest())
 
     def smallest(self) -> Float:
         """
         Returns the smallest representable value (towards negative infinity)
         under this context.
         """
-        y = self.format().smallest()
-        y._ctx = self
-        return y
+        return self._bind(self.format().smallest())
 
 
 class EncodableContext(SizedContext):
@@ -515,6 +449,4 @@ class EncodableContext(SizedContext):
         Decodes a bitstring as a a number constructed under this context.
         This operation is context dependent.
         """
-        y = self.format().decode(x)
-        y._ctx = self
-        return y
+        return self._bind(self.format().decode(x))

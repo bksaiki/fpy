@@ -169,7 +169,6 @@ from .unbox import (
     ParamAbi,
     UnboxAnalysis,
     contains_boxed,
-    return_storage,
 )
 from .variables import VariableAnalysis, binds_by_reference
 
@@ -383,7 +382,8 @@ class CppEmitter(Visitor):
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
     ctx_use: ContextUseAnalysis
-    ret_ty: CppType | None
+    ret_ty: CppType
+    """The return storage, as published in the ABI; see :func:`.unbox.return_storage`."""
     writer: _IndentedWriter
     op_table: ScalarOpTable
 
@@ -396,10 +396,6 @@ class CppEmitter(Visitor):
     _call_names: dict[Call, str]
     """Call -> mangled target name, one per (callee, outer_ctx).  A `Call` not
     in the map falls back to the callee's declared name."""
-
-    _func_name_override: str | None
-    """C++ name for the function-signature site, distinguishing the compiler's
-    specializations of one callee.  ``None`` uses the AST's declared name."""
 
     _unsafe_cast_int: bool
     """Whether rounded arithmetic may dispatch under an unbounded-integer
@@ -426,10 +422,6 @@ class CppEmitter(Visitor):
     has no ``break`` or ``continue``.
     """
 
-    _return_storage: CppType | None
-    """The storage this function returns, set once the signature is emitted;
-    see :meth:`_visit_return`."""
-
     _tmp_counter: int
 
     def __init__(
@@ -442,8 +434,7 @@ class CppEmitter(Visitor):
         class_info: ValueClassAnalysis,
         ctx_use: ContextUseAnalysis,
         *,
-        ret_ty: CppType | None = None,
-        func_name_override: str | None = None,
+        ret_ty: CppType,
         call_names: dict[Call, str] | None = None,
         unsafe_cast_int: bool = False,
         enable_fenv: bool = True,
@@ -463,14 +454,12 @@ class CppEmitter(Visitor):
         self.unbox = unbox
         self._callee_params = callee_params or {}
         self._call_names = call_names or {}
-        self._func_name_override = func_name_override
         self._unsafe_cast_int = unsafe_cast_int
         self._enable_fenv = enable_fenv
         self._fp_rms = frozenset(fp_rms(enable_fenv))
         self._scope_by_site = {scope.site: scope for scope in ctx_use.scopes}
         self._current_rm = None
         self._fenv_saved = []
-        self._return_storage = None
         self._tmp_counter = 0
 
     # ------------------------------------------------------------------
@@ -751,10 +740,6 @@ class CppEmitter(Visitor):
         d = self.def_use.find_def_from_use(var)
         return self.variables.def_to_name[d]
 
-    def _name_for_def_at_site(self, name: NamedId, site) -> str:
-        d = self.def_use.find_def_from_site(name, site)
-        return self.variables.def_to_name[d]
-
     def _storage_for_arg(self, arg: Argument) -> CppType:
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
@@ -974,15 +959,8 @@ class CppEmitter(Visitor):
     # Function emission
 
     def _visit_function(self, func: FuncDef, ctx):
-        # Determine return type from the return statement's expression
-        # bound (the slice assumes a single return, possibly nested in a
-        # ``with`` block).
-        ret_ty = self._infer_return_storage(func)
-        if self._strict and ret_ty is not None and contains_boxed(ret_ty):
+        if self._strict and contains_boxed(self.ret_ty):
             raise self._strict_tripwire()
-        ret_str = ret_ty.format() if ret_ty is not None else 'void'
-        # Read back by each `return` to convert a narrower value into it.
-        self._return_storage = ret_ty
 
         # Emit arg list.  Each argument's class is anchored to the bare
         # source name in ``VariableAlloc``, so it's safe to use ``arg.name``
@@ -998,8 +976,7 @@ class CppEmitter(Visitor):
             if self._strict and contains_boxed(storage):
                 raise self._strict_tripwire()
             arg_strs.append(self._arg_decl(arg, storage))
-        emitted_name = self._func_name_override or func.name
-        sig = f'{ret_str} {emitted_name}({", ".join(arg_strs)})'
+        sig = f'{self.ret_ty.format()} {func.name}({", ".join(arg_strs)})'
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
@@ -1048,25 +1025,6 @@ class CppEmitter(Visitor):
         else:
             self.writer.add_line(f'{storage.format()} {name}{{}};')
 
-    def _infer_return_storage(self, func: FuncDef) -> CppType | None:
-        """The function's return storage, with a source location on failure.
-
-        ``ret_ty`` from :class:`SpecAnalyses` where the caller supplied one: it
-        is the type the ABI was published with, and deriving a second answer
-        here would let the two disagree.  The fallback is for a standalone
-        emitter, and does without the compiler's value-class narrowing.
-
-        See :func:`return_storage`.  A ``None`` bound is not a missing return --
-        FPy's reachability check rejects those at decoration time -- but format
-        inference's convention for a non-numeric result, which maps to ``BOOL``.
-        """
-        if self.ret_ty is not None:
-            return self.ret_ty
-        try:
-            return return_storage(self.format_info.fn_fmt.ret_fmt, self.unbox)
-        except StorageSelectionError as e:
-            raise CppEmitError(f'return type: {e}', at=func) from e
-
     # ------------------------------------------------------------------
     # Statement visitors
 
@@ -1102,7 +1060,9 @@ class CppEmitter(Visitor):
                     )
                     self.writer.add_line(f'{ref} {target_name} = {src};')
                 else:
-                    rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
+                    # at the target's storage: a later `x[i] = y` may have
+                    # widened the variable past the RHS's own bound
+                    rhs = self._emit_at(stmt.expr, target_storage, ctx)
                     self._emit_bind(stmt.target, stmt, rhs)
             case TupleBinding():
                 # ``(a, b) = expr``: bind the rhs to a tuple-valued
@@ -1226,17 +1186,6 @@ class CppEmitter(Visitor):
         if region is None or d not in self.unbox.alias.consumed(region):
             return code
         return f'std::move({code})'
-
-    def _emit_assign_rhs(
-        self, expr: Expr, target_ty: CppType, ctx,
-    ) -> str:
-        """Emit an assignment's RHS at the *target's* storage, not its own.
-
-        ``StorageInfer`` may have widened the variable past the RHS's own bound
-        -- a later ``x[i] = y`` joins the def with a wider value -- and
-        ``vector<wide> x = vector<narrow>{...}`` is a hard type error.
-        """
-        return self._emit_at(expr, target_ty, ctx)
 
     def _convert_storage(
         self, code: str, src: CppType, want: CppType, *, at: Expr,
@@ -1471,7 +1420,7 @@ class CppEmitter(Visitor):
         # A function has one return type, so every `return` produces it: built
         # at that storage where the value is constructed here, converted where
         # it comes from somewhere with storage of its own.
-        rhs = self._emit_at(stmt.expr, self._return_storage, ctx)
+        rhs = self._emit_at(stmt.expr, self.ret_ty, ctx)
         if self._fenv_saved:
             # A `return` jumps over each enclosing scope's restore, so the
             # mode would escape into the caller.  The outermost scope holds the
@@ -1479,10 +1428,8 @@ class CppEmitter(Visitor):
             # expression and returning, so bind the value first; non-const, so
             # the return can still move out of it.
             if not self._mode_independent(stmt.expr):
-                ty = self._return_storage
                 tmp = self._fresh_temp()
-                decl = 'auto' if ty is None else ty.format()
-                self.writer.add_line(f'{decl} {tmp} = {rhs};')
+                self.writer.add_line(f'{self.ret_ty.format()} {tmp} = {rhs};')
                 rhs = tmp
             self.writer.add_line(f'std::fesetround({self._fenv_saved[0]});')
         self.writer.add_line(f'return {rhs};')
@@ -1891,17 +1838,6 @@ class CppEmitter(Visitor):
             )
         return self._explicit_cast(arg, target_ty)
 
-    @staticmethod
-    def _literal_cpp_type(e: RationalVal) -> CppScalar | None:
-        """The C++ type of the token *e* prints as, or ``None`` for no literal.
-
-        Not the same question as its *storage*, which
-        :class:`CppStorage` picks from the literal's value.  A token has
-        whatever type C++ gives it, which is what
-        :func:`_value_cpp_type` answers.
-        """
-        return _value_cpp_type(e.as_rational())
-
     def _call_arg(self, code: str, e: Expr, want: CppScalar) -> str:
         """*code* as a call argument of type *want*, spelling a literal's type.
 
@@ -1914,7 +1850,7 @@ class CppEmitter(Visitor):
         """
         if not isinstance(e, RationalVal):
             return code
-        if self._literal_cpp_type(e) == want:
+        if _value_cpp_type(e.as_rational()) == want:
             return code
         return self._explicit_cast(code, want)
 
@@ -2296,28 +2232,20 @@ class CppEmitter(Visitor):
                 return self._emit_range(e, ctx)
             case Mul():
                 scaled = self._emit_scale_by_pow2(e, ctx)
-                if scaled is not None:
-                    return scaled
-                lhs = self._visit_expr(e.first, ctx)
-                rhs = self._visit_expr(e.second, ctx)
-                return self._dispatch_binary(e, lhs, rhs)
             case Pow():
                 scaled = self._emit_pow2(e, ctx)
-                if scaled is not None:
-                    return scaled
-                lhs = self._visit_expr(e.first, ctx)
-                rhs = self._visit_expr(e.second, ctx)
-                return self._dispatch_binary(e, lhs, rhs)
             case BinaryOp():
-                # Op-table-dispatched binary (Add, Sub, Mul, Div, all
-                # <cmath> two-arg functions).
-                lhs = self._visit_expr(e.first, ctx)
-                rhs = self._visit_expr(e.second, ctx)
-                return self._dispatch_binary(e, lhs, rhs)
+                scaled = None
             case _:
                 raise CppEmitError(
                     f'unsupported binary op: {type(e).__name__}', at=e,
                 )
+        if scaled is not None:
+            return scaled
+        # op-table dispatch: arithmetic and the two-argument <cmath> functions
+        lhs = self._visit_expr(e.first, ctx)
+        rhs = self._visit_expr(e.second, ctx)
+        return self._dispatch_binary(e, lhs, rhs)
 
     _LDEXP_EXP_LIMIT = 1 << 30
     """How large a scale exponent may be before ``std::ldexp``'s ``int``
@@ -2379,7 +2307,7 @@ class CppEmitter(Visitor):
         must also reach the result's storage losslessly, for the same reason.
         """
         active = self._active_ctx_for(e)
-        if active is None or not self._result_fits_ctx(e, active):
+        if not self._result_fits_ctx(e, active):
             # the context rounds this product; `ldexp` would not
             return None
         for scale, value in ((e.first, e.second), (e.second, e.first)):
@@ -2439,7 +2367,7 @@ class CppEmitter(Visitor):
         if not (isinstance(e.first, RationalVal) and e.first.as_rational() == 2):
             return None
         active = self._active_ctx_for(e)
-        if active is None or not self._pow2_is_exact(e.second, active):
+        if not self._pow2_is_exact(e.second, active):
             return None
         finite = self._ldexp_exponent(e.second)
         if finite is None:
@@ -2553,40 +2481,23 @@ class CppEmitter(Visitor):
             )
         int_ty = result_ty.elt.format()
         match e:
-            case Range1():
+            case Range1() | Range2():
                 tmp = self._fresh_temp()
-                stop_cast = self._range_bound(e.arg, result_ty.elt, ctx)
-                # ``range(stop)`` with ``stop <= 0`` is empty; clamp before
-                # the unsigned cast so a negative stop doesn't wrap to a
-                # huge allocation.
-                size_expr = (
-                    f'static_cast<size_t>({stop_cast} > 0 ? {stop_cast} : 0)'
-                )
-                self.writer.add_line(
-                    f'{result_ty.format()} {tmp} = '
-                    f'{self._list_new_sized(result_ty, size_expr)};'
-                )
+                # an empty range clamps to 0 before the unsigned cast, so a
+                # negative size doesn't wrap to a huge allocation
+                if isinstance(e, Range1):
+                    start = f'static_cast<{int_ty}>(0)'
+                    stop = self._range_bound(e.arg, result_ty.elt, ctx)
+                    size = f'{stop} > 0 ? {stop} : 0'
+                else:
+                    start = self._range_bound(e.first, result_ty.elt, ctx)
+                    stop = self._range_bound(e.second, result_ty.elt, ctx)
+                    size = f'{stop} > {start} ? ({stop} - {start}) : 0'
+                sized = self._list_new_sized(result_ty, f'static_cast<size_t>({size})')
+                self.writer.add_line(f'{result_ty.format()} {tmp} = {sized};')
                 self.writer.add_line(
                     f'std::iota({self._list_begin(result_ty, tmp)}, '
-                    f'{self._list_end(result_ty, tmp)}, '
-                    f'static_cast<{int_ty}>(0));'
-                )
-                return tmp
-            case Range2():
-                tmp = self._fresh_temp()
-                start_cast = self._range_bound(e.first, result_ty.elt, ctx)
-                stop_cast = self._range_bound(e.second, result_ty.elt, ctx)
-                size_expr = (
-                    f'static_cast<size_t>({stop_cast} > {start_cast} '
-                    f'? ({stop_cast} - {start_cast}) : 0)'
-                )
-                self.writer.add_line(
-                    f'{result_ty.format()} {tmp} = '
-                    f'{self._list_new_sized(result_ty, size_expr)};'
-                )
-                self.writer.add_line(
-                    f'std::iota({self._list_begin(result_ty, tmp)}, '
-                    f'{self._list_end(result_ty, tmp)}, {start_cast});'
+                    f'{self._list_end(result_ty, tmp)}, {start});'
                 )
                 return tmp
             case Range3():
@@ -2629,34 +2540,20 @@ class CppEmitter(Visitor):
                 f'size(xs, d) needs d >= 0, got {d}', at=e,
             )
         xs_ty = self._storage_for_expr(e.first)
-        # Walk d list layers; the d-th call is on a value of the
-        # appropriate vector type.
+        # the list type at each depth 0..d
+        levels: list[CppList] = []
         cur_ty = xs_ty
-        for _ in range(d):
+        for depth in range(d + 1):
             if not isinstance(cur_ty, CppList):
-                raise CppEmitError(
-                    f'size(xs, {d}): xs is not deep enough '
-                    f'(type `{xs_ty!r}`)',
-                    at=e,
-                )
+                why = 'xs is not deep enough' if depth < d else f'not a list at depth {d}'
+                raise CppEmitError(f'size(xs, {d}): {why} (type `{xs_ty!r}`)', at=e)
+            levels.append(cur_ty)
             cur_ty = cur_ty.elt
-        if not isinstance(cur_ty, CppList):
-            raise CppEmitError(
-                f'size(xs, {d}): not a list at depth {d} '
-                f'(type `{xs_ty!r}`)',
-                at=e,
-            )
         access = self._visit_expr(e.first, ctx)
-        level = xs_ty
-        for _ in range(d):
-            assert isinstance(level, CppList)   # validated by the walk above
+        for level in levels[:-1]:
             access = self._list_at(level, access, '0')
-            level = level.elt
         result_ty = self._storage_for_expr(e)
-        return (
-            f'static_cast<{result_ty.format()}>'
-            f'({self._list_len(level, access)})'
-        )
+        return f'static_cast<{result_ty.format()}>({self._list_len(levels[-1], access)})'
 
     # ------------------------------------------------------------------
     # Stubs for AST nodes not yet handled — classification ops

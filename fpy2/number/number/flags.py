@@ -19,6 +19,16 @@ _TINY_POST = 1 << 4
 _INEXACT = 1 << 5
 _CARRY = 1 << 6
 
+_NAMES = (
+    ('invalid', _INVALID),
+    ('divzero', _DIVZERO),
+    ('overflow', _OVERFLOW),
+    ('tiny_pre', _TINY_PRE),
+    ('tiny_post', _TINY_POST),
+    ('inexact', _INEXACT),
+    ('carry', _CARRY),
+)
+
 
 class Flags:
     """
@@ -47,57 +57,15 @@ class Flags:
         inexact: bool | None = None,
         carry: bool | None = None
     ):
-        # if `x` is provided, copy flags from `x`
-        if x is not None:
-            if invalid is None:
-                invalid = bool(x._flags & _INVALID)
-            if divzero is None:
-                divzero = bool(x._flags & _DIVZERO)
-            if overflow is None:
-                overflow = bool(x._flags & _OVERFLOW)
-            if tiny_pre is None:
-                tiny_pre = bool(x._flags & _TINY_PRE)
-            if tiny_post is None:
-                tiny_post = bool(x._flags & _TINY_POST)
-            if inexact is None:
-                inexact = bool(x._flags & _INEXACT)
-            if carry is None:
-                carry = bool(x._flags & _CARRY)
-
-        # set flags
-        self._flags = 0
-        if invalid:
-            self._flags |= _INVALID
-        if divzero:
-            self._flags |= _DIVZERO
-        if overflow:
-            self._flags |= _OVERFLOW
-        if tiny_pre:
-            self._flags |= _TINY_PRE
-        if tiny_post:
-            self._flags |= _TINY_POST
-        if inexact:
-            self._flags |= _INEXACT
-        if carry:
-            self._flags |= _CARRY
+        self._flags = 0 if x is None else x._flags
+        values = (invalid, divzero, overflow, tiny_pre, tiny_post, inexact, carry)
+        for (_, mask), value in zip(_NAMES, values, strict=True):
+            if value is not None:
+                self._set(mask, value)
 
     def __repr__(self) -> str:
-        flag_strs: list[str] = []
-        if self.invalid:
-            flag_strs.append("invalid=True")
-        if self.divzero:
-            flag_strs.append("divzero=True")
-        if self.overflow:
-            flag_strs.append("overflow=True")
-        if self.tiny_pre:
-            flag_strs.append("tiny_pre=True")
-        if self.tiny_post:
-            flag_strs.append("tiny_post=True")
-        if self.inexact:
-            flag_strs.append("inexact=True")
-        if self.carry:
-            flag_strs.append("carry=True")
-        return f"{self.__class__.__name__}({', '.join(flag_strs)})"
+        set_flags = ', '.join(f'{name}=True' for name, mask in _NAMES if self._flags & mask)
+        return f'{self.__class__.__name__}({set_flags})'
 
     @property
     def invalid(self) -> bool:
@@ -147,52 +115,27 @@ class Flags:
         """Underflow after rounding flag: `self.tiny_post and self.inexact`."""
         return self.tiny_post and self.inexact
 
+    def _set(self, mask: int, value: bool) -> None:
+        """Unsafe setter for the flag at *mask*."""
+        if value:
+            self._flags |= mask
+        else:
+            self._flags &= ~mask
 
     def _set_invalid(self, value: bool) -> None:
-        """Unsafe setter for invalid operation flag."""
-        if value:
-            self._flags |= _INVALID
-        else:
-            self._flags &= ~_INVALID
+        self._set(_INVALID, value)
 
     def _set_divzero(self, value: bool) -> None:
-        """Unsafe setter for division by zero flag."""
-        if value:
-            self._flags |= _DIVZERO
-        else:
-            self._flags &= ~_DIVZERO
+        self._set(_DIVZERO, value)
 
     def _set_overflow(self, value: bool) -> None:
-        """Unsafe setter for overflow flag."""
-        if value:
-            self._flags |= _OVERFLOW
-        else:
-            self._flags &= ~_OVERFLOW
+        self._set(_OVERFLOW, value)
 
     def _set_tiny_pre(self, value: bool) -> None:
-        """Unsafe setter for the tiny before rounding flag."""
-        if value:
-            self._flags |= _TINY_PRE
-        else:
-            self._flags &= ~_TINY_PRE
+        self._set(_TINY_PRE, value)
 
     def _set_tiny_post(self, value: bool) -> None:
-        """Unsafe setter for the tiny after rounding flag."""
-        if value:
-            self._flags |= _TINY_POST
-        else:
-            self._flags &= ~_TINY_POST
+        self._set(_TINY_POST, value)
 
     def _set_inexact(self, value: bool) -> None:
-        """Unsafe setter for inexact flag."""
-        if value:
-            self._flags |= _INEXACT
-        else:
-            self._flags &= ~_INEXACT
-
-    def _set_carry(self, value: bool) -> None:
-        """Unsafe setter for carry flag."""
-        if value:
-            self._flags |= _CARRY
-        else:
-            self._flags &= ~_CARRY
+        self._set(_INEXACT, value)

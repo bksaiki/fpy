@@ -27,15 +27,12 @@ from ...number import Context
 from ...transform import (
     AssertElim,
     FreeVarElim,
-    HoistInvariant,
-    HoistScale,
     Simplify,
     Specialize,
-    TransformDeclined,
     ZipElim,
 )
 from ...types import Type
-from ..backend import Backend, CompileError
+from ..backend import Backend, CompileError, hoist
 from .emitter import KernelSource, emit_kernel
 from .normalize import normalize, normalize_module
 from .split_names import split_names
@@ -151,12 +148,7 @@ class TritonCompiler(Backend):
             ready = ready.with_ast(normalize(unfold(ready.ast, self.unfold)))
 
         if self.optimize:
-            ready = ready.with_ast(Simplify.apply(ready.ast))
-            for hoist in (HoistInvariant.apply, HoistScale.apply):
-                try:
-                    ready = ready.with_ast(hoist(ready.ast))
-                except TransformDeclined:
-                    pass  # nothing to hoist is not a failure
+            ready = ready.with_ast(hoist(Simplify.apply(ready.ast)))
 
         tiles = tile_loops(split_names(ready.ast), self.block)
         if self.optimize:

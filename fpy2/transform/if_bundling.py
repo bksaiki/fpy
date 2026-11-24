@@ -99,9 +99,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             return StmtBlock(stmts)
         else:
             # no need to apply the transformation
-            cond = self._visit_expr(stmt.cond, ctx)
-            body, _ = self._visit_block(stmt.body, ctx)
-            s = If1Stmt(cond, body, None)
+            s, _ = super()._visit_if1(stmt, ctx)
             return StmtBlock([s])
 
     def _visit_if(self, stmt: IfStmt, ctx: _Ctx) -> StmtBlock:

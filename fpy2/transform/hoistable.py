@@ -79,21 +79,17 @@ from ..ast.fpyast import (
     Assign,
     Compare,
     ContextStmt,
-    EffectStmt,
     Expr,
     ForeignVal,
-    ForStmt,
     FuncDef,
     If1Stmt,
     IfExpr,
     IfStmt,
-    IndexedAssign,
     ListComp,
     NamedId,
     NaryOp,
     Not,
     Or,
-    ReturnStmt,
     Stmt,
     StmtBlock,
     UnderscoreId,
@@ -137,13 +133,10 @@ class _HoistableInstance(DefaultTransformVisitor):
 
     func: FuncDef
     gensym: Gensym
-    prefix: str
-    """Base name for the temporaries this instance mints."""
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, prefix: str = 't'):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
-        self.prefix = prefix
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -160,7 +153,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         rebuilt = super()._visit_expr(e, ctx)
         if not ctx.hoistable:
             return rebuilt
-        fresh = lambda: self.gensym.fresh(self.prefix)
+        fresh = lambda: self.gensym.fresh('t')
         return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _lowered(self, e: Expr, ctx: _Ctx) -> bool:
@@ -174,7 +167,7 @@ class _HoistableInstance(DefaultTransformVisitor):
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
         if self._lowered(e, ctx):
-            t = self.gensym.fresh(self.prefix)
+            t = self.gensym.fresh('t')
             # two steps: `_branch_on` appends the condition's own statements,
             # which belong before the `if`
             stmt = self._branch_on(e, t, ctx)
@@ -219,7 +212,7 @@ class _HoistableInstance(DefaultTransformVisitor):
                 return self._short_circuit(e, ctx, target)
             # a chain assigns its target before the later operands run, so one
             # that reads the target would see the accumulator
-            acc = self.gensym.fresh(self.prefix)
+            acc = self.gensym.fresh('t')
             ctx.stmts.append(self._short_circuit(e, ctx, acc))
             return Assign(target, None, Var(acc, loc), loc)
         return Assign(target, None, self._visit_expr(e, ctx), loc)
@@ -235,7 +228,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         if not isinstance(e, (And, Or)):
             return super()._visit_naryop(e, ctx)
         if self._lowered(e, ctx):
-            t = self.gensym.fresh(self.prefix)
+            t = self.gensym.fresh('t')
             ctx.stmts.append(self._short_circuit(e, ctx, t))
             return Var(t, e.loc)
         # Short-circuit: the first operand always runs, the rest do not.
@@ -310,25 +303,6 @@ class _HoistableInstance(DefaultTransformVisitor):
         expr = self._visit_expr(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
-        indices = [self._visit_expr(i, ctx) for i in stmt.indices]
-        expr = self._visit_expr(stmt.expr, ctx)
-        return IndexedAssign(stmt.var, indices, expr, stmt.loc), ctx
-
-    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
-        return ReturnStmt(self._visit_expr(stmt.expr, ctx), stmt.loc), ctx
-
-    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        body, _ = self._visit_block(stmt.body, ctx)
-        return If1Stmt(cond, body, stmt.loc), ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        ift, _ = self._visit_block(stmt.ift, ctx)
-        iff, _ = self._visit_block(stmt.iff, ctx)
-        return IfStmt(cond, ift, iff, stmt.loc), ctx
-
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         if isinstance(stmt.cond, ATOMIC):
             # already a place; nothing in it to hoist
@@ -359,11 +333,6 @@ class _HoistableInstance(DefaultTransformVisitor):
             body.stmts.append(Assign(c, None, again, stmt.loc))
         return WhileStmt(Var(c, stmt.loc), body, stmt.loc)
 
-    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
-        iterable = self._visit_expr(stmt.iterable, ctx)
-        body, _ = self._visit_block(stmt.body, ctx)
-        return ForStmt(stmt.target, iterable, body, stmt.loc), ctx
-
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         """A ``with`` statement, whose two halves round differently.
 
@@ -391,9 +360,6 @@ class _HoistableInstance(DefaultTransformVisitor):
         sealed = ctx.sealed()
         msg = None if stmt.msg is None else self._visit_expr(stmt.msg, sealed)
         return AssertStmt(test, msg, stmt.loc), ctx
-
-    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
-        return EffectStmt(self._visit_expr(stmt.expr, ctx), stmt.loc), ctx
 
 
 class Hoistable:

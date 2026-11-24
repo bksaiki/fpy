@@ -70,7 +70,7 @@ def monomorphize(
             return ((x * y) * z)
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     # `Monomorphize` silently keeps a pinned function context; fail
     # rather than silently no-op (an `FPCoreContext` pin is replaced,

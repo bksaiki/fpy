@@ -237,9 +237,6 @@ class TypeAnn(Ast):
     """FPy AST: typing annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     @abstractmethod
     def is_equiv(self, other) -> bool:
         """
@@ -254,9 +251,6 @@ class TypeAnn(Ast):
 class AnyTypeAnn(TypeAnn):
     """FPy AST: any type annotation"""
     __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
 
     def is_equiv(self, other):
         return isinstance(other, AnyTypeAnn)
@@ -287,18 +281,12 @@ class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     def is_equiv(self, other):
         return isinstance(other, BoolTypeAnn)
 
 class ContextTypeAnn(TypeAnn):
     """FPy AST: context type annotation"""
     __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
 
     def is_equiv(self, other):
         return isinstance(other, ContextTypeAnn)
@@ -357,13 +345,10 @@ class Expr(Ast):
     """FPy AST: expression"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     @abstractmethod
     def is_equiv(self, other) -> bool:
         """
-        Check if this expression is structuarlly equivalent to another expression.
+        Check if this expression is structurally equivalent to another expression.
 
         This is essentially a recursive equality check.
         The dunder method `__eq__` is used to check if two expressions
@@ -374,9 +359,6 @@ class Expr(Ast):
 class Stmt(Ast):
     """FPy AST: statement"""
     __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
 
     @abstractmethod
     def is_equiv(self, other) -> bool:
@@ -405,9 +387,6 @@ class ValueExpr(Expr):
     """FPy Ast: terminal expression"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""
     __slots__ = ('val',)
@@ -424,15 +403,9 @@ class RealVal(ValueExpr):
     """FPy AST: real value"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
 class RationalVal(RealVal):
     """FPy AST: abstract rational value"""
     __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
 
     @abstractmethod
     def as_rational(self) -> Fraction:
@@ -1752,9 +1725,6 @@ class PassStmt(Stmt):
     """FPy AST: pass (skip) statement"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     def is_equiv(self, other) -> bool:
         return isinstance(other, PassStmt)
 
@@ -1970,7 +1940,7 @@ parser resolves against). See :meth:`Formatter._op_name`.
 ###########################################################
 # Formatter base class
 
-class BaseFormatter:
+class BaseFormatter(ABC):
     """Abstract base class for AST formatters."""
 
     @abstractmethod

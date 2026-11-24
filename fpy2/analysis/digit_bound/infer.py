@@ -18,6 +18,7 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 
 import math
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
@@ -697,9 +698,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if terms is None:
             terms = self.out.by_def[d] = Terms()
             # minted where it is first read, but varying as its definition does
-            binders, self._binders = self._binders, self._def_binders(d)
-            self._fresh_interval(terms, d, f'd{len(self.out.by_def)}')
-            self._binders = binders
+            with self._scoped(_binders=self._def_binders(d)):
+                self._fresh_interval(terms, d, f'd{len(self.out.by_def)}')
         return terms
 
     def _built_of(self, d: Definition) -> Region | None:
@@ -733,9 +733,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if terms is None:
             _, alloc, done = self._builders[r]
             terms = self._built[r] = Terms()
-            binders, self._binders = self._binders, self._def_binders(alloc)
-            self._fresh_interval(terms, done, f'B{len(self._built)}')
-            self._binders = binders
+            with self._scoped(_binders=self._def_binders(alloc)):
+                self._fresh_interval(terms, done, f'B{len(self._built)}')
         return terms
 
     def _def_binders(self, d: Definition) -> tuple[Key, ...]:
@@ -1288,10 +1287,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if terms.value is None:
             # under *e*'s own binders, not the asker's: a value is memoized,
             # and one built outside a loop is shared by uses inside it
-            outer = self._binders
-            self._binders = self._binders_of.get(e, outer)
-            terms.value = self._value_uncached(e)
-            self._binders = outer
+            with self._scoped(_binders=self._binders_of.get(e, self._binders)):
+                terms.value = self._value_uncached(e)
         return terms.value
 
     def _value_uncached(self, e: Expr) -> Term | None:
@@ -1612,10 +1609,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _visit_branches(self, stmt: If1Stmt | IfStmt, cond: Expr) -> None:
         """Merge what the two paths through *stmt* leave behind."""
         phis = self.def_use.phis[stmt]
-        then_lits = self._arm_non_finite(stmt, 0) if phis else []
-        else_lits = self._arm_non_finite(stmt, 1) if phis else []
-        then_fin = self._arm_finite(stmt, 0) if phis else frozenset()
-        else_fin = self._arm_finite(stmt, 1) if phis else frozenset()
+        if not phis:
+            return
+        then_lits = self._arm_non_finite(stmt, 0)
+        else_lits = self._arm_non_finite(stmt, 1)
+        then_fin = self._arm_finite(stmt, 0)
+        else_fin = self._arm_finite(stmt, 1)
         for phi in phis:
             # `lhs` is the `then` arm of an `if`/`else`, but the *untaken*
             # path of a one-armed `if`, where the body is `rhs`.
@@ -2032,10 +2031,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # it a phi has terms of its own (digit-bound.md, "Control").
         w = self._binder(stmt)
         self.store.spaces.open(w, self._binders)
-        loops, self._loops = self._loops, (*self._loops, stmt)
-        binders, self._binders = self._binders, (*self._binders, w)
-        super()._visit_while(stmt, ctx)
-        self._binders, self._loops = binders, loops
+        with self._scoped(_loops=(*self._loops, stmt), _binders=(*self._binders, w)):
+            super()._visit_while(stmt, ctx)
         for phi in self.def_use.phis[stmt]:
             if isinstance(self._type_of(phi), RealType | ListType):
                 terms = Terms()
@@ -2056,9 +2053,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _visit_arm(self, block: StmtBlock, ctx: Any) -> None:
         """*block* under a literal "this arm runs", which guards what holds
         only there and every expression in it assumes."""
-        arms, self._arms = self._arms, (*self._arms, self.store.literal(self._binders))
-        self._visit_block(block, ctx)
-        self._arms = arms
+        with self._scoped(_arms=(*self._arms, self.store.literal(self._binders))):
+            self._visit_block(block, ctx)
+
+    @contextmanager
+    def _scoped(self, **fields: Any) -> Iterator[None]:
+        """Set each of *fields* for the body, restoring it after."""
+        saved = {name: getattr(self, name) for name in fields}
+        for name, value in fields.items():
+            setattr(self, name, value)
+        try:
+            yield
+        finally:
+            for name, value in saved.items():
+                setattr(self, name, value)
 
     def _fresh_value(self, e: Expr) -> Term:
         """A value variable for *e*, bounded by the range its format gives."""
@@ -2383,41 +2391,33 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 pass    # anything else binds the target to nothing
 
     def _visit_list_comp(self, e: ListComp, ctx: Any) -> None:
-        outer = self._gather, self._trip
-        self._trip = None
-        clauses = tuple(self._binder(e, k) for k in range(len(e.targets)))
-        for k, c in enumerate(clauses):
-            self.store.spaces.open(c, (*self._binders, *clauses[:k]))
-        for target, iterable, binder in zip(e.targets, e.iterables, clauses):
-            self._visit_expr(iterable, ctx)
-            # a `zip` has no counterpart in the lowered loop, so it stays here
-            if isinstance(target, TupleBinding) and isinstance(iterable, Zip):
-                for sub, part in zip(target.elts, iterable.args):
-                    if isinstance(sub, NamedId) and isinstance(part, Var):
-                        self._bind_elt(sub, e, part, binder)
-            else:
-                self._bind_iter(target, iterable, e, binder)
-        binders, self._binders = self._binders, (*self._binders, *clauses)
-        self._visit_expr(e.elt, ctx)
-        self._binders = binders
-        self._gather, self._trip = outer
+        with self._scoped(_gather=self._gather, _trip=None):
+            clauses = tuple(self._binder(e, k) for k in range(len(e.targets)))
+            for k, c in enumerate(clauses):
+                self.store.spaces.open(c, (*self._binders, *clauses[:k]))
+            for target, iterable, binder in zip(e.targets, e.iterables, clauses):
+                self._visit_expr(iterable, ctx)
+                # a `zip` has no counterpart in the lowered loop, so it stays here
+                if isinstance(target, TupleBinding) and isinstance(iterable, Zip):
+                    for sub, part in zip(target.elts, iterable.args):
+                        if isinstance(sub, NamedId) and isinstance(part, Var):
+                            self._bind_elt(sub, e, part, binder)
+                else:
+                    self._bind_iter(target, iterable, e, binder)
+            with self._scoped(_binders=(*self._binders, *clauses)):
+                self._visit_expr(e.elt, ctx)
 
     def _visit_for(self, stmt: ForStmt, ctx: Any) -> None:
         self._visit_expr(stmt.iterable, ctx)
-        outer = self._gather, self._trip
-        self._trip = None
-        b = self._binder(stmt)
-        self.store.spaces.open(b, self._binders)
-        self._bind_iter(stmt.target, stmt.iterable, stmt, b)
-        # a built list's element is the iteration that wrote it
-        built = {r: self.store.spaces.correspond(b, self._elements(alloc))
-                 for r, (loop, alloc, _) in self._builders.items() if loop is stmt}
-        loops, self._loops = self._loops, (*self._loops, stmt)
-        binders, self._binders = self._binders, (*self._binders, b)
-        self._visit_block(stmt.body, ctx)
-        self._binders = binders
-        self._loops = loops
-        self._gather, self._trip = outer
+        with self._scoped(_gather=self._gather, _trip=None):
+            b = self._binder(stmt)
+            self.store.spaces.open(b, self._binders)
+            self._bind_iter(stmt.target, stmt.iterable, stmt, b)
+            # a built list's element is the iteration that wrote it
+            built = {r: self.store.spaces.correspond(b, self._elements(alloc))
+                     for r, (loop, alloc, _) in self._builders.items() if loop is stmt}
+            with self._scoped(_loops=(*self._loops, stmt), _binders=(*self._binders, b)):
+                self._visit_block(stmt.body, ctx)
         for r, paired in built.items():
             self._build(r, stmt, paired)
         # A carried value starts an iteration as the pre-loop value or the

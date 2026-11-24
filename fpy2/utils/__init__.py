@@ -3,7 +3,7 @@
 from .bits import bitmask, bits_to_float, float_to_bits, is_power_of_two, trailing_zeros
 from .compare import CompareOp
 from .decorator import default_repr, enum_repr, rcomparable
-from .default import DEFAULT, DefaultOr
+from .default import DEFAULT, DefaultOr, default_or
 from .float_params import (
     FP64_BIAS,
     FP64_EMASK,
@@ -11,7 +11,6 @@ from .float_params import (
     FP64_EMIN,
     FP64_EONES,
     FP64_ES,
-    FP64_EXPMAX,
     FP64_EXPMIN,
     FP64_IMPLICIT1,
     FP64_M,

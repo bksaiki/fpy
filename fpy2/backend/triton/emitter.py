@@ -130,8 +130,9 @@ from ...transform.path import walk_exprs, walk_stmts
 from ...transform.simplify_if import _size
 from ...types import BoolType, ListType, RealType
 from ..backend import CompileError
+from ..storage import INT_CTXS
 from .storage import (
-    TritonStorageDomain,
+    DOMAIN,
     bound_fits_in_scalar,
     choose_storage_scalar,
     index_scalar,
@@ -142,7 +143,6 @@ from .storage import (
 from .target import (
     ScalarOpTable,
     TritonOp,
-    _int_ctxs,
     directed_cast,
     is_native_ctx,
     make_op_table,
@@ -410,13 +410,6 @@ class _IndentedWriter:
         return '\n'.join(self._lines)
 
 
-_SIGN_BITS: dict[TritonScalar, str] = {
-    TritonScalar.F16: 'tl.int16',
-    TritonScalar.F32: 'tl.int32',
-    TritonScalar.F64: 'tl.int64',
-}
-"""The integer a float is bitcast to so its sign bit can be read."""
-
 _INT_ROUND: dict[RoundingMode, str] = {
     RoundingMode.RTZ: 'libdevice.trunc',
     RoundingMode.RTN: 'libdevice.floor',
@@ -500,9 +493,8 @@ def _joined(bounds: list[FormatBound]) -> TritonScalar | None:
     """`StorageInfer`'s join of *bounds*, or `None` where no storage holds
     it: an empty list's bottom constrains nothing."""
     kept = [b for b in bounds if not is_bottom(b)] or bounds
-    dom = TritonStorageDomain()
     try:
-        return to_triton(join(dom, [of_bound(dom, b) for b in kept]))
+        return to_triton(join(DOMAIN, [of_bound(DOMAIN, b) for b in kept]))
     except StorageSelectionError:
         return None
 
@@ -641,8 +633,10 @@ class _Emitter(Visitor):
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
         self.classes = ValueClassInfer.analyze(
             func, def_use=self.def_use, type_info=self.types, ctx_use=self.ctx_use)
+        # not `ctx_use`: format inference resolves scopes after partial evaluation
         self.format_info = FormatInfer.analyze(
-            func, use_digit_bounds=True, value_classes=self.classes)
+            func, def_use=self.def_use, type_info=self.types,
+            use_digit_bounds=True, value_classes=self.classes)
         self.sizes = ArraySizeInfer.analyze(func)
         self.op_table = make_op_table()
         self.drop_asserts = drop_asserts
@@ -1438,7 +1432,7 @@ class _Emitter(Visitor):
             return self._integral(e, arg, self._storage(e.arg))
         if not is_native_ctx(ctx):
             return self._emit_downcast(e, arg, ctx)
-        if ctx is not INTEGER and ctx in _int_ctxs() and self._storage(e.arg).is_float():
+        if ctx is not INTEGER and ctx in INT_CTXS and self._storage(e.arg).is_float():
             raise TritonEmitError(
                 f'a cast from a float into `{ctx}` saturates where the context wraps'
             )
@@ -1673,13 +1667,13 @@ class _Emitter(Visitor):
             have = self._storage(e.arg)
             if have.is_integer():
                 return f'({arg} < 0)'
-            bits = _SIGN_BITS.get(have)
-            if bits is None:
+            if have not in _LOGB:
                 raise TritonEmitError(
                     f'`signbit` needs an integer the width of {have.format()} '
                     'to read the sign bit from, and there is none'
                 )
-            return f'({arg}.to({bits}, bitcast=True) < 0)'
+            *_, ity = _LOGB[have]
+            return f'({arg}.to({ity}, bitcast=True) < 0)'
         raise TritonEmitError(
             f'no Triton spelling for `{type(e).__name__}`'
         )

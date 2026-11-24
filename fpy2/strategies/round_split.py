@@ -116,7 +116,7 @@ def split_round(
     ``x / y`` and ``fp.sqrt(x)``, by those operations' rules.
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(SplitRound.apply_with_edits(
         func.ast, ctx, where=func.rebase(where)

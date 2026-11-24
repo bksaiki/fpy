@@ -164,11 +164,11 @@ emitter gives the element the loop body it generates."""
 def _check_precondition(func: FuncDef) -> None:
     """Raise unless every position this pass must name has a slot to name it in.
 
-    A filter on :func:`_list_refusals` rather than a second analysis: a refusal
+    A filter on :meth:`ANF.refusals` rather than a second analysis: a refusal
     in one of :data:`_CANNOT_SLOT` *is* a position the pass would have to emit a
     statement into and cannot.
     """
-    bad = [(e, why) for e, why in _list_refusals(func) if why in _CANNOT_SLOT]
+    bad = [(e, why) for e, why in ANF.refusals(func) if why in _CANNOT_SLOT]
     if not bad:
         return
     e, why = bad[0]
@@ -177,17 +177,6 @@ def _check_precondition(func: FuncDef) -> None:
         f'cannot normalize `{func.name}`: {why}, so `{e.format()}` has nowhere '
         f'to put a statement{rest}.  Run `Hoistable` first.'
     )
-
-
-def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
-    """The sealed positions of *func* holding something that needs a place.
-
-    See :meth:`ANF.refusals`, the public entry point.
-    """
-    return [
-        (e, SEALED_REASON[why]) for e, why in Hoistability.analyze(func).sealed
-        if needs_slot(e)
-    ]
 
 
 @dataclasses.dataclass
@@ -213,20 +202,11 @@ class _ANFInstance(DefaultTransformVisitor):
     func: FuncDef
     gensym: Gensym
     types: TypeAnalysis
-    prefix: str
-    """Base name for the temporaries this instance mints."""
 
-    def __init__(
-        self,
-        func: FuncDef,
-        def_use: DefineUseAnalysis,
-        types: TypeAnalysis,
-        prefix: str = 't',
-    ):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, types: TypeAnalysis):
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
         self.types = types
-        self.prefix = prefix
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -245,7 +225,7 @@ class _ANFInstance(DefaultTransformVisitor):
             or not self._nameable(e)
         ):
             return rebuilt
-        t = self.gensym.fresh(self.prefix)
+        t = self.gensym.fresh('t')
         ctx.stmts.append(Assign(t, None, rebuilt, e.loc))
         return Var(t, e.loc)
 
@@ -424,7 +404,10 @@ class ANF:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
-        return _list_refusals(func)
+        return [
+            (e, SEALED_REASON[why]) for e, why in Hoistability.analyze(func).sealed
+            if needs_slot(e)
+        ]
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:

@@ -24,8 +24,7 @@ from ..analysis.alias import _carries_list
 from ..ast import *
 from ..number import Context, Float
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, StmtPath
-from .error import TransformDeclined
+from .cursor import Cursor, EditLog
 from .utils import SiteRewriter, check_where
 
 
@@ -423,26 +422,6 @@ class _HoistInvariant(SiteRewriter):
         self._hoisting = set()
         self._subst = {}
 
-    def _claims(self, stmt: ForStmt | WhileStmt, hoistable: list[Stmt]) -> bool:
-        """Whether to hoist here.  A loop with nothing to hoist is no site, and
-        one an explicit `where` named is an error rather than a silent no-op."""
-        block, pos = self._site
-        if not hoistable:
-            why = '; '.join(_refusals(stmt, self.ctx)) or 'the body is empty'
-            if self._refuse(stmt, why) and not self.listing:
-                raise TransformDeclined(f'nothing to hoist out of the loop: {why}')
-            return False
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects(block, pos, idx):
-            return False
-        self._matched += 1
-        if self.listing:
-            self.found.append(StmtPath(self._paths[id(block)], pos))
-            return False
-        return True
-
     def _hoist(self, stmt: ForStmt | WhileStmt, ctx) -> None:
         """Emit the invariant work before the loop, and mark what that leaves
         out of, or changes in, the body.
@@ -452,7 +431,12 @@ class _HoistInvariant(SiteRewriter):
         nested inside it.
         """
         plan = _plan(stmt, self.ctx, self.gensym)
-        if not self._claims(stmt, plan.emit):
+        # a loop with nothing to hoist is no site
+        why = (
+            None if plan.emit
+            else '; '.join(_refusals(stmt, self.ctx)) or 'the body is empty'
+        )
+        if not self._claim(stmt, why, 'nothing to hoist out of the loop'):
             return
         self._hoisting |= plan.drop
         self._subst |= plan.subst

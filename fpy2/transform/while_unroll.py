@@ -39,11 +39,7 @@ class _WhileUnroll(SiteRewriter):
         self.times = times
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        block, pos = self._site
-        idx = self.site_idx
-        self.site_idx += 1
-        if self._selects(block, pos, idx):
-            self._matched += 1
+        if self._claim(stmt):
             # original loop
             cond = self._visit_expr(stmt.cond, ctx)
             body, _ = self._visit_block(stmt.body, ctx)

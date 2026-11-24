@@ -17,7 +17,7 @@ from ..globals import get_current_float_converter, get_current_str_converter
 from .reals import RealFloat
 
 if TYPE_CHECKING:
-    from ..context import Context
+    from ..context import Context, OrdinalContext
     from . import Real
 else:
     Context = None  # type: ignore
@@ -106,17 +106,10 @@ class Float:
             case _:
                 raise TypeError(f'expected \'RealFloat\' or \'Float\', got {type(x)} for x={x}')
 
-        if isinf:
-            if isnan:
-                raise ValueError('cannot be both infinite and NaN')
-            self._isinf = True
-            self._isnan = False
-        elif isnan:
-            self._isinf = False
-            self._isnan = True
-        else:
-            self._isinf = False
-            self._isnan = False
+        if isinf and isnan:
+            raise ValueError('cannot be both infinite and NaN')
+        self._isinf = bool(isinf)
+        self._isnan = bool(isnan)
 
         if ctx is DEFAULT:
             self._ctx = None
@@ -217,6 +210,23 @@ class Float:
         """
         return Float(s=False, x=self, ctx=None)
 
+    @staticmethod
+    def _coerce(other: object, op: str) -> Float:
+        """*other* as a `Float`, for the operator *op*."""
+        match other:
+            case Float():
+                return other
+            case RealFloat():
+                return Float.from_real(other)
+            case int():
+                return Float.from_int(other)
+            case float():
+                return Float.from_float(other)
+            case Fraction():
+                return Float.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for {op}: \'Float\' and \'{type(other)}\'')
+
     def __add__(self, other):
         """
         Addition: `self + other`.
@@ -224,19 +234,7 @@ class Float:
         Returns the exact sum of `self` and `other` as a new `Float`.
         The result has no context (`self.ctx is None`).
         """
-        match other:
-            case Float():
-                pass
-            case RealFloat():
-                other = Float.from_real(other)
-            case int():
-                other = Float.from_int(other)
-            case float():
-                other = Float.from_float(other)
-            case Fraction():
-                other = Float.from_rational(other)
-            case _:
-                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+        other = Float._coerce(other, '+')
 
         if self.isnan or other.isnan:
             # either is NaN
@@ -277,19 +275,7 @@ class Float:
         Returns the exact product of `self` and `other` as a new `Float`.
         The result has no context (`self.ctx is None`).
         """
-        match other:
-            case Float():
-                pass
-            case RealFloat():
-                other = Float.from_real(other)
-            case int():
-                other = Float.from_int(other)
-            case float():
-                other = Float.from_float(other)
-            case Fraction():
-                other = Float.from_rational(other)
-            case _:
-                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+        other = Float._coerce(other, '*')
 
         if self.isnan or other.isnan:
             # either is NaN
@@ -854,7 +840,7 @@ class Float:
             return None
         else:
             match other:
-                case RealFloat():
+                case RealFloat() | Fraction():
                     if self._isinf:
                         if self.s:
                             return Ordering.LESS
@@ -883,14 +869,6 @@ class Float:
                     return self.compare(RealFloat.from_int(other))
                 case float():
                     return self.compare(Float.from_float(other))
-                case Fraction():
-                    if self._isinf:
-                        if self.s:
-                            return Ordering.LESS
-                        else:
-                            return Ordering.GREATER
-                    else:
-                        return self._real.compare(other)
                 case _:
                     return False
 
@@ -927,60 +905,44 @@ class Float:
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_integer(self)
 
+    def _ordinal_ctx(self, op: str) -> OrdinalContext:
+        """This value's context, which *op* requires to be ordinal."""
+        from ..context import OrdinalContext
+        if self._ctx is None:
+            raise ValueError(f'cannot compute {op} without a context: self={self}')
+        if not isinstance(self._ctx, OrdinalContext):
+            raise TypeError(f'context must be an OrdinalContext to compute {op}: self={self}, ctx={self._ctx}')
+        return self._ctx
+
     def next_towards(self, other: Float, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards `other`.
         """
-        if self._ctx is None:
-            raise ValueError(f'cannot compute next_towards without a context: self={self}')
-        from ..context import OrdinalContext
-        if not isinstance(self._ctx, OrdinalContext):
-            raise TypeError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
-        return self._ctx.next_towards(self, other, allow_inf=allow_inf)
+        return self._ordinal_ctx('next_towards').next_towards(self, other, allow_inf=allow_inf)
 
     def next_towards_zero(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards zero.
         """
-        if self._ctx is None:
-            raise ValueError(f'cannot compute next_towards_zero without a context: self={self}')
-        from ..context import OrdinalContext
-        if not isinstance(self._ctx, OrdinalContext):
-            raise TypeError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
-        return self._ctx.next_towards_zero(self, allow_inf=allow_inf)
+        return self._ordinal_ctx('next_towards_zero').next_towards_zero(self, allow_inf=allow_inf)
 
     def next_away_zero(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` away from zero.
         """
-        if self._ctx is None:
-            raise ValueError(f'cannot compute next_away_zero without a context: self={self}')
-        from ..context import OrdinalContext
-        if not isinstance(self._ctx, OrdinalContext):
-            raise TypeError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
-        return self._ctx.next_away_zero(self, allow_inf=allow_inf)
+        return self._ordinal_ctx('next_away_zero').next_away_zero(self, allow_inf=allow_inf)
 
     def next_up(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards positive infinity.
         """
-        if self._ctx is None:
-            raise ValueError(f'cannot compute next_up without a context: self={self}')
-        from ..context import OrdinalContext
-        if not isinstance(self._ctx, OrdinalContext):
-            raise TypeError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
-        return self._ctx.next_up(self, allow_inf=allow_inf)
+        return self._ordinal_ctx('next_up').next_up(self, allow_inf=allow_inf)
 
     def next_down(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards negative infinity.
         """
-        if self._ctx is None:
-            raise ValueError(f'cannot compute next_down without a context: self={self}')
-        from ..context import OrdinalContext
-        if not isinstance(self._ctx, OrdinalContext):
-            raise TypeError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
-        return self._ctx.next_down(self, allow_inf=allow_inf)
+        return self._ordinal_ctx('next_down').next_down(self, allow_inf=allow_inf)
 
 
 def same_value(a: Float | None, b: Float | None) -> bool:

@@ -14,7 +14,7 @@ def _unfold(
     temp_id: NamedId | None,
 ) -> Function:
     if not isinstance(func, Function):
-        raise TypeError(f'Expected a \'Function\', got {func}')
+        raise TypeError(f"Expected a 'Function', got {func}")
     return func.with_edits(cls.apply_with_edits(
         func.ast, where=func.rebase(where), temp_id=temp_id,
     ))

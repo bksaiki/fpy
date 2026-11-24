@@ -151,6 +151,10 @@ class FPyParserError(Exception):
     """Parser error for FPy"""
 
 
+_COUNTS = {2: 'two', 3: 'three'}
+_NTHS = ('first', 'second', 'third')
+
+
 class Parser:
     """
     FPy parser.
@@ -245,10 +249,7 @@ class Parser:
                 ident = self._parse_id(ann)
                 if isinstance(ident, UnderscoreId):
                     raise self._parse_error('FPy function call must begin with a named identifier', ann)
-                ident_str = str(ident)
-                if ident_str not in self.env:
-                    raise self._parse_error(f'name \'{ident_str}\' not defined', ann)
-                return self.env[ident_str]
+                return self._lookup(ident, ann)
             case ast.Subscript():
                 ctor = self._eval_type_annotation(ann.value)
                 if ctor is tuple:
@@ -314,32 +315,27 @@ class Parser:
             raise self._parse_error('FPy `hexfloat` expects a string', e)
         return Hexnum(func, arg.val, loc)
 
+    def _parse_integer_args(self, e: ast.Call, name: str, n: int) -> list[int]:
+        """The *n* integer arguments of the call *e* to *name*."""
+        if len(e.args) != n:
+            raise self._parse_error(f'FPy `{name}` expects {_COUNTS[n]} arguments', e)
+        vals: list[int] = []
+        for arg, nth in zip(e.args, _NTHS):
+            val = self._parse_expr(arg)
+            if not isinstance(val, Integer):
+                raise self._parse_error(f'FPy `{name}` expects an integer as {nth} argument', e)
+            vals.append(val.val)
+        return vals
+
     def _parse_rational(self, e: ast.Call, func: FuncSymbol):
         loc = self._parse_location(e)
-        if len(e.args) != 2:
-            raise self._parse_error('FPy `rational` expects two arguments', e)
-        p = self._parse_expr(e.args[0])
-        if not isinstance(p, Integer):
-            raise self._parse_error('FPy `rational` expects an integer as first argument', e)
-        q = self._parse_expr(e.args[1])
-        if not isinstance(q, Integer):
-            raise self._parse_error('FPy `rational` expects an integer as second argument', e)
-        return Rational(func, p.val, q.val, loc)
+        p, q = self._parse_integer_args(e, 'rational', 2)
+        return Rational(func, p, q, loc)
 
     def _parse_digits(self, e: ast.Call, func: FuncSymbol):
         loc = self._parse_location(e)
-        if len(e.args) != 3:
-            raise self._parse_error('FPy `digits` expects three arguments', e)
-        m_e = self._parse_expr(e.args[0])
-        if not isinstance(m_e, Integer):
-            raise self._parse_error('FPy `digits` expects an integer as first argument', e)
-        e_e = self._parse_expr(e.args[1])
-        if not isinstance(e_e, Integer):
-            raise self._parse_error('FPy `digits` expects an integer as second argument', e)
-        b_e = self._parse_expr(e.args[2])
-        if not isinstance(b_e, Integer):
-            raise self._parse_error('FPy `digits` expects an integer as third argument', e)
-        return Digits(func, m_e.val, e_e.val, b_e.val, loc)
+        m, exp, b = self._parse_integer_args(e, 'digits', 3)
+        return Digits(func, m, exp, b, loc)
 
     def _parse_range(self, e: ast.Call, func: FuncSymbol):
         loc = self._parse_location(e)
@@ -418,8 +414,9 @@ class Parser:
         args = [self._parse_expr(operand) for operand in [e.left, *e.comparators]]
         return Compare(ops, args, loc)
 
-    def _eval_var(self, v: Var, e: ast.expr):
-        ident = str(v.name)
+    def _lookup(self, name: Id, e: ast.AST):
+        """The Python value *name* refers to."""
+        ident = str(name)
         if ident not in self.env:
             raise self._parse_error(f'name \'{ident}\' not defined', e)
         return self.env[ident]
@@ -428,7 +425,7 @@ class Parser:
         match a.value:
             case Var():
                 # evaluating `x.y`
-                base = self._eval_var(a.value, e)
+                base = self._lookup(a.value.name, e)
             case Attribute():
                 # evaluating `x.y.z` where `x.y` is `a`
                 base = self._eval_attribute(a.value, e)
@@ -481,10 +478,7 @@ class Parser:
                 if isinstance(name, UnderscoreId):
                     raise self._parse_error('FPy function call must begin with a named identifier', e)
                 func = Var(name, None)
-                ident = str(name)
-                if ident not in self.env:
-                    raise self._parse_error(f'name \'{ident}\' not defined', e)
-                fn = self.env[ident]
+                fn = self._lookup(name, e)
             case _:
                 raise self._parse_error('unsupported call target in FPy', e.func, e)
 
@@ -645,20 +639,6 @@ class Parser:
         iterable = self._parse_expr(gen.iter)
         return target, iterable
 
-    def _parse_contextdata(self, e: ast.expr):
-        match e:
-            case ast.Constant():
-                if isinstance(e.value, str):
-                    return e.value
-                else:
-                    return self._parse_constant(e)
-            case ast.List() | ast.Tuple():
-                return [self._parse_contextdata(elt) for elt in e.elts]
-            case ast.Name():
-                return self._parse_id(e)
-            case _:
-                raise self._parse_error('unexpected FPy context data', e)
-
     def _parse_contextname(self, item: ast.withitem):
         var = item.optional_vars
         match var:
@@ -795,19 +775,18 @@ class Parser:
 
         return args
 
-    def _parse_returns(self, e: ast.expr):
-        return self._parse_type_annotation(e)
-
-    def _parse_function(self, f: ast.FunctionDef, env: ForeignEnv):
-        """Parse a Python function definition."""
-        loc = self._parse_location(f)
-
-        # check arguments are only positional
-        pos_args = f.args.posonlyargs + f.args.args
+    def _positional_args(self, f: ast.FunctionDef) -> list[ast.arg]:
+        """The arguments of *f*, which must all be positional."""
         if f.args.vararg:
             raise self._parse_error('FPy does not support variadic arguments', f, f.args.vararg)
         if f.args.kwarg:
             raise self._parse_error('FPy does not support keyword arguments', f, f.args.kwarg)
+        return f.args.posonlyargs + f.args.args
+
+    def _parse_function(self, f: ast.FunctionDef):
+        """Parse a Python function definition."""
+        loc = self._parse_location(f)
+        pos_args = self._positional_args(f)
 
         # description
         docstring = ast.get_docstring(f)
@@ -821,7 +800,7 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator properties
-        meta = FuncMeta(set(), None, None, None, {}, env)
+        meta = FuncMeta(set(), None, None, None, {}, self.env)
         func = FuncDef(f.name, args, block, meta, loc=loc)
         return func, self._parse_decorator_props(f)
 
@@ -859,33 +838,27 @@ class Parser:
 
         return ptree
 
-    def parse_function(self, env: ForeignEnv):
-        """Parses `self.source` as an FPy `FunctionDef`."""
-        ptree = self._start_parse()
-        return self._parse_function(ptree, env)
+    def parse_function(self):
+        """Parses the source as an FPy `FunctionDef`."""
+        return self._parse_function(self._start_parse())
 
-    def parse_signature(self, ignore_ctx: bool = False):
-        """Parses `self.source` to extract the arguments."""
+    def parse_signature(self):
+        """Parses the source's argument and return types, without a trailing
+        `ctx` argument."""
         f = self._start_parse()
-
-        # check arguments are only positional
-        pos_args = f.args.posonlyargs + f.args.args
-        if f.args.vararg:
-            raise self._parse_error('FPy does not support variadic arguments', f, f.args.vararg)
-        if f.args.kwarg:
-            raise self._parse_error('FPy does not support keyword arguments', f, f.args.kwarg)
+        pos_args = self._positional_args(f)
 
         # check that there's a return annotation
         if f.returns is None:
             raise self._parse_error('FPy requires a return annotation', f, f.returns)
 
         # prune context argument
-        if ignore_ctx and len(pos_args) >= 1 and pos_args[-1].arg == 'ctx':
+        if len(pos_args) >= 1 and pos_args[-1].arg == 'ctx':
             pos_args = pos_args[:-1]
 
         # parse arguments and returns
         args = self._parse_arguments(pos_args)
-        returns = self._parse_returns(f.returns)
+        returns = self._parse_type_annotation(f.returns)
 
         arg_types = [arg.type for arg in args]
         return arg_types, returns

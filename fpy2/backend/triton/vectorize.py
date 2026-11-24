@@ -52,6 +52,7 @@ from ...ast import (
     Range2,
     Range3,
     Stmt,
+    StmtBlock,
     Var,
     WhileStmt,
 )
@@ -267,9 +268,10 @@ class _ForLoops(DefaultVisitor):
         return super()._visit_for(stmt, ctx)
 
 
-def _for_loops(func: FuncDef) -> list[ForStmt]:
+def _for_loops(block: StmtBlock) -> list[ForStmt]:
+    """Every `for` in *block*, outermost first."""
     v = _ForLoops()
-    v._visit_function(func, None)
+    v._visit_block(block, None)
     return v.out
 
 
@@ -313,7 +315,7 @@ class _Loops:
 
     def __init__(self, func: FuncDef) -> None:
         self.func = func
-        self.all = _for_loops(func)
+        self.all = _for_loops(func.body)
         self.def_use = DefineUse.analyze(func)
 
     @cached_property
@@ -332,9 +334,7 @@ class _Loops:
         return self.static(stmt) and not _has_loop(stmt) and self.tileable(stmt)
 
     def beneath(self, stmt: ForStmt) -> list[ForStmt]:
-        v = _ForLoops()
-        v._visit_block(stmt.body, None)
-        return v.out
+        return _for_loops(stmt.body)
 
     def within(self, a: ForStmt, b: ForStmt) -> bool:
         return any(a is c for c in self.beneath(b))

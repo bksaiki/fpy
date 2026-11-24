@@ -2,7 +2,7 @@
 This module defines fixed-width, sign-magnitude, fixed-point numbers.
 """
 
-from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import RNG, Float, RealFloat
 from ..round import OverflowMode, RoundingMode
 from .context import EncodableContext
@@ -109,6 +109,8 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
     nbits: int
     """the total number of bits in the representation"""
 
+    _fmt: SMFixedFormat
+
     def __init__(
         self,
         scale: int,
@@ -121,19 +123,10 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ):
-        if not isinstance(scale, int):
-            raise TypeError(f'Expected \'int\' for scale={scale}, got {type(scale)}')
-        if not isinstance(nbits, int):
-            raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
-        if nbits < 2:
-            raise ValueError(f'nbits={nbits} must be at least 2 for SMFixedContext')
-
-        nmin = scale - 1
-        pos_maxval = RealFloat(exp=scale, c=bitmask(nbits - 1))
-
+        fmt = SMFixedFormat(scale, nbits)
         super().__init__(
-            nmin=nmin,
-            maxval=pos_maxval,
+            nmin=fmt.nmin,
+            maxval=fmt.pos_maxval,
             rm=rm,
             overflow=overflow,
             num_randbits=num_randbits,
@@ -144,6 +137,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             inf_value=inf_value
         )
 
+        self._fmt = fmt
         self.scale = scale
         self.nbits = nbits
 
@@ -159,31 +153,21 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ):
-        if scale is DEFAULT:
-            scale = self.scale
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return SMFixedContext(
-            scale, nbits, rm, overflow, num_randbits,
-            rng=rng, nan_value=nan_value, inf_value=inf_value
+            default_or(scale, self.scale),
+            default_or(nbits, self.nbits),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value),
         )
 
     def format(self) -> SMFixedFormat:
-        return SMFixedFormat(self.scale, self.nbits)
+        return self._fmt
 
     @classmethod
     def from_format(

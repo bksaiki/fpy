@@ -61,8 +61,8 @@ class _MatcherInst(Visitor):
     """
     FPy pattern matching instance for a pattern and sub-program.
 
-    Unlike `_MatcherEngine`, the matcher attempts to matching
-    starting at the top of the program slice.
+    Unlike `Matcher`, which tries every sub-program of a function,
+    the instance matches only at the top of the program slice.
     """
     pattern: Pattern
     ast: StmtBlock | Expr
@@ -158,29 +158,22 @@ class _MatcherInst(Visitor):
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_nullaryop(self, e: NullaryOp, pat: NullaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
+        pass
 
     def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.arg, pat.arg)
 
     def _visit_binaryop(self, e: BinaryOp, pat: BinaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.first, pat.first)
         self._visit_expr(e.second, pat.second)
 
     def _visit_ternaryop(self, e: TernaryOp, pat: TernaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.first, pat.first)
         self._visit_expr(e.second, pat.second)
         self._visit_expr(e.third, pat.third)
 
     def _visit_naryop(self, e: NaryOp, pat: NaryOp):
-        if type(e) is not type(pat) or len(e.args) != len(pat.args):
+        if len(e.args) != len(pat.args):
             raise _MatchFailure(f'matching {pat} against {e}')
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
@@ -259,13 +252,7 @@ class _MatcherInst(Visitor):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')
         for target, ptarget in zip(e.targets, pat.targets):
-            match target, ptarget:
-                case Id(), Id():
-                    self._visit_target(target, ptarget)
-                case TupleBinding(), TupleBinding():
-                    self._visit_tuple_binding(target, ptarget)
-                case _:
-                    raise _MatchFailure(f'matching {ptarget} against {target}')
+            self._visit_binding(target, ptarget)
         for it, pit in zip(e.iterables, pat.iterables):
             self._visit_expr(it, pit)
         self._visit_expr(e.elt, pat.elt)

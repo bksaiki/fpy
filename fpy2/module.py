@@ -23,7 +23,7 @@ fresh module via ``add``, which discovers from the transformed AST.
 from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
 
-from .analysis import CallGraph
+from .analysis import CallGraph, CallGraphAnalysis
 from .ast import Call, FuncDef
 from .ast.visitor import DefaultTransformVisitor
 from .function import Function
@@ -54,6 +54,18 @@ class _RebindCalls(DefaultTransformVisitor):
         return self._visit_function(func, None)
 
 
+def _wrappers(root: Function, cg: CallGraphAnalysis) -> dict[FuncDef, Function]:
+    """Each ``FuncDef`` in *cg*, the call graph of *root*, to its ``Function``:
+    a callee's is the ``Call.fn`` at its call sites."""
+    out = {root.ast: root}
+    for calls in cg.call_sites.values():
+        for call in calls:
+            # CallGraph only records call sites with `Function` targets
+            assert isinstance(call.fn, Function)
+            out[call.fn.ast] = call.fn
+    return out
+
+
 @dataclass
 class _Derived:
     """Memoized derivation of structural views (callees, callers, order)
@@ -61,8 +73,6 @@ class _Derived:
     stored directly on :class:`Module` and not duplicated here."""
     order: list[Function]
     """all reached functions in global leaves-first order"""
-    fdef_to_func: dict[FuncDef, Function]
-    """every reachable ``FuncDef`` to its ``Function`` wrapper"""
     callees: dict[Function, list[Function]]
     """direct callees per function, source-order, deduped"""
     callers: dict[Function, list[Function]]
@@ -294,15 +304,7 @@ class Module:
         :class:`Function` to ``_privates``, in leaves-first order.
         Skips functions already registered as publics or privates."""
         cg = CallGraph.analyze(func.ast)
-        # Recover ``Function`` wrappers for every reachable ``FuncDef``
-        # from the ``Call.fn`` references at each call site.
-        fdef_to_func: dict[FuncDef, Function] = {func.ast: func}
-        for calls in cg.call_sites.values():
-            for call in calls:
-                callee = call.fn
-                # CallGraph only records sites whose target is a Function.
-                assert isinstance(callee, Function)
-                fdef_to_func[callee.ast] = callee
+        fdef_to_func = _wrappers(func, cg)
         # ``cg.order`` is leaves-first; walking it preserves that order
         # in ``_privates``.  Skip the root (``func`` itself).
         for fdef in cg.order:
@@ -382,10 +384,6 @@ class Module:
         return self._derived
 
     def _compute_derived(self) -> _Derived:
-        # Map every reachable ``FuncDef`` to its ``Function`` wrapper.  The
-        # public roots are the registered functions; each callee's wrapper is
-        # recovered from the ``Call.fn`` at its call sites (``CallGraph`` is
-        # ``FuncDef``-keyed, but the module needs the wrappers).
         fdef_to_func: dict[FuncDef, Function] = {}
         order: list[Function] = []
         seen: set[FuncDef] = set()
@@ -393,16 +391,8 @@ class Module:
         callers: dict[Function, list[Function]] = {}
 
         for f in self._publics:
-            fdef_to_func[f.ast] = f
             cg = CallGraph.analyze(f.ast)
-            # Populate the FuncDef -> Function map for every node reachable
-            # from this root, so we can translate edges below.
-            for calls in cg.call_sites.values():
-                for call in calls:
-                    callee = call.fn
-                    # CallGraph only records call sites with `Function` targets.
-                    assert isinstance(callee, Function)
-                    fdef_to_func[callee.ast] = callee
+            fdef_to_func.update(_wrappers(f, cg))
 
             # Translate this root's edges into Function-keyed module edges.
             # A given FuncDef's callees list is the same regardless of which
@@ -430,7 +420,6 @@ class Module:
 
         return _Derived(
             order=order,
-            fdef_to_func=fdef_to_func,
             callees=callees,
             callers=callers,
         )
@@ -453,12 +442,7 @@ class Module:
         seen: set[Function] = set(self._publics_set)
         for f in self._publics:
             cg = CallGraph.analyze(f.ast)
-            fdef_to_func: dict[FuncDef, Function] = {f.ast: f}
-            for calls in cg.call_sites.values():
-                for call in calls:
-                    callee = call.fn
-                    assert isinstance(callee, Function)
-                    fdef_to_func[callee.ast] = callee
+            fdef_to_func = _wrappers(f, cg)
             for fdef in cg.order:
                 if fdef is f.ast:
                     continue

@@ -54,21 +54,18 @@ from ...transform import (
     EnumerateElim,
     FreeVarElim,
     Hoistable,
-    HoistInvariant,
-    HoistScale,
     ReduceFusion,
     RoundElim,
     Simplify,
     Specialize,
     StatementForm,
-    TransformDeclined,
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
-from ..backend import Backend, CompileError
+from ..backend import Backend, CompileError, hoist
 from .emitter import CppEmitError, CppEmitter
-from .storage import CppStorage, CppStorageDomain, StorageSelectionError
+from .storage import DOMAIN, CppStorage, StorageSelectionError
 from .types import CppType
 from .unbox import (
     CalleeAbi,
@@ -132,16 +129,6 @@ class SpecAnalyses:
 
 # ---------------------------------------------------------------------
 # Compiler
-
-
-def _hoist(ast: FuncDef) -> FuncDef:
-    """*ast* with loop-invariant work and scale factors hoisted, where any."""
-    for hoist in (HoistInvariant.apply, HoistScale.apply):
-        try:
-            ast = hoist(ast)
-        except TransformDeclined:
-            pass
-    return ast
 
 
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
@@ -590,7 +577,7 @@ class CppCompiler(Backend):
             # nothing goes on to use, a copy of an accumulator.
             specialized = specialized.map(lambda _m, fd: Simplify.apply(fd))
             # after unfolding, which puts per-element scale factors in loop bodies
-            specialized = specialized.map(lambda _m, fd: _hoist(fd))
+            specialized = specialized.map(lambda _m, fd: hoist(fd))
 
         return list(specialized.call_graph().order)
 
@@ -638,7 +625,7 @@ class CppCompiler(Backend):
             du = format_info.type_info.def_use
             chosen = StorageInfer.infer(
                 du, format_info.by_def, format_info.by_expr,
-                CppStorageDomain(),
+                DOMAIN,
                 {d: class_info.bound_of(d) for d in du.defs},
             )
         except StorageSelectionError as e:
@@ -748,15 +735,6 @@ class CppCompiler(Backend):
 
         abi = _callee_abi(a)
         return [p.ty for p in abi.params], abi.ret
-
-    def _compile_function(
-        self, func: Function, *, is_called: bool = False,
-    ) -> str:
-        """Emit one C++ function definition for a fully-specialized
-        :class:`Function`.  ``func.ast.name`` is the final emitted name
-        (set by :class:`Specialize` — public entries keep their user-given
-        name, private specs get a mangled one)."""
-        return self._emit(func, self.analyze(func, is_called=is_called), {})
 
     def _emit(
         self,

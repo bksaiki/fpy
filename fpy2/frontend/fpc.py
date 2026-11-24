@@ -16,107 +16,86 @@ from ..utils import Gensym, pythonize_id
 
 type DataElt = tuple[DataElt] | fpc.ValueExpr
 
-# Lazy lookup tables to avoid expensive initialization at import time
-_constants_cache = None
-_unary_table_cache = None
-_binary_table_cache = None
-_ternary_table_cache = None
+_CONSTANTS = {
+    'TRUE': lambda: BoolVal(True, None),
+    'FALSE': lambda: BoolVal(False, None),
+    'NAN': lambda: ConstNan(None, None),
+    'INFINITY': lambda: ConstInf(None, None),
+    'PI': lambda: ConstPi(None, None),
+    'E': lambda: ConstE(None, None),
+    'LOG2E': lambda: ConstLog2E(None, None),
+    'LOG10E': lambda: ConstLog10E(None, None),
+    'LN2': lambda: ConstLn2(None, None),
+    'PI_2': lambda: ConstPi_2(None, None),
+    'PI_4': lambda: ConstPi_4(None, None),
+    'M_1_PI': lambda: Const1_Pi(None, None),
+    'M_2_PI': lambda: Const2_Pi(None, None),
+    'M_2_SQRTPI': lambda: Const2_SqrtPi(None, None),
+    'SQRT2': lambda: ConstSqrt2(None, None),
+    'SQRT1_2': lambda: ConstSqrt1_2(None, None),
+}
 
-def _get_constants():
-    global _constants_cache
-    if _constants_cache is None:
-        _constants_cache = {
-            'TRUE': lambda: BoolVal(True, None),
-            'FALSE': lambda: BoolVal(False, None),
-            'NAN': lambda: ConstNan(None, None),
-            'INFINITY': lambda: ConstInf(None, None),
-            'PI': lambda: ConstPi(None, None),
-            'E': lambda: ConstE(None, None),
-            'LOG2E': lambda: ConstLog2E(None, None),
-            'LOG10E': lambda: ConstLog10E(None, None),
-            'LN2': lambda: ConstLn2(None, None),
-            'PI_2': lambda: ConstPi_2(None, None),
-            'PI_4': lambda: ConstPi_4(None, None),
-            'M_1_PI': lambda: Const1_Pi(None, None),
-            'M_2_PI': lambda: Const2_Pi(None, None),
-            'M_2_SQRTPI': lambda: Const2_SqrtPi(None, None),
-            'SQRT2': lambda: ConstSqrt2(None, None),
-            'SQRT1_2': lambda: ConstSqrt1_2(None, None),
-        }
-    return _constants_cache
+# operator constructors; a `Named*` one also takes the symbol
+_UNARY: dict[str, Any] = {
+    'neg': Neg,
+    'not': Not,
+    'fabs': Abs,
+    'sqrt': Sqrt,
+    'cbrt': Cbrt,
+    'ceil': Ceil,
+    'floor': Floor,
+    'nearbyint': NearbyInt,
+    'round': RoundInt,
+    'trunc': Trunc,
+    'acos': Acos,
+    'asin': Asin,
+    'atan': Atan,
+    'cos': Cos,
+    'sin': Sin,
+    'tan': Tan,
+    'acosh': Acosh,
+    'asinh': Asinh,
+    'atanh': Atanh,
+    'cosh': Cosh,
+    'sinh': Sinh,
+    'tanh': Tanh,
+    'exp': Exp,
+    'exp2': Exp2,
+    'expm1': Expm1,
+    'log': Log,
+    'log10': Log10,
+    'log1p': Log1p,
+    'log2': Log2,
+    'erf': Erf,
+    'erfc': Erfc,
+    'lgamma': Lgamma,
+    'tgamma': Tgamma,
+    'isfinite': IsFinite,
+    'isinf': IsInf,
+    'isnan': IsNan,
+    'isnormal': IsNormal,
+    'signbit': Signbit,
+    'range': Range1,
+    'dim': Dim,
+}
 
-def _get_unary_table():
-    global _unary_table_cache
-    if _unary_table_cache is None:
-        _unary_table_cache = {
-            'neg': Neg,
-            'not': Not,
-            'fabs': Abs,
-            'sqrt': Sqrt,
-            'cbrt': Cbrt,
-            'ceil': Ceil,
-            'floor': Floor,
-            'nearbyint': NearbyInt,
-            'round': RoundInt,
-            'trunc': Trunc,
-            'acos': Acos,
-            'asin': Asin,
-            'atan': Atan,
-            'cos': Cos,
-            'sin': Sin,
-            'tan': Tan,
-            'acosh': Acosh,
-            'asinh': Asinh,
-            'atanh': Atanh,
-            'cosh': Cosh,
-            'sinh': Sinh,
-            'tanh': Tanh,
-            'exp': Exp,
-            'exp2': Exp2,
-            'expm1': Expm1,
-            'log': Log,
-            'log10': Log10,
-            'log1p': Log1p,
-            'log2': Log2,
-            'erf': Erf,
-            'erfc': Erfc,
-            'lgamma': Lgamma,
-            'tgamma': Tgamma,
-            'isfinite': IsFinite,
-            'isinf': IsInf,
-            'isnan': IsNan,
-            'isnormal': IsNormal,
-            'signbit': Signbit,
-            'range': Range1,
-            'dim': Dim,
-        }
-    return _unary_table_cache
+_BINARY: dict[str, Any] = {
+    '+': Add,
+    '-': Sub,
+    '*': Mul,
+    '/': Div,
+    'copysign': Copysign,
+    'fdim': Fdim,
+    'fmod': Fmod,
+    'remainder': Remainder,
+    'hypot': Hypot,
+    'atan2': Atan2,
+    'pow': Pow,
+}
 
-def _get_binary_table():
-    global _binary_table_cache
-    if _binary_table_cache is None:
-        _binary_table_cache = {
-            '+': Add,
-            '-': Sub,
-            '*': Mul,
-            '/': Div,
-            'copysign': Copysign,
-            'fdim': Fdim,
-            'fmod': Fmod,
-            'remainder': Remainder,
-            'hypot': Hypot,
-            'atan2': Atan2,
-            'pow': Pow,
-        }
-    return _binary_table_cache
-
-def _get_ternary_table():
-    global _ternary_table_cache
-    if _ternary_table_cache is None:
-        _ternary_table_cache = {
-            'fma': Fma
-        }
-    return _ternary_table_cache
+_TERNARY: dict[str, Any] = {
+    'fma': Fma
+}
 
 def _func_symbol(name: str):
     return Var(NamedId(name), None)
@@ -180,10 +159,9 @@ class _FPCore2FPy:
         return Var(ctx.env[e.value], None)
 
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
-        constants = _get_constants()
-        if e.value not in constants:
+        if e.value not in _CONSTANTS:
             raise ValueError(f'unknown constant {e.value}')
-        return constants[e.value]()
+        return _CONSTANTS[e.value]()
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return _round(Decnum(str(e.value), None))
@@ -201,15 +179,14 @@ class _FPCore2FPy:
         return _round(Digits(None, e.m, e.e, e.b, None))
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
-        unary_table = _get_unary_table()
         if e.name == '-':
             arg = self._visit(e.children[0], ctx)
             return Neg(arg, None)
         elif e.name == 'cast':
             arg = self._visit(e.children[0], ctx)
             return _round(arg)
-        elif e.name in unary_table:
-            cls = unary_table[e.name]
+        elif e.name in _UNARY:
+            cls = _UNARY[e.name]
             arg = self._visit(e.children[0], ctx)
             if issubclass(cls, NamedUnaryOp):
                 return cls(None, arg, None)
@@ -219,9 +196,8 @@ class _FPCore2FPy:
             raise NotImplementedError(f'unsupported unary operation {e.name}')
 
     def _visit_binary(self, e: fpc.BinaryExpr, ctx: _Ctx) -> Expr:
-        binary_table = _get_binary_table()
-        if e.name in binary_table:
-            cls = binary_table[e.name]
+        if e.name in _BINARY:
+            cls = _BINARY[e.name]
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
             if issubclass(cls, NamedBinaryOp):
@@ -243,9 +219,8 @@ class _FPCore2FPy:
                     raise NotImplementedError(f'unsupported binary operation {e.name}')
 
     def _visit_ternary(self, e: fpc.TernaryExpr, ctx: _Ctx) -> Expr:
-        ternary_table = _get_ternary_table()
-        if e.name in ternary_table:
-            cls = ternary_table[e.name]
+        if e.name in _TERNARY:
+            cls = _TERNARY[e.name]
             arg0 = self._visit(e.children[0], ctx)
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)

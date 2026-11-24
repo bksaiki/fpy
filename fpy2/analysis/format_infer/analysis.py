@@ -566,7 +566,6 @@ VAR_FORMAT = VarFormat()
 """The sole :class:`VarFormat`, mirroring :data:`REAL_FORMAT`."""
 
 
-type ScalarFormatBound = None | SetFormat | Format
 AbstractableFormatBound = SetFormat | AbstractableFormat
 FormatBound = (
     None | VarFormat | SetFormat | Format | TupleFormat | ListFormat
@@ -839,22 +838,11 @@ def to_abstract(f: 'FormatBound | AbstractFormat') -> AbstractFormat | None:
     """
     if isinstance(f, AbstractFormat):
         return f
-    if isinstance(f, (AbstractableFormat, SetFormat)):
-        return _to_abstract(f)
-    return None
-
-
-def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | None:
-    """
-    Lifts an abstractable :class:`FormatBound` to an
-    :class:`AbstractFormat`.  Returns ``None`` for variants that the
-    abstract arithmetic doesn't accept (``None``, ``TupleFormat``,
-    ``ListFormat``, non-dyadic ``SetFormat``).
-    """
     if isinstance(f, AbstractableFormat):
         return AbstractFormat.from_format(f)
-    else:
+    if isinstance(f, SetFormat):
         return _setformat_to_abstract(f)
+    return None
 
 
 def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> 'FormatBound':
@@ -1135,7 +1123,7 @@ def exact_binop(
         # tighter than the abstract path, which would bound the product by
         # zero on both sides and drive a later add/sub's `prec` to 0.  The
         # other operand is a `Format` here — the set/set case returned above.
-        other = _to_abstract(rhs if lhs_zero else lhs)
+        other = to_abstract(rhs if lhs_zero else lhs)
         if other is None:
             return None
         values: set[SetValue] = {Fraction(0)}
@@ -1147,13 +1135,13 @@ def exact_binop(
     # the other operand is a `Format` -- the set/set case returned above
     if op is operator.add:
         if lhs_zero:
-            return _to_abstract(rhs)
+            return to_abstract(rhs)
         if rhs_zero:
-            return _to_abstract(lhs)
+            return to_abstract(lhs)
     if op is operator.sub and rhs_zero:
-        return _to_abstract(lhs)
-    af_a = _to_abstract(lhs)
-    af_b = _to_abstract(rhs)
+        return to_abstract(lhs)
+    af_a = to_abstract(lhs)
+    af_b = to_abstract(rhs)
     if af_a is None or af_b is None:
         return None
     return _clip_to_constant(op(af_a, af_b), lhs, rhs, af_a, af_b, op)
@@ -1182,9 +1170,7 @@ def _clip_to_constant(
                 return out
             fin = [v for v in s.values if isinstance(v, Fraction)]
             neg_zero = any(v < 0 for v in fin) or (af.has_neg_zero and any(v > 0 for v in fin))
-            return AbstractFormat(out.prec, out.exp, out.pos_bound, neg_bound=out.neg_bound,
-                                  has_pos_inf=out.has_pos_inf, has_neg_inf=out.has_neg_inf,
-                                  has_nan=out.has_nan, has_neg_zero=out.has_neg_zero and neg_zero)
+            return out.replace(has_neg_zero=out.has_neg_zero and neg_zero)
         return out
     if op not in (operator.add, operator.sub):
         return out
@@ -1220,8 +1206,6 @@ def exact_unop(
     lifted :class:`AbstractFormat`.  Returns ``None`` when *arg* is
     not abstractable.
     """
-    if not isinstance(arg, AbstractableFormatBound):
-        return None
     if isinstance(arg, SetFormat):
         # See :func:`exact_binop`: `SetValue` carries the sign of a zero, so
         # `neg({+0.0})` is exactly `{-0.0}` rather than something widened.
@@ -1229,7 +1213,7 @@ def exact_unop(
         if set_op is None:
             return None
         return SetFormat(frozenset(set_op(v) for v in arg.values))
-    af = _to_abstract(arg)
+    af = to_abstract(arg)
     if af is None:
         return None
     return op(af)
@@ -1266,6 +1250,15 @@ def _has_digits(fmt: 'FormatBound') -> bool:
     return _set_any(fmt, lambda v: isinstance(v, Fraction) and v != 0)
 
 
+def _nonzero_bounds(af: AbstractFormat) -> list[RealFloat]:
+    """*af*'s finite non-zero bounds: a one-signed format bounds nothing on
+    the other side, and a zero bound is that absence, not a magnitude."""
+    return [
+        b for b in (af.pos_bound, af.neg_bound)
+        if isinstance(b, RealFloat) and not b.is_zero()
+    ]
+
+
 def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
     """``logb``'s least and greatest value over *fmt*, where each is finite.
 
@@ -1278,18 +1271,10 @@ def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
     # element format's
     while isinstance(fmt, ListFormat):
         fmt = fmt.elt
-    if not isinstance(fmt, AbstractableFormatBound):
-        return None, None
-    af = _to_abstract(fmt)
+    af = to_abstract(fmt)
     if af is None:
         return None, None
-    # a one-signed format bounds nothing on the other side, and a zero bound
-    # is that absence rather than a magnitude
-    mags = [
-        b for b in (af.pos_bound, af.neg_bound)
-        if isinstance(b, RealFloat) and not b.is_zero()
-    ]
-    hi = max((b.e for b in mags), default=None)
+    hi = max((b.e for b in _nonzero_bounds(af)), default=None)
     lo = af.exp if isinstance(af.exp, int) else None
     return lo, hi
 
@@ -1311,20 +1296,13 @@ def exact_logb(arg: 'FormatBound', least: int | None = None) -> 'AbstractFormat 
     Returns ``None`` for an argument unbounded in either direction, where the
     exponent it would report is unbounded too.
     """
-    if not isinstance(arg, AbstractableFormatBound):
-        return None
-    af = _to_abstract(arg)
+    af = to_abstract(arg)
     if af is None or not isinstance(af.exp, int):
         return None
 
     if any(not isinstance(b, RealFloat) for b in (af.pos_bound, af.neg_bound)):
         return None     # unbounded, so the exponent it reports is unbounded too
-    # A one-signed format bounds nothing on the other side, and a zero bound is
-    # that absence, not a magnitude `logb` can read.
-    mags = [
-        b for b in (af.pos_bound, af.neg_bound)
-        if isinstance(b, RealFloat) and not b.is_zero()
-    ]
+    mags = _nonzero_bounds(af)
     if not mags:
         return None     # the zero-only format, whose `logb` is `-inf` alone
     lo, hi = af.exp, max(b.e for b in mags)
@@ -1363,9 +1341,7 @@ def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
     infinity and ``2 ** NaN`` a NaN, each admitted only when the argument
     admits the value it comes from.
     """
-    if not isinstance(arg, AbstractableFormatBound):
-        return None
-    af = _to_abstract(arg)
+    af = to_abstract(arg)
     if af is None:
         return None
     bounds = _int_bounds(af)
@@ -1412,9 +1388,7 @@ def exact_select(
     """
     afs = []
     for f in arg_fmts:
-        if not isinstance(f, AbstractableFormatBound):
-            return None
-        af = _to_abstract(f)
+        af = to_abstract(f)
         if af is None:
             return None
         afs.append(af)
@@ -1430,15 +1404,7 @@ def exact_select(
         floors = [af.neg_bound for af in afs if not af.has_neg_inf]
         neg_bound = max(floors) if floors else min(af.neg_bound for af in afs)
         pos_bound = max(af.pos_bound for af in afs)
-    return AbstractFormat(
-        joined.prec, joined.exp,
-        pos_bound,
-        neg_bound=neg_bound,
-        has_pos_inf=joined.has_pos_inf,
-        has_neg_inf=joined.has_neg_inf,
-        has_nan=joined.has_nan,
-        has_neg_zero=joined.has_neg_zero,
-    )
+    return joined.replace(pos_bound=pos_bound, neg_bound=neg_bound)
 
 
 def round_is_identity(
@@ -1911,16 +1877,14 @@ class FormatAnalysis:
             fmt = fmt.elt
         if isinstance(fmt, SetFormat):
             return any(isinstance(v, Special) for v in fmt.values)
-        af = _to_abstract(fmt) if isinstance(fmt, AbstractableFormatBound) else None
+        af = to_abstract(fmt)
         return af is None or af.has_pos_inf or af.has_neg_inf or af.has_nan
 
     def int_range(self, of: 'Expr | Definition') -> tuple[int, int] | None:
         """*of*'s least and greatest values, when its format holds only
         integers."""
         fmt = self._bound(of)
-        if not isinstance(fmt, AbstractableFormatBound):
-            return None
-        af = _to_abstract(fmt)
+        af = to_abstract(fmt)
         return None if af is None else _int_bounds(af)
 
     def int_value(self, of: 'Expr | Definition') -> int | None:
@@ -2617,7 +2581,7 @@ class _FormatInferInstance(Visitor):
         # Digit-bound inference bounds a *finite* magnitude and says nothing about
         # the special values, so `alt` keeps whichever ones *fmt* admits
         # rather than clearing them.
-        specials = cur if cur is not None else _to_abstract(REAL_FORMAT)
+        specials = cur if cur is not None else to_abstract(REAL_FORMAT)
         assert specials is not None, 'REAL_FORMAT is abstractable'
         # The largest value sets every digit from `mag` down to `lo`, the higher
         # of the grid and the `prec`-th digit: `2^(mag+1) - 2^lo`.  With neither,
@@ -2712,7 +2676,7 @@ class _FormatInferInstance(Visitor):
             case Len():
                 # len(xs) -> integer; pin the exact value when the size is
                 # statically known, else the unbounded integer format.
-                n = self._known_iter_count(e.arg)
+                n = self._static_dim_size(e.arg, 0)
                 if n is not None:
                     return SetFormat.from_value(Fraction(n))
                 return _INTEGER_FORMAT
@@ -2733,7 +2697,7 @@ class _FormatInferInstance(Visitor):
                 # projection to range(len(xs)) when the size is known.
                 assert isinstance(arg_fmt, ListFormat), \
                     f'expected ListFormat for argument of Enumerate, got {arg_fmt!r}'
-                n = self._known_iter_count(e.arg)
+                n = self._static_dim_size(e.arg, 0)
                 idx_fmt = self._range_elt_format(0, n, 1) if n is not None else _INTEGER_FORMAT
                 return ListFormat(TupleFormat((idx_fmt, arg_fmt.elt)))
             case Fst():
@@ -2762,22 +2726,9 @@ class _FormatInferInstance(Visitor):
                     f'expected ListFormat for argument of {type(e).__name__}, got {arg_fmt!r}'
                 return arg_fmt.elt
             case Round() | Cast():
-                # Identity-when-fits.  ``Round`` rounds the argument to
-                # the active scope; ``Cast`` rounds and asserts the
-                # result is exact.  When the argument's
-                # inferred format is contained in the scope's format,
-                # every one of these operations is the identity at the
-                # value level — so the result's tight format equals
-                # the argument's, not the scope's.  Falls back to
-                # :meth:`_op_bound` (the scope format) otherwise.
-                if isinstance(arg_fmt, SetFormat):
-                    fitted = self._bound_if_fits(e, arg_fmt)
-                elif isinstance(arg_fmt, AbstractableFormat):
-                    fitted = self._bound_if_fits(
-                        e, AbstractFormat.from_format(arg_fmt),
-                    )
-                else:
-                    fitted = None
+                # Identity-when-fits: where the scope's format contains the
+                # argument's, the result keeps the argument's format.
+                fitted = self._bound_if_fits(e, unrounded_format(e, self.by_expr))
                 # Digit-bound inference may beat the scope even when the scope
                 # resolves: a fixed-point context is unbounded above, so what
                 # limits the result is the operand's own reach relative to the
@@ -2825,7 +2776,7 @@ class _FormatInferInstance(Visitor):
         unknown, the element format joined with :meth:`_op_bound`, since ``n``
         may be 1.
         """
-        n = self._known_iter_count(e.arg)
+        n = self._static_dim_size(e.arg, 0)
         if n is None:
             return self._join(arg_fmt.elt, self._op_bound(e))
 
@@ -2842,9 +2793,7 @@ class _FormatInferInstance(Visitor):
         # ``n >= 2``: simulate ``n - 1`` pairwise additions through
         # AbstractFormat, then check the final accumulator against the
         # scope.  Requires the element to be abstractable.
-        if not isinstance(elt_fmt, AbstractableFormatBound):
-            return self._op_bound(e)
-        af_elt = _to_abstract(elt_fmt)
+        af_elt = to_abstract(elt_fmt)
         if af_elt is None:
             return self._op_bound(e)
         af_acc = af_elt
@@ -2914,21 +2863,12 @@ class _FormatInferInstance(Visitor):
                 if start is not None and stop is not None:
                     return self._range_format(start, stop, 1)
                 return ListFormat(_INTEGER_FORMAT)
-            case Add():
-                # Exact addition.  Use the unrounded result whenever
-                # the active scope's format contains it; see
-                # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
-                # fast path (REAL_FORMAT contains everything).
-                #
-                # Tightened for the reason `Sum` is; see there.
+            case Add() | Sub():
+                # Exact result where the scope's format contains it; see
+                # :meth:`_bound_if_fits`.  Tightened for the reason `Sum` is.
+                op = operator.add if isinstance(e, Add) else operator.sub
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.add, cap=self._set_format_threshold),
-                )
-                if fitted is not None:
-                    return self._tighter(e, fitted)
-            case Sub():
-                fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.sub, cap=self._set_format_threshold),
+                    e, exact_binop(lhs, rhs, op, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return self._tighter(e, fitted)
@@ -3255,10 +3195,7 @@ class _FormatInferInstance(Visitor):
         self._visit_expr(stmt.cond, ctx)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
-        for phi in self.def_use.phis[stmt]:
-            lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-            rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-            self._set_def_bound(phi, self._join(lhs, rhs))
+        self._join_phis(self.def_use.phis[stmt])
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -3266,7 +3203,11 @@ class _FormatInferInstance(Visitor):
             self._visit_block(stmt.ift, ctx)
         with self._refined(stmt.cond, False):
             self._visit_block(stmt.iff, ctx)
-        for phi in self.def_use.phis[stmt]:
+        self._join_phis(self.def_use.phis[stmt])
+
+    def _join_phis(self, phis: Iterable[PhiDef]) -> None:
+        """Join each phi's two incoming definitions into it."""
+        for phi in phis:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
             self._set_def_bound(phi, self._join(lhs, rhs))
@@ -3354,26 +3295,9 @@ class _FormatInferInstance(Visitor):
         prev = [self.by_def[phi] for phi in phis]
         inserts = self._insert_count()
         run_body()
-        for phi in phis:
-            lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-            rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-            self._set_def_bound(phi, self._join(lhs, rhs))
+        self._join_phis(phis)
         return (self._insert_count() != inserts
                 or any(self.by_def[phi] != p for phi, p in zip(phis, prev)))
-
-    def _known_iter_count(self, iterable: Expr) -> int | None:
-        """
-        Returns the iterable's statically-known length, or ``None``.
-
-        Consults :class:`ArraySizeAnalysis`.  Recognises ``ListSize``
-        expressions whose ``size`` is a concrete ``int`` (e.g. ``range``
-        with static bounds, list literals, comprehensions over
-        known-size iterables).
-        """
-        bound = self.array_size.by_expr.get(iterable)
-        if isinstance(bound, ListSize) and isinstance(bound.size, int):
-            return bound.size
-        return None
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         def iterate():
@@ -3394,7 +3318,7 @@ class _FormatInferInstance(Visitor):
         # iterating to a fixpoint.  This matches the runtime semantics
         # exactly and avoids the widening fall-back for the
         # exact-arithmetic lattice.
-        n = self._known_iter_count(stmt.iterable)
+        n = self._static_dim_size(stmt.iterable, 0)
         if n is not None:
             self._unroll(self.def_use.phis[stmt], iterate, n)
         else:

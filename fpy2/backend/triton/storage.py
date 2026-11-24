@@ -10,21 +10,14 @@ The float rungs are a chain, but the integer rungs are incomparable with them,
 as in C++, so the ladder is not a join-semilattice: its order is the tie-break.
 """
 
-from collections.abc import Sequence
-
 from ...analysis.format_infer import (
     AbstractableFormat,
-    AbstractFormat,
     FormatBound,
     ListFormat,
     SetFormat,
+    to_abstract,
 )
-from ...analysis.format_infer.analysis import _to_abstract
-from ...analysis.storage_infer import (
-    StorageSelectionError,
-    join,
-    of_bound,
-)
+from ...analysis.storage_infer import StorageSelectionError, of_bound
 from ...number import (
     FP16,
     FP32,
@@ -38,15 +31,8 @@ from ...number import (
     UINT32,
     UINT64,
 )
-from ...number.context.mp_fixed import MPFixedFormat
+from ..storage import Ladder
 from .types import TritonScalar
-
-
-def _af(fmt: AbstractableFormat) -> AbstractFormat:
-    af = AbstractFormat.from_format(fmt)
-    assert af is not None, f'expected abstractable format, got {fmt!r}'
-    return af
-
 
 _SIGMA: tuple[tuple[TritonScalar, AbstractableFormat], ...] = (
     (TritonScalar.U8, UINT8.format()),
@@ -70,17 +56,16 @@ ladder puts ``F32`` after ``S32`` for the same reason.
 """
 
 
-_ABSTRACT: dict[TritonScalar, AbstractFormat] = {
-    ty: _af(fmt) for ty, fmt in _SIGMA
-}
-"""Each rung as an ``AbstractFormat``, which carries ``<=``."""
+class TritonStorageDomain(Ladder[TritonScalar]):
+    """The Triton backend's :class:`~.storage_infer.StorageDomain`: :data:`_SIGMA`."""
+
+    def __init__(self) -> None:
+        super().__init__(_SIGMA, TritonScalar.BOOL)
 
 
-def scalar_fits_in(a: TritonScalar, b: TritonScalar) -> bool:
-    """Does scalar *a* fit inside scalar *b*?  ``BOOL`` fits only itself."""
-    if a is TritonScalar.BOOL or b is TritonScalar.BOOL:
-        return a is b
-    return _ABSTRACT[a] <= _ABSTRACT[b]
+DOMAIN = TritonStorageDomain()
+scalar_fits_in = DOMAIN.fits_in
+scalar_sup = DOMAIN.sup
 
 
 def bound_fits_in_scalar(bound: FormatBound, ty: TritonScalar) -> bool:
@@ -91,55 +76,17 @@ def bound_fits_in_scalar(bound: FormatBound, ty: TritonScalar) -> bool:
     """
     if isinstance(bound, SetFormat) and not bound.values:
         return True
-    if ty is TritonScalar.BOOL:
-        return False
-    if not isinstance(bound, AbstractableFormat | SetFormat):
-        return False
-    af = _to_abstract(bound)
-    return af is not None and af <= _ABSTRACT[ty]
+    return DOMAIN.bound_fits_in(bound, ty)
 
 
 def index_scalar(bound: FormatBound) -> TritonScalar | None:
     """The narrowest of ``tl.int32`` and ``tl.int64`` holding every value
     *bound* admits, or ``None`` (a value may not be an integer, or none fits)."""
-    if not isinstance(bound, AbstractableFormat | SetFormat):
-        return None
-    af = _to_abstract(bound)
+    af = to_abstract(bound)
     if af is None:
         return None
-    # drop -0: it indexes as 0
-    af = AbstractFormat(af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
-                        has_pos_inf=af.has_pos_inf, has_neg_inf=af.has_neg_inf,
-                        has_nan=af.has_nan)
-    return next((ty for ty in (TritonScalar.S32, TritonScalar.S64) if af <= _ABSTRACT[ty]), None)
-
-
-class TritonStorageDomain:
-    """The Triton backend's :class:`~.storage_infer.StorageDomain`.
-
-    Holds no state -- the domain *is* :data:`_SIGMA`.
-    """
-
-    @property
-    def sigma(self) -> Sequence[AbstractableFormat]:
-        return [fmt for _ty, fmt in _SIGMA]
-
-    def fallback(self, bound: FormatBound) -> AbstractableFormat | None:
-        """``tl.int64`` for an unbounded integer format, as in the cpp backend.
-
-        Ignores the *magnitude* bound -- an unbounded integer has none, and
-        overflow is the user's problem -- but not the membership flags, since
-        ``int64`` holds no NaN, no infinity and no signed zero.
-        """
-        if not (isinstance(bound, MPFixedFormat) and bound.expmin >= 0):
-            return None
-        af = _to_abstract(bound)
-        if af is None or not af.specials_contained_in(_ABSTRACT[TritonScalar.S64]):
-            return None
-        return SINT64.format()
-
-
-_SPELLING: dict[AbstractableFormat, TritonScalar] = {fmt: ty for ty, fmt in _SIGMA}
+    af = af.replace(has_neg_zero=False)  # -0 indexes as 0
+    return next((ty for ty in (TritonScalar.S32, TritonScalar.S64) if af <= DOMAIN.abstract[ty]), None)
 
 
 def to_triton(storage: FormatBound) -> TritonScalar:
@@ -155,14 +102,9 @@ def to_triton(storage: FormatBound) -> TritonScalar:
         raise StorageSelectionError(
             'the Triton backend has no list storage: a list is stored by element'
         )
-    spelled = (
-        _SPELLING.get(storage)
-        if isinstance(storage, AbstractableFormat) else None
-    )
+    spelled = DOMAIN.spell(storage)
     if spelled is None:
-        raise StorageSelectionError(
-            f'no Triton dtype spells the storage {storage!r}'
-        )
+        raise StorageSelectionError(f'no Triton dtype spells the storage {storage!r}')
     return spelled
 
 
@@ -172,25 +114,4 @@ def choose_storage_scalar(bound: FormatBound) -> TritonScalar:
     The search lives in the analysis -- the sequence is a tie-break, not a
     presentation order -- so the backend asks rather than walking the ladder.
     """
-    return to_triton(of_bound(TritonStorageDomain(), bound))
-
-
-def scalar_sup(scalars: list[TritonScalar]) -> TritonScalar:
-    """:func:`~.storage_infer.join` over scalars, spelled in Triton terms.
-
-    ``BOOL`` is not on the ladder and joins only with itself; the rest defer, so
-    the n-ary search lives in exactly one place.
-    """
-    if any(s is TritonScalar.BOOL for s in scalars):
-        if all(s is TritonScalar.BOOL for s in scalars):
-            return TritonScalar.BOOL
-        raise StorageSelectionError(
-            f'cannot widen across BOOL and numeric storage: {scalars!r}'
-        )
-    formats = dict(_SIGMA)
-    missing = [s for s in scalars if s not in formats]
-    if missing:
-        raise StorageSelectionError(
-            f'storage scalar not on the ladder: {missing[0]!r}'
-        )
-    return to_triton(join(TritonStorageDomain(), [formats[s] for s in scalars]))
+    return to_triton(of_bound(DOMAIN, bound))
