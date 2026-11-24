@@ -770,20 +770,14 @@ def rational(n: int, d: int, ctx: Context = REAL) -> Float:
         return ctx.round(x)
 
 def nan(ctx: Context = REAL) -> Float:
-    """
-    Creates a `Float` representing NaN (Not a Number).
-    The result is rounded under the given context.
-    """
+    """NaN (Not a Number) rounded under `ctx`."""
     _check_ctx(ctx)
-    return Float(isnan=True, ctx=ctx)
+    return ctx.round(Float(isnan=True))
 
 def inf(ctx: Context = REAL) -> Float:
-    """
-    Creates a `Float` representing (positive) infinity.
-    The result is rounded under the given context.
-    """
+    """Positive infinity rounded under `ctx`."""
     _check_ctx(ctx)
-    return Float(isinf=True, ctx=ctx)
+    return ctx.round(Float(isinf=True))
 
 def const_pi(ctx: Context = REAL) -> Float:
     """

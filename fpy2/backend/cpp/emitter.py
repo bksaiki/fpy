@@ -187,9 +187,8 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTN: 'FE_DOWNWARD',
 }
 
-# Finite nullary constants.  C++11 has no spelling for these, but each is fixed
-# once the active context is known, so it is evaluated and emitted as a literal.
-# `ConstNan`/`ConstInf` have no literal form; `_visit_nullaryop` spells those.
+# Nullary constants.  C++11 has no spelling for these, but each is fixed once
+# the active context is known, so it is evaluated and emitted as a literal.
 _NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstPi: fpy_ops.const_pi,
     ConstE: fpy_ops.const_e,
@@ -203,6 +202,8 @@ _NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
     Const2_SqrtPi: fpy_ops.const_2_sqrt_pi,
     ConstSqrt2: fpy_ops.const_sqrt2,
     ConstSqrt1_2: fpy_ops.const_sqrt1_2,
+    ConstNan: fpy_ops.nan,
+    ConstInf: fpy_ops.inf,
 }
 
 _FLOAT_CTXS: dict[CppScalar, Context] = {
@@ -2635,17 +2636,6 @@ class CppEmitter(Visitor):
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> str:
         ty = self._scalar_storage_for_expr(e)
-        if isinstance(e, ConstInf | ConstNan):
-            # No literal spells these, and no integer type holds them.
-            if ty.is_integer():
-                raise CppEmitError(
-                    f'{type(e).__name__} is not representable in integer '
-                    f'storage `{ty.format()}`',
-                    at=e,
-                )
-            member = 'infinity' if isinstance(e, ConstInf) else 'quiet_NaN'
-            return f'std::numeric_limits<{ty.format()}>::{member}()'
-
         fn = _NULLARY_CONSTS.get(type(e))
         if fn is None:
             self._unsupported(type(e).__name__, at=e)
@@ -2659,7 +2649,23 @@ class CppEmitter(Visitor):
                 f'cannot evaluate {type(e).__name__} under context `{active}`',
                 at=e,
             ) from err
-        return self._emit_numeric_literal(val.as_rational(), at=e)
+        except ValueError as err:
+            # `nan()` under a context with no NaN to round to aborts
+            raise CppEmitError(
+                f'{type(e).__name__} aborts under context `{active}`: {err}',
+                at=e,
+            ) from err
+        if not val.is_nar():
+            return self._emit_numeric_literal(val.as_rational(), at=e)
+        # No literal spells these, and no integer type holds them.
+        if ty.is_integer():
+            raise CppEmitError(
+                f'{type(e).__name__} is not representable in integer '
+                f'storage `{ty.format()}`',
+                at=e,
+            )
+        member = 'quiet_NaN' if val.isnan else 'infinity'
+        return f'std::numeric_limits<{ty.format()}>::{member}()'
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> str:
         match e:

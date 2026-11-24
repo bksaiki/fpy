@@ -58,6 +58,7 @@ def for_loop(xs: list[fp.Real]):
     beta = 1.0
     alpha = 2.0
     for x in xs:
+        x = x + 1.0     # a reassigned target is not carried
         delta = delta + x
         beta = beta * x
         alpha = alpha - x

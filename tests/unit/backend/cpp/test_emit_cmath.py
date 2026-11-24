@@ -11,7 +11,7 @@ function-name string and the dispatch path.  Detailed
 import fpy2 as fp
 import pytest
 
-from fpy2.backend.cpp import CppCompiler
+from fpy2.backend.cpp import CppCompileError, CppCompiler
 from fpy2.types import RealType
 
 
@@ -177,6 +177,25 @@ class TestNullaryConstants:
         out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[])
         assert 'std::numeric_limits<float>::infinity()' in out
 
+    def test_nan_is_rounded_under_the_context(self):
+        """`fp.nan()` is `C(nan)`: `MX_E2M1` holds no NaN and saturates it."""
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.MX_E2M1:
+                return fp.nan()
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'quiet_NaN' not in out and '6' in out
+
+    def test_nan_is_refused_where_rounding_it_aborts(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.INTEGER:
+                return fp.nan()
+
+        with pytest.raises(CppCompileError, match='aborts'):
+            CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+
     def test_math_constants_fold_to_literals(self):
         @fp.fpy
         def f() -> fp.Real:
@@ -230,7 +249,6 @@ class TestNullaryConstantsUnderReal:
 
     def test_an_irrational_constant_under_real_is_refused(self):
         """No finite C++ type holds pi exactly, and REAL does not round."""
-        from fpy2.backend.cpp.compiler import CppCompileError
 
         @fp.fpy(ctx=fp.REAL)
         def f() -> fp.Real:

@@ -1036,7 +1036,7 @@ class _FPCoreCompileInstance(Visitor):
                 destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.target, [])
                 return fpc.LetStar([tuple_bind] + destruct_bindings, ctx)
             case _:
-                raise RuntimeError('unreachable', stmt.binding)
+                raise RuntimeError('unreachable', stmt.target)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr) -> fpc.Let:
         # ``xs[i1]…[iN] = v`` lowers to the FPCore ``tensor`` form

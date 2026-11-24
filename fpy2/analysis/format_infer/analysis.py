@@ -2665,17 +2665,11 @@ class _FormatInferInstance(Visitor):
     # format; non-real results (bool predicates, range, …) take
     # the top format of their inferred type.
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> FormatBound:
-        if isinstance(e, ConstInf | ConstNan):
+        # `nan()` is `C(nan)`, in the scope's format, except under `REAL`, whose
+        # format holds the value but no stored type does
+        if isinstance(e, ConstInf | ConstNan) and self._scope_format(e) == REAL_FORMAT:
             member = Special.POS_INF if isinstance(e, ConstInf) else Special.NAN
-            # Report the value itself unless the scope's format holds it and
-            # can be stored: `REAL_FORMAT` holds it but no finite type does, and
-            # an integer format does not hold it at all.  A float scope that
-            # holds it keeps its own format -- `{+inf}` there would retype an
-            # `FP64` result.
-            scope_fmt = self._scope_format(e)
-            if (scope_fmt == REAL_FORMAT
-                    or not scope_fmt.representable_in(_SPECIAL_FLOAT[member])):
-                return SetFormat.from_value(member)
+            return SetFormat.from_value(member)
         return self._op_bound(e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:

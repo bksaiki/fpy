@@ -144,12 +144,8 @@ class _StmtApplierInst(DefaultTransformVisitor):
     def _visit_if(self, stmt: IfStmt, ctx: None) -> tuple[Stmt, None]:
         cond = self._visit_expr(stmt.cond, None)
         ift, _ = self._visit_block(stmt.ift, None)
-        if stmt.iff is None:
-            s = IfStmt(cond, ift, None, None)
-        else:
-            iff, _ = self._visit_block(stmt.iff, None)
-            s = IfStmt(cond, ift, iff, None)
-        return s, None
+        iff, _ = self._visit_block(stmt.iff, None)
+        return IfStmt(cond, ift, iff, None), None
 
     def _visit_while(self, stmt: WhileStmt, ctx: None) -> tuple[Stmt, None]:
         cond = self._visit_expr(stmt.cond, None)
@@ -167,12 +163,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
     def _visit_context(self, stmt: ContextStmt, ctx: None) -> tuple[Stmt, None]:
         context = self._visit_expr(stmt.ctx, None)
         body, _ = self._visit_block(stmt.body, None)
-        if stmt.target is None:
-            s = ContextStmt(None, context, body, None)
-        else:
-            name = self._visit_id(stmt.target)
-            s = ContextStmt(name, context, body, None)
-            return s, None
+        return ContextStmt(self._visit_id(stmt.target), context, body, None), None
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None) -> tuple[Stmt, None]:
         # TODO: message?

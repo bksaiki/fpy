@@ -41,17 +41,14 @@ class _ForBundlingInstance(DefaultTransformVisitor):
         #     t = (x_0', ..., x_N')
         # x_0, ..., x_N = t
         # ```
-        # 
-        # In the case that `x_i` is re-defined in `<target>`,
-        # replace `x_i` with `x_i'` in the target and
-        # generate `_` in place of `x_i'` in the body.
-        # 
+        #
+        # The target is rebound every iteration and is scoped to the loop, so
+        # it is never carried, even where the body reassigns it.
 
-        # identify variables that were mutated in the body
         # sorted: the order decides the tuple's element order and each
         # name's index in it, so a set would make the emitted program
         # depend on hash order and differ run to run
-        mutated = sorted(self.def_use.mutated_in(stmt.body))
+        mutated = sorted(self.def_use.mutated_in(stmt.body) - stmt.target.names())
         if len(mutated) > 1:
             # need to apply the transformation
             stmts: list[Stmt] = []
@@ -62,30 +59,10 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             # fresh variables for each mutated variable
             rename = { var: self.gensym.refresh(var) for var in mutated }
 
-            # extract target names
-            match stmt.target:
-                case NamedId():
-                    target_names = { stmt.target }
-                case UnderscoreId():
-                    target_names = set()
-                case TupleBinding():
-                    target_names = stmt.target.names()
-                case _:
-                    raise RuntimeError('unreachable', stmt.target)
-
             # create a tuple of mutated variables
             e = TupleExpr([Var(var, None) for var in mutated], None)
             s: Stmt = Assign(t, None, e, None)
             stmts.append(s)
-
-            # transform target
-            match stmt.target:
-                case Id():
-                    target: Id | TupleBinding = stmt.target
-                case TupleBinding():
-                    target = RenameTarget.apply_binding(stmt.target, rename)
-                case _:
-                    raise RuntimeError('unreachable', stmt.target)
 
             # compile iterable and body
             iterable = self._visit_expr(stmt.iterable, None)
@@ -93,8 +70,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             body = RenameTarget.apply_block(body, rename)
 
             # unpack the tuple at the start of the body
-            # replace any variable in the target with `_`
-            binding = TupleBinding([UnderscoreId() if var in target_names else rename[var] for var in mutated], None)
+            binding = TupleBinding([rename[var] for var in mutated], None)
             s = Assign(binding, None, Var(t, None), None)
             body.stmts.insert(0, s)
 
@@ -103,7 +79,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             body.stmts.append(s)
 
             # append the for statement
-            s = ForStmt(target, iterable, body, None)
+            s = ForStmt(stmt.target, iterable, body, None)
             stmts.append(s)
 
             # unpack the tuple after the loop

@@ -21,6 +21,7 @@ from fractions import Fraction
 from functools import reduce
 from itertools import pairwise
 
+from ... import ops as fpy_ops
 from ...analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -128,12 +129,7 @@ from ...number import (
     INTEGER,
     REAL,
     Context,
-    EFloatContext,
     Float,
-    MPBFixedContext,
-    MPBFloatContext,
-    MPFloatContext,
-    MPSFloatContext,
     RealFloat,
     RoundingMode,
 )
@@ -619,6 +615,8 @@ class _Emitter(Visitor):
     cast."""
     _once: set[str]
     """The names assigned exactly once."""
+    _taken: set[str]
+    """The names the function defines, which a temporary must avoid."""
     _next_tmp: int
     _branches: int
     """How many flattened branches enclose the statement being emitted."""
@@ -692,6 +690,7 @@ class _Emitter(Visitor):
         for n, ds in self.def_use.name_to_defs.items():
             counts[str(n)] += len(ds)
         self._once = {n for n, c in counts.items() if c == 1}
+        self._taken = set(counts)
         self._next_tmp = 0
         self._branches = 0
         self._merging = set()
@@ -2089,26 +2088,25 @@ class _Emitter(Visitor):
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> str:
         """`nan` and `inf`, as Python floats Triton types where used.
 
-        `fp.nan()` is `C.round(nan)`, which aborts under a context holding no
-        NaN; a kernel cannot, so that is refused.  The other constants are
-        transcendental, with no exact value to emit.
+        `fp.nan()` is `C(nan)`: NaN, a value the context substitutes, or an
+        abort, which a kernel cannot do, so that is refused.  The other
+        constants are transcendental, with no exact value to emit.
         """
         if isinstance(e, (ConstNan, ConstInf)):
-            what = 'NaN' if isinstance(e, ConstNan) else 'infinity'
-            ctx_ = self._active_ctx(e)
-            ok = True
-            if isinstance(ctx_, MPFixedContext | MPBFixedContext | MPFloatContext
-                          | MPSFloatContext | MPBFloatContext):
-                ok = ctx_.enable_nan if isinstance(e, ConstNan) else ctx_.enable_inf
-            elif isinstance(ctx_, EFloatContext) and isinstance(e, ConstInf):
-                ok = ctx_.enable_inf
-            if not ok:
+            what = 'nan' if isinstance(e, ConstNan) else 'infinity'
+            try:
+                val = (fpy_ops.nan if isinstance(e, ConstNan) else fpy_ops.inf)(self._active_ctx(e))
+            except ValueError as err:
                 raise TritonEmitError(
-                    f'`{type(e).__name__.lower()}` is `round({what.lower()})` '
-                    f'under this context, which cannot hold one -- the '
-                    f'program aborts there and a kernel cannot'
-                )
-            return "float('nan')" if isinstance(e, ConstNan) else "float('inf')"
+                    f'`{type(e).__name__.lower()}` is `round({what})` under '
+                    f'this context, which cannot hold one -- the program '
+                    f'aborts there and a kernel cannot'
+                ) from err
+            if val.isnan:
+                return "float('nan')"
+            if val.isinf:
+                return "float('inf')"
+            return self._emit_numeric_literal(val.as_rational())
         raise TritonEmitError(
             f'`{type(e).__name__.lower()}` is not in the op table'
         )
@@ -2256,8 +2254,7 @@ class _Emitter(Visitor):
         if any(_reads_name(code, bound) for code in codes):
             tmps = []
             for code in codes:
-                tmp = f'_t{self._next_tmp}'
-                self._next_tmp += 1
+                tmp = self._fresh()
                 ctx.add_line(f'{tmp} = {code}')
                 tmps.append(tmp)
             codes = tmps
@@ -2334,9 +2331,12 @@ class _Emitter(Visitor):
         self._emit_branch(stmt, stmt.ift, stmt.iff, ctx)
 
     def _fresh(self) -> str:
-        """A temporary's name."""
-        self._next_tmp += 1
-        return f'__t{self._next_tmp - 1}'
+        """A temporary's name, distinct from every name the function defines."""
+        while True:
+            name = f'__t{self._next_tmp}'
+            self._next_tmp += 1
+            if name not in self._taken:
+                return name
 
     def _bind(self, code: str, shape: str | None = None) -> str:
         """*code*, evaluated once into a temporary ahead of the line being

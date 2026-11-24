@@ -66,8 +66,3 @@ class RenameTarget:
         ast, _ = _RenameTargetInstance(rename)._visit_block(block, None)
         # TODO: how to check block
         return ast
-
-    @staticmethod
-    def apply_binding(binding: TupleBinding, rename: dict[NamedId, NamedId]) -> TupleBinding:
-        """Renames the names a tuple binding binds."""
-        return _RenameTargetInstance(rename)._visit_tuple_binding(binding, None)
