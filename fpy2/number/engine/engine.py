@@ -1,23 +1,5 @@
 """
-Abstract base class for arithmetic engines.
-
-An Engine provides methods for computing arithmetic operations such
-that the result can be safely re-rounded under the rounding context provided.
-
-Each method takes Float arguments and a rounding context, returning
-a `Float` result or None if the engine cannot handle the computation.
-Each method must guarantee that the returned Float is computed with sufficient
-precision to allow safe re-rounding to the target precision specified in the context.
-
-The context provides precision parameters through ctx.round_params():
-- (prec, None): floating-point style with prec bits of precision
-- (None, n): fixed-point style with first unrepresentable digit n
-- (prec, n): floating-point with subnormalization
-- (None, None): real computation (exact arithmetic)
-
-Methods should return None to signal that the engine cannot handle
-the operation with the given inputs/context. This allows for
-efficient dispatch to alternative engines without exception overhead.
+Base class for arithmetic engines.
 """
 
 from collections.abc import Iterator
@@ -43,17 +25,15 @@ class Engine:
     Base class for arithmetic engines.
 
     Engines provide computational methods that implement various arithmetic
-    operations. Each method returns a Float result computed with sufficient
+    operations. Each method returns a result computed with sufficient
     precision for safe re-rounding, or None if the engine cannot handle the
     operation.
 
-    All computational methods follow the same signature pattern:
-        method(self, *args: ArgType, ctx: Context) -> RetType
-
-    where:
-        - args are the Float operands
-        - ctx is the rounding context (provides precision via ctx.round_params())
-        - Returns Float with round-to-odd result, or None if can't handle
+    The context provides precision parameters through ctx.round_params():
+    - (prec, None): floating-point style with prec bits of precision
+    - (None, n): fixed-point style with first unrepresentable digit n
+    - (prec, n): floating-point with subnormalization
+    - (None, None): real computation (exact arithmetic)
     """
 
     # Unary operations

@@ -203,7 +203,6 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None) 
     start_idx = 0 if start is None else _cvt_int(start)
     stop_idx = n if stop is None else _cvt_int(stop)
 
-    # Strict bounds: 0 <= start <= stop <= len(lst).
     if start_idx < 0:
         raise IndexError(
             f'slice start {start_idx} out of range (must be >= 0)'
@@ -521,25 +520,17 @@ class BytecodeCompiler(Visitor):
         )
 
     def compile(self) -> Any:
-        # compile the function to a Python AST
         ast = self._visit_function(self.func, None)
-        # print(pyast.unparse(ast))
-        # wrap the function AST in a module so we can compile it
         mod = pyast.Module(body=[ast], type_ignores=[])
-        # compile the Python AST to bytecode
         source_name = self._location_to_name(self.func.loc)
         code = compile(mod, filename=source_name, mode='exec')
-        # inject runtime symbols
         namespace = make_namespace()
-        # add free variables to the namespace
         for var in self.func.free_vars:
             name = str(var)
             namespace[name] = to_value(self.env[name])
-        # add foreign values to the namespace
         namespace.update(self.foreign_vals)
         if self.hook is not None:
             namespace[HOOK_NAME] = self.hook
-        # return the function object
         exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]
 
@@ -548,11 +539,7 @@ class BytecodeCompiler(Visitor):
 
     def _location_to_attributes(self, loc: Location | None) -> dict[str, int]:
         if loc is None:
-            # Synthetic nodes (e.g. generator-built ASTs without parser
-            # locations) need a valid placeholder.  Python 3.14's bytecode
-            # CFG analyzer rejects ``lineno <= 0``: a sentinel ``-1`` here
-            # breaks stack-depth tracking across control-flow joins and
-            # surfaces as ``Invalid CFG, stack underflow`` at compile time.
+            # placeholder: Python 3.14's CFG analyzer rejects ``lineno <= 0``
             return {
                 'lineno': 1,
                 'col_offset': 0,
@@ -659,8 +646,6 @@ class BytecodeCompiler(Visitor):
                 arg_none = pyast.Constant(value=None, kind=None, **attrs)
                 return pyast.Call(func=func, args=[arg_none, arg, arg_none], keywords=[], **attrs)
             case AMin() | AMax():
-                # Reduce-form lowers to Python's built-in min/max on the
-                # list, matching the n-ary Min/Max emit.
                 builtin = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
                 func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
@@ -884,22 +869,16 @@ class BytecodeCompiler(Visitor):
         arr = self._visit_expr(e.value, ctx)
         attrs = self._location_to_attributes(e.loc)
 
-        # start index — pass through unchanged so the runtime helper
-        # can default it (None ↦ 0) and validate.
         if e.start is None:
             start: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
             start = self._visit_expr(e.start, ctx)
 
-        # stop index — same treatment (None ↦ len(arr) at runtime).
         if e.stop is None:
             stop: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
             stop = self._visit_expr(e.stop, ctx)
 
-        # FPy slicing semantics are strict: out-of-range bounds raise
-        # ``IndexError`` rather than clamping (Python's behavior).  The
-        # runtime helper validates ``0 <= start <= stop <= len(arr)``.
         helper = pyast.Name(id='__fpy_list_slice', ctx=pyast.Load(), **attrs)
         return pyast.Call(
             func=helper, args=[arr, start, stop], keywords=[], **attrs
@@ -930,11 +909,7 @@ class BytecodeCompiler(Visitor):
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> list[pyast.stmt]:
         """``xs[i] = e``, with each index bound to a name first.
 
-        The expansion page elaborates this to ``t = xs[i] ; t := e`` --
-        "binding the cell before writing through it" -- so the indices are
-        evaluated before the value.  A Python ``Assign`` evaluates its value
-        before its target's subscripts, the other way round, so emitting one
-        directly ran an effectful index after an effectful value.
+        The indices are evaluated before the value, unlike a Python ``Assign``.
         """
         attrs = self._location_to_attributes(stmt.loc)
 

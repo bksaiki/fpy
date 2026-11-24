@@ -205,9 +205,7 @@ class _Unhoistable(DefaultVisitor):
 
         Keyed on whether `ContextUse` records *e* as a use site, not on its node
         class: every rounded operation consults the ambient context, so `x * x`
-        overflows under an `ASSERT` context exactly as `fp.round(x)` does.  An
-        earlier version asked `isinstance(e, Round | Cast)` and let arithmetic,
-        and `fp.round_at`, through.
+        overflows under an `ASSERT` context exactly as `fp.round(x)` does.
 
         A context that does not resolve to a concrete one -- a function with no
         ``ctx=`` inherits its caller's -- cannot be shown either way, so it is

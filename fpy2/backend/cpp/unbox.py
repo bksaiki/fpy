@@ -25,9 +25,9 @@ cannot disagree.  They cross call edges by *specialization*
 lengths), not by conversion, so both ends of a call agree by construction.
 
 A signature's representation is part of its contract, so a function that
-compiled code calls keeps its handles on *both* sides.  Measured: 5 of the 50
-corpus functions with a list parameter.  The kernels worth unboxing are entry
-points a *native* caller invokes, and a native caller is not bound by this.
+compiled code calls keeps its handles on *both* sides.  The kernels worth
+unboxing are entry points a *native* caller invokes, and a native caller is
+not bound by this.
 
 The analysis itself never fails: refusing means keeping the handle, with
 reasons in :attr:`UnboxAnalysis.boxed_because`.  Under :class:`UnboxMode.STRICT`
@@ -329,7 +329,7 @@ class Unbox:
                             out.boxed[r] = True
                             changed = True
 
-        # 5. read the decision back out per class -- through the same
+        # 4. read the decision back out per class -- through the same
         #    traversal `annotate` and `annotate_return` use, so a variable's
         #    declaration cannot disagree with what is handed through it.
         for cls, per_depth in classes:

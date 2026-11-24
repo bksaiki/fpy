@@ -2,21 +2,8 @@
 Eliminate unnecessary rounding from expressions whose unrounded
 format is contained in the active rounding context.
 
-For a rounded arithmetic op ``g(e_1, ..., e_n)`` (``Add``, ``Sub``,
-``Mul``, ``Abs``, ``Neg``) under active context ``C``, the runtime
-semantics insert an implicit ``round_C`` around the result.  When
-format inference proves ``format(g(...)) ⊆ C.F``, that round is the
-identity — the value is unchanged whether or not it fires.  This
-transform makes that fact structural by computing ``g`` under
-``with fp.REAL:`` and binding the result to a fresh name that
-replaces the original expression site.
-
-For explicit ``Round`` / ``Cast`` nodes, the same
-notion produces a different rewrite: when the argument's bound
-already fits in the target context, the whole node collapses to
-its argument (the round was a no-op at runtime).
-
-Rewrite shape — per-op hoisting with unconditional operand binding:
+An eliminable arithmetic op is computed under ``with fp.REAL:``; an
+eliminable ``Round`` / ``Cast`` collapses to its argument.
 
 .. code-block:: python
 
@@ -33,36 +20,9 @@ Rewrite shape — per-op hoisting with unconditional operand binding:
            _t = g(t_1, ..., t_n)
        a = _t
 
-Each operand is bound to a temp under the *current* context
-before being passed into the REAL block.  The bind preserves
-every round inside the operand at its original scope — explicit
-``Round`` / ``Cast`` nodes, implicit rounds on nested arithmetic
-ops, eliminable or non-eliminable, all fire as originally
-written.  The REAL block then consumes only ``Var`` references,
-so it can never accidentally re-evaluate a subexpression at the
-wrong context.
-
-Operands that are already ``Var`` references are passed through
-without binding — a copy ``_t = v`` has no rounds to preserve
-and just adds a redundant alias.  This is the only case-split;
-every other operand kind is bound unconditionally for safety.
-
-Trade-off: the unconditional bind produces redundant copies for
-literals and already-clean subtrees.  The recommended cleanup
-chain is :class:`fpy2.transform.ConstFold` then
+The recommended cleanup chain is :class:`fpy2.transform.ConstFold` then
 :class:`fpy2.transform.CopyPropagate` then
-:class:`fpy2.transform.DeadCodeEliminate` — the first inlines
-literal-bound temps (``_t = 1`` → uses of ``_t`` become ``1``)
-via the value flow from :class:`fpy2.analysis.PartialEval`, the
-second collapses any remaining Var→Var copies, and the third
-removes the now-unused assigns and any block left with no
-rounding to install.  The local rewrite stays simple at the cost
-of slack in the intermediate AST.
-
-An operation is hoisted only where it is strict (see
-:class:`~fpy2.analysis.Hoistability`), and the operands its statement evaluates
-before it are named first.  ``Round`` / ``Cast`` collapse applies anywhere --
-it's a pure node-level rewrite that needs no preamble slot.
+:class:`fpy2.transform.DeadCodeEliminate`.
 
 Run after :class:`fpy2.transform.Monomorphize` (so format inference
 resolves to concrete contexts) and before any pass that depends on
@@ -70,12 +30,7 @@ storage selection — those see strictly tighter formats for the
 hoisted operations.
 
 **Preserves hoistable form**, which the cpp pipeline relies on: it runs between
-:class:`fpy2.transform.Hoistable` and :class:`fpy2.transform.ANF`.  Nothing here
-can break it — every rewrite
-either collapses a node in place or appends statements to a preamble slot, and
-neither introduces a ternary, an ``and``/``or`` or a ``while`` condition.  Given
-the form, this pass also *gains* by it: a ternary arm is an ``IfStmt`` branch by
-the time it arrives, so an operation in it is strict.
+:class:`fpy2.transform.Hoistable` and :class:`fpy2.transform.ANF`.
 """
 
 import dataclasses
@@ -182,47 +137,20 @@ class _RoundElimInstance(DefaultTransformVisitor):
     # Scope resolution + eliminability decision
 
     def _resolved_ctx(self, e: ContextUseSite) -> Context | None:
-        """Concrete rounding context active at *e*, with symbolic
-        scopes substituted via :attr:`outer_ctx` when the caller
-        pinned one.  Returns ``None`` for scopes that remain
-        symbolic — the eliminability decision treats those as
-        ineligible (we can't claim the round is identity without
-        a concrete target).
-
-        *e* must be a :data:`ContextUseSite` (op-typed expression)
-        that's been seen by :class:`ContextUseAnalysis`.  We don't
-        catch ``KeyError`` here: a node that should have a scope
-        but doesn't indicates a bug elsewhere (the node was
-        constructed without going through scope analysis), and
-        failing loudly is more useful than silently treating it
-        as ineligible."""
+        """Concrete rounding context active at *e*, resolving symbolic scopes
+        via :attr:`outer_ctx`; ``None`` if still symbolic."""
         scope = self.ctx_use.find_scope_from_use(e)
         if isinstance(scope.ctx, Context):
             return scope.ctx
         return self.outer_ctx
 
     def _is_eliminable(self, e: Expr) -> bool:
-        """True when the implicit round on *e* is the identity under
-        its active scope AND the unrounded format is *strictly
-        tighter* than the scope's format — meaning the round
-        produces no value change *and* moving the op to REAL gives
-        downstream consumers a more precise bound than the scope
-        provides.
+        """True when the implicit round on *e* is the identity under its scope.
 
-        Only meaningful for rounded ops (arithmetic + explicit
-        ``Round`` / ``Cast``); other expressions
-        don't carry a context-driven round, so the question is
-        ill-posed and the answer is ``False``.
-
-        The "strictly tighter" guard is the subtle one: under an
-        unbounded scope (e.g. ``fp.INTEGER`` / ``MPFixedContext``),
-        ``round_is_identity`` is vacuously true for any value, but
-        the unrounded format is *also* unbounded — hoisting yields
-        no narrowing and can break downstream consumers whose
-        storage selection can't pick a finite type for a saturated
-        format (e.g. the cpp emitter's lossless-widening dispatch).
-        Skipping these saves both pointless rewrites and the
-        cascading storage failures."""
+        The unrounded format must also be *strictly tighter* than the scope's:
+        under an unbounded scope (e.g. ``fp.INTEGER``) ``round_is_identity`` is
+        vacuously true, but hoisting yields no narrowing and can break storage
+        selection downstream."""
         if not isinstance(
             e, (Add, Sub, Mul, Abs, Neg, Round, Cast),
         ):
@@ -254,7 +182,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         return unrounded <= scope_af and unrounded != scope_af
 
     # ------------------------------------------------------------------
-    # Block walk — the ``_Ctx``-accumulator pattern from ``ZipElim``.
+    # Block walk — the accumulator pattern of ``iter_elim.Ctx``.
 
     def _visit_block(
         self, block: StmtBlock, ctx: Any,
@@ -268,19 +196,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
 
     # ------------------------------------------------------------------
     # Expression rewriting
-    #
-    # The decision logic lives in ``_visit_expr``.  At each node:
-    #
-    #  - Eliminable ``Round`` / ``Cast`` → replace
-    #    with the (recursively-rewritten) argument.  Pure node-level
-    #    rewrite, no preamble required, works at any expression
-    #    position (including inside ListComp / IfExpr branches).
-    #  - Eliminable arithmetic op that is strict → per-op hoist into
-    #    ``with fp.REAL:`` (see :func:`lift_op`).
-    #  - Anything else → recurse via the base visitor (children may
-    #    still be individually eliminable).
-    #
-    # Whatever it becomes, an operand the prefix rule forces is then named.
 
     def _hoisted(self, e: Expr) -> bool:
         return (
@@ -308,19 +223,12 @@ class RoundElim:
     (``Add``/``Sub``/``Mul``/``Abs``/``Neg``) hoist into
     ``with fp.REAL:`` preambles; explicit ``Round`` / ``Cast``
     nodes collapse to their argument.
-
-    See the module docstring for the rewrite shape, the
-    greedy-outermost policy, and the soundness invariants.
     """
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
         """Apply the transformation to a :class:`FuncDef`.  Returns a
         new ``FuncDef``; the input is not mutated.
-
-        Runs :class:`DefineUse`, :class:`ContextUse`, and
-        :class:`FormatInfer` internally — these are pre-analyses the
-        rewrite needs to decide eliminability per expression.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got `{func}`")

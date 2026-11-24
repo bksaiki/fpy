@@ -1,14 +1,4 @@
-"""
-Context-use analysis for FPy ASTs.
-
-This analysis links rounding context scopes (introduced by ``with``
-statements or function-level context annotations) to the expressions
-evaluated under them.  It attempts partial evaluation to resolve
-context expressions to concrete :class:`Context` values.  When partial
-evaluation does not fully reduce a context expression, or when a
-function is entered without an overriding context, a fresh symbolic
-context variable (:class:`NamedId`) is generated.
-"""
+"""Context-use analysis for FPy ASTs."""
 
 from dataclasses import dataclass
 

@@ -282,9 +282,7 @@ class IterElimInstance(DefaultTransformVisitor):
             src_names.append(src)
 
         idx = self._index_name(idx_slot)
-        # A tupled plan feeds every source into one slot; otherwise each slot
-        # reads its own.  `plan.tupled` is the discriminator, not the source
-        # count: `zip(xs)` is tupled over one source and still yields 1-tuples.
+        # keyed on `plan.tupled`, not the source count: `zip(xs)` yields 1-tuples
         groups = [src_names] if plan.tupled else [[s] for s in src_names]
         per_iter: list[Stmt] = []
         for slot, srcs in zip(plan.slots, groups):
@@ -347,24 +345,17 @@ class IterElimInstance(DefaultTransformVisitor):
         if matched is None:
             return None
         idx_slot, plan = matched
-        # Sources are inlined and re-evaluated per iteration (a comp has no
-        # preamble to bind them once), so each must be pure and O(1).
         if not all(is_access_path(a) for a in plan.args):
             return None
 
         idx = self._index_name(idx_slot)
         if plan.tupled:
-            # A whole-element slot is a name or a discard, so no `fst`/`snd`
-            # chain is involved and `comp_binding_is_pairs` has nothing to say.
             slot = plan.slots[0]
             if isinstance(slot, NamedId):
                 subst[slot] = TupleExpr(
                     [index_access(arg, idx)() for arg in plan.args], None,
                 )
         else:
-            # `fst`/`snd` are pair-only, so a destructuring slot of arity != 2
-            # can't be reached; leave the stage rather than emit an ill-typed
-            # `snd`-of-non-pair.
             if not all(comp_binding_is_pairs(slot) for slot in plan.slots):
                 return None
             for slot, arg in zip(plan.slots, plan.args):

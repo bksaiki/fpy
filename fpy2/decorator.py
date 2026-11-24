@@ -205,11 +205,7 @@ def _apply_fpy_decorator[**P, R](
     ast._meta = FuncMeta(free_vars, ctx, pre, spec, meta or {}, env)
 
     if not is_pattern:
-        # Multiple return statements are allowed: they're well-defined
-        # for the interpreter and the cpp backend, and the fpc backend
-        # rejects them at compile time with a backend-specific error.
-        # We still require every statement to be reachable and every
-        # path to end in a return.
+        # every statement is reachable and every path ends in a return
         Reachability.analyze(
             ast,
             check_all_reachable=True,

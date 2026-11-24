@@ -62,11 +62,9 @@ class _ReachabilityInstance(DefaultVisitor):
         return ReachabilityAnalysis(self.has_entry, self.has_exit, self.ret_stmts, has_fallthrough)
 
     def _visit_assign(self, stmt: Assign, reachable: bool) -> bool:
-        # OUT[s] = IN[s]
         return reachable
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, reachable: bool) -> bool:
-        # OUT[s] = IN[s]
         return reachable
 
     def _visit_if1(self, stmt: If1Stmt, reachable: bool) -> bool:
@@ -102,11 +100,9 @@ class _ReachabilityInstance(DefaultVisitor):
         return body_is_reachable
 
     def _visit_assert(self, stmt: AssertStmt, reachable: bool) -> bool:
-        # OUT[s] = IN[s]
         return reachable
 
     def _visit_effect(self, stmt: EffectStmt, reachable: bool) -> bool:
-        # OUT[s] = IN[s]
         return reachable
 
     def _visit_return(self, stmt: ReturnStmt, reachable: bool) -> bool:
@@ -114,7 +110,6 @@ class _ReachabilityInstance(DefaultVisitor):
         return False
     
     def _visit_pass(self, stmt: PassStmt, reachable: bool) -> bool:
-        # OUT[s] = IN[s]
         return reachable
 
     def _visit_statement(self, stmt: Stmt, reachable: bool) -> bool:
@@ -140,12 +135,6 @@ class Reachability:
     - "unreachable": there is no execution path from the entry to the statement.
 
     `IN[s]` is `OUT` of the preceding statement; each visitor gives `OUT[s]`.
-
-    The resulting `ReachabilityAnalysis` has four fields:
-    - `has_entry`: is the statement reachable?
-    - `has_exit`: is there a reachable path through the statement?
-    - `ret_stmts: all return statements in the program
-    - `has_fallthrough`: is there a path that does not end in a return statement
 
     The analysis may optionally assert three properties:
     - `check_all_reachable`: every statement in the program is reachable

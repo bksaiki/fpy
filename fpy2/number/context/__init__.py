@@ -240,9 +240,7 @@ Alias for an arbitrary-precision integer context with
 round towards zero rounding mode.
 
 Numbers rounded under this context behave like Python's native `int` type,
-which is why `-0.0` is not representable: an `int` has a single zero.  The
-underlying `MPFixedContext` does have a signed zero, so a caller wanting one
-can ask for it; this alias declines.
+so `-0.0` is not representable.
 """
 
 SINT8 = FixedContext(True, 0, 8, RM.RTZ, OV.WRAP)

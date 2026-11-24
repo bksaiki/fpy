@@ -26,10 +26,10 @@ __all__ = [
 # Limits
 
 MPFR_EMIN = gmp.get_emin_min()
-"""Maximum exponent for MPFR numbers."""
+"""Minimum exponent for MPFR numbers."""
 
 MPFR_EMAX = gmp.get_emax_max()
-"""Minimum exponent for MPFR numbers."""
+"""Maximum exponent for MPFR numbers."""
 
 ###########################################################
 # Conversions between Float and gmp.mpfr
@@ -67,10 +67,9 @@ def _round_odd(x: gmp.mpfr, inexact: bool) -> Float:
         return Float(s=s, isnan=True)
     elif x.is_infinite():
         # check for inexactness => only occurs when MPFR overflows
-        # TODO: awkward to use interval information for an infinity
         return Float(s=s, isinf=True, inexact=inexact)
     elif x.is_zero():
-        # check for inexactness => only occurs when MPFR overflows
+        # check for inexactness => only occurs when MPFR underflows
         # TODO: generate a reasonable inexact value
         if inexact:
             exp = gmp.get_emin_min() - 1

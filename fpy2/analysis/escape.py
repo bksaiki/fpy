@@ -1,32 +1,9 @@
 """
 Escape summaries: which of a function's list parameters outlive the call.
 
-A caller that hands a list to a callee must know whether the callee keeps it:
-:mod:`fpy2.analysis.alias` marks an argument *shared outward* only where the
-summary says it may be retained.
-
-A summary answers the question that assumption stands in for: **after this call
-returns, can anything outside still reach the argument's list?**  A caller whose
-summary says no can stop marking the argument shared.
-
-Retention is not mutation.  ``zs[0] = 99`` writes the caller's list *during* the
-call and keeps nothing afterwards, so it does not retain.  Reading "the callee
-touches it" as retention would give up exactly the kernels worth unboxing.
-
 A parameter is retained when its alias region is returned, is reachable from
-another parameter (``yss[0] = xs``, so the caller can find it through something
-it already holds), or is marked *shared outward* — which covers a retaining
-callee, a foreign one, and any expression kind ``alias`` does not model.
-
-Reading routes off regions rather than syntax means aliasing inside the callee
-needs no rule of its own: ``ys = xs; return ys`` retains ``xs`` because both
-names are one region.
-
-``alias`` computes a callee's summary on demand.  The parser rejects forward
-references, so the call graph is a DAG and no fixpoint is needed.  A callee that
-does not type on its own reads as retaining and writing everything.  A summary
-also says which parameters the callee may store into, which is where a list it
-keeps may land.
+another parameter, or is marked *shared outward*.  Writing a list during the call
+does not retain it.
 """
 
 from dataclasses import dataclass

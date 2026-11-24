@@ -4,7 +4,7 @@ Public API for the cpp backend.
 :class:`CppCompiler` runs the analysis pipeline (monomorphization,
 def-use, context-use, array-size, format inference, storage
 inference) on a :class:`Function` and hands the result to
-:class:`_CppEmitter`, which produces a C++ source string.  Errors
+:class:`CppEmitter`, which produces a C++ source string.  Errors
 surface as :class:`CppCompileError`.
 """
 
@@ -265,9 +265,7 @@ def _check_signature_monomorphic(a: SpecAnalyses) -> None:
     Storage selection will not catch this: an unresolved kind reads as
     :class:`VarFormat`, whose storage is unobservable and so answers ``bool``
     rather than refusing -- which is right for an internal type variable and
-    wrong only here.  Before ``VarFormat`` existed the two were indistinguishable
-    (a :class:`VarType` and a ``bool`` shared the ``None`` bound), and
-    ``return []`` became ``std::vector<bool> f()``.
+    wrong only here.
 
     Scoped to the signature, which is where the template would be needed.  A
     type variable that stays internal belongs to a value no element is stored
@@ -486,8 +484,7 @@ class CppCompiler(Backend):
         """Analyze every spec leaves-first, filling *params* as it goes.
 
         One path, so :meth:`compile_module` and :meth:`signature` cannot reach
-        different conclusions about the same function — they did once, and it
-        was an ABI bug rather than a missed optimization.
+        different conclusions about the same function.
 
         *only* limits which specs are analyzed (by ``id(f.ast)``) without
         narrowing what counts as *called*, so :meth:`signature` can skip a
@@ -511,8 +508,7 @@ class CppCompiler(Backend):
     def specialize(
         self, module: Module, bound_params: dict[str, DigitBoundParams] | None = None,
     ) -> list[Function]:
-        """Steps 1-3 of the pipeline: the fully-specialized functions, in
-        leaves-first emission order."""
+        """The fully-specialized functions, in leaves-first emission order."""
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 

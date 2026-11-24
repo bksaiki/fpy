@@ -385,9 +385,7 @@ class ExpContext(EncodableContext):
         return direction in (RoundingDirection.RTZ, RoundingDirection.RTE)
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
-        """
-        Like `self.round()` but for only `RealFloat` and `Float` inputs.
-        """
+        """Like `self.round()` but for only `RealFloat` and `Float` inputs."""
         # round with no exponent bound using a 1-bit MPFloat context
         from .mp_float import MPFloatContext
         mp_ctx = MPFloatContext(1, rm=self.rm)

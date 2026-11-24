@@ -1,9 +1,6 @@
 from enum import Enum
 from typing import Literal, cast
 
-"""
-Default value instead of `None`
-"""
 
 class Default(Enum):
     """

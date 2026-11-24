@@ -315,8 +315,7 @@ class MPBFloatContext(SizedContext):
     """is infinity representable?"""
 
     enable_neg_zero: bool
-    """is `-0.0` representable?  When `False`, a negative value that rounds to
-    zero gives `+0.0`, so a result is always in `format()`."""
+    """is `-0.0` representable?"""
 
     nan_value: Float | None
     """
@@ -541,8 +540,6 @@ class MPBFloatContext(SizedContext):
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
-
-        Optionally specify `n` as the least absolute digit position.
         Only overrides rounding behavior when `n > self.nmin`.
         """
         # step 1. handle special values

@@ -13,9 +13,7 @@ from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
 __all__ = [
     '_cvt_to_float',
-    # utilities
     '_cvt_to_real',
-    # General operations
     'acos',
     'acosh',
     'add',
@@ -26,7 +24,6 @@ __all__ = [
     'atanh',
     'cast',
     'cbrt',
-    # Round-to-integer operations
     'ceil',
     'const_1_pi',
     'const_2_pi',
@@ -43,11 +40,9 @@ __all__ = [
     'copysign',
     'cos',
     'cosh',
-    # Constants
     'digits',
     'dim',
     'div',
-    # Tensor
     'empty',
     'erf',
     'erfc',
@@ -62,14 +57,12 @@ __all__ = [
     'fmax',
     'fmin',
     'fmod',
-    # Tuple
     'fst',
     'hexfloat',
     'hypot',
     'inf',
     'isfinite',
     'isinf',
-    # Classification
     'isnan',
     'isnormal',
     'lgamma',
@@ -86,12 +79,10 @@ __all__ = [
     'pow',
     'rational',
     'remainder',
-    # Rounding operations
     'round',
     'round_at',
     'round_exact',
     'roundint',
-    # Numerical data
     'signbit',
     'sin',
     'sinh',
@@ -501,10 +492,8 @@ def cast(x: Real, ctx: Context = REAL) -> Real:
     This is useful for asserting that a value fits within a specific rounding context.
     """
     if ctx is None or ctx is REAL:
-        # real computation; always representable
         return x
     else:
-        # Check if x can be exactly represented in ctx
         rounded = ctx.round(x, exact=True)
         return rounded
 
@@ -611,16 +600,12 @@ def logb(x: Real, ctx: Context = REAL) -> Float:
     # TODO: compute `logb` for a non-dyadic fraction
     x = _cvt_to_float(x)
     if x.is_nonzero():
-        # finite, non-zero => floor(log2(abs(x)))
         return ctx.round(RealFloat.from_int(x.e))
     elif x.isinf:
-        # infinite => +inf
         return ctx.round(Float(isinf=True))
     elif x.isnan:
-        # NaN => NaN
         return ctx.round(Float(isnan=True))
     else:
-        # 0 => -inf
         return ctx.round(Float(s=True, isinf=True))
 
 
@@ -659,9 +644,7 @@ def dim(x: list, ctx: Context = REAL) -> Float:
     A shape query: the answer is an exact integer, so `ctx` is accepted for
     uniformity and ignored (as it is by the other queries and projections).
     """
-    # `dim` is list-only in FPy (matches `TypeInfer`, which unifies `Dim`'s
-    # argument with a list type); reject a non-list operand rather than
-    # silently returning 0.
+    # `dim` is list-only in FPy
     if not isinstance(x, list):
         raise TypeError(f'dim() expects a list, got {x}')
     dim = 0

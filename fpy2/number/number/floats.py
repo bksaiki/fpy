@@ -40,15 +40,6 @@ class Float:
     There are no constraints on the values of `exp` and `c`.
     Unlike `RealFloat`, this number can encode infinity and NaN.
 
-    This type can also encode uncertainty introduced by rounding.
-    The uncertaintly is represented by an interval, also called
-    a rounding envelope. The interval includes this value and
-    extends either below or above it (`interval_down`).
-    The interval always contains this value and may contain
-    the other endpoint as well (`interval_closed`).
-    The size of the interval is `2**(exp + interval_size)`.
-    It must be the case that `interval_size <= 0`.
-
     Instances of `Float` are usually constructed under
     some rounding context, i.e., the result of an operation with rounding.
     The attribute `ctx` stores that rounding context if one exists.
@@ -150,7 +141,6 @@ class Float:
         return fn(self)
 
     def __hash__(self) -> int: # type: ignore
-        # Complex has __hash__ = None, so mypy thinks there's a type mismatch.
         if self._isnan:
             # ensure that all NaN values have the same hash
             return 271828
@@ -948,12 +938,6 @@ class Float:
 def same_value(a: Float | None, b: Float | None) -> bool:
     """
     Whether two values are the same, sign and all, `None` included.
-
-    `==` is the IEEE comparison, which answers neither question a caller
-    holding two values needs: it calls a NaN unequal to itself and the two
-    zeros equal.  This compares the value rather than the encoding, so two
-    spellings of the same number agree, and the rounding context is not part
-    of the value.
     """
     if a is None or b is None:
         return a is None and b is None

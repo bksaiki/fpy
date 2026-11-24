@@ -97,9 +97,7 @@ def same_object_defs(d: Definition) -> tuple[int, ...]:
     too, and it is a different list.
 
     This is the rule the ``IndexedAssign`` note above tells physical-property
-    analyses to apply.  Stating it once keeps allocation tracking, alias
-    analysis and the C++ backend's storage coalescing from drifting apart --
-    they had each written it out separately.
+    analyses to apply.
 
     Callers restrict the domain themselves: alias analysis only unifies defs
     that carry a list, while storage coalescing applies to every def.
@@ -170,15 +168,12 @@ class ReachingDefsAnalysis:
         self.out_defs = out_defs
         self.reach = reach
         self.phis = phis
-        # invert mapping from index to definition
         self.def_to_idx = { d: i for i, d in enumerate(defs) }
-        # compute mapping from (name, site) to definition
         self.site_to_def = {}
         for name, ds in name_to_defs.items():
             for d in ds:
                 if isinstance(d, AssignDef):
                     self.site_to_def[(name, d.site)] = d
-        # compute mapping from definition to its successors
         self.successors = { d: set() for d in defs }
         for d in defs:
             match d:
@@ -192,11 +187,9 @@ class ReachingDefsAnalysis:
                     raise RuntimeError(f'unexpected definition {d}')
 
     def _format_site(self, s: str, width: int = 20) -> str:
-        """Helper function to format site strings with 20 character limit and no newlines."""
+        """First line of *s*, truncated to *width* characters."""
         assert width > 3
-        # Remove newlines and replace with spaces
         lines = s.splitlines()
-        # Limit to 20 characters with ellipses if needed
         line = lines[0]
         if len(line) > width:
             return line[:width - 3] + '...'
@@ -337,7 +330,6 @@ class _ReachingDefs(DefaultVisitor):
         self._visit_expr(e.elt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: _DefCtx) -> _DefCtx:
-        # visit expression and introduce new definitions
         self._visit_expr(stmt.expr, ctx)
         for name in stmt.target.names():
             _, ctx = self._add_assign(name, stmt, ctx)
@@ -357,11 +349,8 @@ class _ReachingDefs(DefaultVisitor):
         return ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _DefCtx) -> _DefCtx:
-        # visit condition
         self._visit_expr(stmt.cond, ctx)
-        # visit body
         body_out = self._visit_block(stmt.body, ctx)
-        # introduce phi nodes for any definitions that are re-defined in the body
         phis: _DefCtx = {}
         for name, orig in ctx.items():
             if orig != body_out[name]:
@@ -371,9 +360,7 @@ class _ReachingDefs(DefaultVisitor):
         return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: _DefCtx) -> _DefCtx:
-        # visit condition
         self._visit_expr(stmt.cond, ctx)
-        # visit both true and false branches
         ift_out = self._visit_block(stmt.ift, ctx)
         iff_out = self._visit_block(stmt.iff, ctx)
         # introduce phi nodes for:
@@ -399,7 +386,6 @@ class _ReachingDefs(DefaultVisitor):
                 if name not in ctx:
                     phi, ctx = self._add_phi(name, stmt, d, d, ctx)
                     phis[name] = phi
-        # record the phi nodes and return the updated context
         self.phis[stmt] = phis
         return ctx
 
@@ -443,11 +429,9 @@ class _ReachingDefs(DefaultVisitor):
         return self._visit_loop(stmt, ctx, enter)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _DefCtx) -> _DefCtx:
-        # visit context expression and possibly introduce a binding
         self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
             _, ctx = self._add_assign(stmt.target, stmt, ctx)
-        # visit the body and continue with the resulting environment
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _DefCtx) -> _DefCtx:
@@ -476,14 +460,11 @@ class _ReachingDefs(DefaultVisitor):
         return ctx
 
     def _visit_function(self, func: FuncDef, ctx: _DefCtx) -> None:
-        # process named arguments
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 _, ctx = self._add_assign(arg.name, arg, ctx)
-        # process free variables
         for v in func.free_vars:
             _, ctx = self._add_assign(v, func, ctx, is_free=True)
-        # visit body
         self._visit_block(func.body, ctx)
 
     def _normalize(self) -> ReachingDefsAnalysis:

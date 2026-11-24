@@ -1,23 +1,5 @@
 """
 A module: a collection of functions registered for compilation.
-
-Registering a function (:meth:`Module.add`) records it as a *public* entry,
-optionally with a monomorphization spec (a rounding context and/or per-argument
-types).  The functions reachable from the public entries through their call
-chains are *private* (internal).
-
-Private functions are **stored eagerly**: at registration time, ``add`` walks
-the new public's call graph (:class:`~fpy2.analysis.CallGraph`) and appends
-every transitively-reachable :class:`Function` to the private set.  The
-module thereafter commits to a membership snapshot — ``public()``,
-``private()``, and ``functions()`` are reads against stored state, not the
-AST.
-
-The stored membership is current as of the last ``add`` (or the most
-recent ``_rescan``).  Callers who edit Function ASTs outside the module
-API should call :meth:`Module._rescan` to reconcile the private set with
-the new AST shape.  :meth:`Module.map` doesn't need it: it builds a
-fresh module via ``add``, which discovers from the transformed AST.
 """
 
 from collections.abc import Callable, Collection, Iterator
@@ -46,8 +28,6 @@ class _RebindCalls(DefaultTransformVisitor):
     def _visit_call(self, e: Call, ctx: Any) -> Call:
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         kwargs = [(k, self._visit_expr(v, ctx)) for k, v in e.kwargs]
-        # ``Call.fn`` is ``object`` (may be a primitive, builtin, None, ...);
-        # only rebind user functions we have a replacement for.
         fn = e.fn
         if isinstance(fn, Function) and fn in self._mapping:
             fn = self._mapping[fn]
@@ -287,12 +267,7 @@ class Module:
         self._entries.append(entry)
         self._by_name[name] = entry
 
-        # First registration of this Function: record as public and
-        # walk its call graph to eagerly discover privates.  Subsequent
-        # registrations of the same Function (different export names)
-        # share the membership work already done.  If this Function was
-        # previously discovered as a private — through another public's
-        # call chain — promote it to public.
+        # first registration: record as public, promoting a private
         if func not in self._publics_set:
             self._publics.append(func)
             self._publics_set.add(func)
@@ -435,10 +410,7 @@ class Module:
         """Reconcile the private set with the publics' ASTs.
 
         Discovers callees reached from publics that aren't currently
-        stored, and drops privates that are no longer reachable.  Use
-        after editing Function ASTs outside the module API.  ``map``
-        doesn't need this — it builds a fresh module via ``add``, which
-        discovers from the transformed AST.
+        stored, and drops privates that are no longer reachable.
 
         After this returns, ``private()`` is in leaves-first order
         (matching the per-public CallGraph walk order)."""

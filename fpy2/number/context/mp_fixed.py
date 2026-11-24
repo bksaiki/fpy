@@ -218,13 +218,7 @@ class MPFixedContext(OrdinalContext):
     """is infinity representable?"""
 
     enable_neg_zero: bool
-    """is `-0.0` representable?
-
-    True by default, since this format is sign-magnitude.  Set false for a number
-    system with a single zero -- `INTEGER` and `FixedContext` are both such.  When
-    false, `round()` normalizes a negative zero away so that it agrees with
-    `representable_in`.
-    """
+    """is `-0.0` representable?"""
 
     nan_value: Float | None
     """
@@ -403,8 +397,6 @@ class MPFixedContext(OrdinalContext):
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round_at()` but only for `RealFloat` or `Float` instances.
-
-        Optionally, specify `n` to override the least absolute digit position.
         If `n < self.nmin`, it will be set to `self.nmin`.
         """
         if n is None:

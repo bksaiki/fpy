@@ -723,10 +723,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         Covers partial-eval constants, the integer-valued list queries
         ``len(xs)`` / ``size(xs, d)`` / ``dim(xs)`` when the queried size is
         statically known (``dim`` always is — it's the nesting depth), and
-        ``+`` / ``-`` / ``*`` over those.  The arithmetic is what a lowered
-        multi-clause comprehension allocates with: ``fp.empty(len(xs) *
-        len(ys))``, whose size is otherwise unknown and whose list is then a
-        ``std::vector`` where the sizes are right there in the types.
+        ``+`` / ``-`` / ``*`` over those.
         """
         val = self.partial_eval.by_expr.get(e)
         if isinstance(val, Float | Fraction):

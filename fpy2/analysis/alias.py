@@ -1,90 +1,9 @@
 """
 Alias analysis: what else may refer to a list.
 
-An FPy list is a core list of *references* — one cell per element, and mutation
-goes through a cell.  This analysis is an *abstract store* over those cells: it
-answers, for each list a function creates or receives, *what else may refer to
-it*.
-
-Formulation
------------
-
-A *region* is an abstract location: the set of run-time locations a place may
-hold.  There is one per list-valued
-:class:`~fpy2.analysis.Definition`, one per list-valued expression, and —
-created lazily — one per *part* of a region: either the elements of a list (one
-for all of them, since the semantics gives a cell per element and collapsing them
-only over-approximates) or field *i* of a tuple, which is not a cell at all — a
-tuple holds values, so a field matters only because the value in it may be a
-list.  Parts make nesting work: the rows of a ``list[list[Real]]`` are regions in
-their own right.
-
-Three maps make up the abstract store: ``_by_def`` / ``_by_expr`` are the
-environment, which region a name or expression denotes; ``_parts`` maps a region
-to the region its contents live in; ``_sites`` records which allocation may have
-created it.  It abstracts the store twice over: a region is a *set* of locations,
-and the map runs region-to-region rather than location-to-value, so only
-reachability is tracked, not values.  :meth:`_Regions.merge` still cascades into
-matching parts, because identifying two locations identifies their contents.
-
-Each route below is a core rule read backwards: binding is **E-Assign**, which
-copies nothing; projection is **E-Index** then **E-Deref**, naming the element
-cell's contents; an element store is **E-Update** *through* that cell;
-construction is **E-List** over an **E-Ref** per element, so the cell is fresh
-but holds the operand's value; tuples are **E-Tuple** / **M-Tuple**.  Routes
-generate *equality* constraints, solved with union-find (``elts(c)`` is the
-elements part, ``fld(c, i)`` field *i*):
-
-=========================  ==========================================
-``ys = xs``                ``reg(ys) ≡ reg(xs)``
-``row = xss[i]``           ``reg(row) ≡ elts(xss)``
-``xss[i] = e``             ``elts(xss) ≡ reg(e)``
-``[a, b]``                 ``elts(result) ≡ reg(a) ≡ reg(b)``
-``(a, b)``                 ``fld(result, 0) ≡ reg(a)``, likewise 1
-``a, b = t``               ``reg(a) ≡ fld(t, 0)``, likewise 1
-``fst(t)`` / ``t[0]``      ``reg(result) ≡ fld(t, 0)``
-``xs[i:j]``                ``elts(result) ≡ elts(xs)`` — fresh spine, same rows
-``for row in xss``         ``reg(row) ≡ elts(xss)``
-``xs if c else ys``        ``reg(result) ≡ reg(xs) ≡ reg(ys)``
-``enumerate``/``zip``      ``elts(result) ≡ elts(arg)``
-``f(xs, ys)``              if ``f`` may keep ``xs``: each list in ``xs`` ≡
-                           each same-shaped one in ``result``, or in ``ys``
-                           if ``f`` may write it
-=========================  ==========================================
-
-Equality rather than inclusion is deliberate.  Each place denotes exactly one
-region and distinct regions are disjoint — Steensgaard-style, where a
-subset-based solver would give each place an overlapping points-to *set* — so
-different regions never alias and the same region may.  That over-approximates,
-the safe direction for every consumer, and it is adequate here.
-
-An expression kind not in the table is handled conservatively: it gets its own
-allocation site, and every list-carrying variable inside it is marked shared
-outward, so an unmodelled route cannot make a list *look* uniquely owned.  Note
-what that does *not* buy: the fresh region is never merged with the operands, so
-if such an operation does return its argument, two regions hold one location.
-The ownership queries stay sound because shared-outward poisons them;
-:meth:`AliasAnalysis.may_alias` is sound only for the routes above.
-
-Two routes leave the function, and they mean opposite things for ownership.
-*Shared outward* — kept by a call, or handed to an unmodelled operation — means
-something else may hold the list while this function still does.  A call that
-only writes it is flagged apart (:meth:`AliasAnalysis.callee_writes_at`):
-**E-App** keeps no store of its own, so a callee writes the caller's cells.
-*Returned* is **E-Ret** handing a location out, which is a transfer; see
-:meth:`AliasAnalysis.transfers_ownership`.
-
-Limitations
------------
-
-One *summary* store for the whole function, not one per program point, so it is
-flow-insensitive: ``ys = xs`` marks ``xs`` shared even if ``ys`` is dead
-immediately afterwards, and a container part counts as a referrer even if the
-container itself is never read — except :attr:`AliasAnalysis.consumed_defs`,
-which buys back one flow-sensitive fact under narrow guards.  Context-insensitive:
-one summary of a callee (:mod:`fpy2.analysis.escape`) answers for every call to
-it.  Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three
-cost precision, not soundness.
+A flow-insensitive, Steensgaard-style analysis: each list-valued definition,
+expression, and element or tuple-field part denotes one region, and regions are
+unified by equality constraints, so only places in the same region may alias.
 """
 
 from collections.abc import Iterator
@@ -797,11 +716,6 @@ class _Builder(DefaultVisitor):
 
     def _merge_redefinitions(self) -> None:
         """Unify the definitions of a variable that are the *same* list.
-
-        Two of SSA's fresh definitions allocate nothing: ``xs[i] = e`` mutates
-        the list that was already there, and a branch merge names whichever of
-        its operands arrived.  A plain rebinding is *not* included: ``ys = zs``
-        has a ``prev`` too, and it is a different list.
 
         Sound to unify because referrers are counted by source name, so a
         variable's definitions do not read as several places.

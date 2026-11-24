@@ -6,12 +6,13 @@ values) for each expression and variable definition in an FPy program.
 
 Analysis pipeline
 -----------------
-1. **Type checking** (:class:`TypeInfer`) — establishes basic types for every
-   expression and variable (``bool``, ``real``, ``list``, ``tuple``, …).
-2. **Context-use analysis** (:class:`ContextUse`) — maps every context-sensitive
-   operation (arithmetic, rounding, etc.) to the rounding context scope that is
-   active when it is evaluated.
-3. **Format inference** — propagates number format information through the
+1. **Pre-analyses** (:class:`PreAnalyses`) — structural analyses, among them
+   type checking (:class:`TypeInfer`), which establishes basic types for every
+   expression and variable (``bool``, ``real``, ``list``, ``tuple``, …), and
+   context-use analysis (:class:`ContextUse`), which maps every
+   context-sensitive operation (arithmetic, rounding, etc.) to the rounding
+   context scope that is active when it is evaluated.
+2. **Format inference** — propagates number format information through the
    program.  For each operation the format is derived from its active rounding
    context; for variables it is propagated from the expression they are bound
    to; at control-flow merge points (``if``/``while``/``for`` phi nodes) formats
@@ -22,6 +23,7 @@ Format lattice
 The analysis tracks a **format** that mirrors the basic-type structure::
 
     FormatBound ::= None                                  # non-numeric values
+                  | VarFormat()                           # kind unresolved
                   | SetFormat(values: frozenset)          # known finite real values
                   | Format                                # scalar real
                   | TupleFormat(elts: tuple[FormatBound]) # heterogeneous tuple
@@ -48,10 +50,14 @@ The analysis tracks a **format** that mirrors the basic-type structure::
 
 **Join rule** (least upper bound)::
 
+    join(VarFormat(), f)             = f
     join(None, None)                 = None
     join(SetFormat(a), SetFormat(b)) = SetFormat(a ∪ b)
     join(SetFormat(s), fmt)          = fmt   if every v in s is representable in fmt
-                                     = REAL_FORMAT   otherwise
+                                     = (abstraction of s
+                                        | AbstractFormat.from_format(fmt)).format()
+                                                          (when both abstractable)
+                                     = REAL_FORMAT        (otherwise)
     join(f, f)                       = f                 (scalar Format)
     join(f1, f2)                     = (AbstractFormat.from_format(f1)
                                         | AbstractFormat.from_format(f2)).format()
@@ -108,8 +114,9 @@ Format inference rules
   (e.g., ``len(xs)`` under ``with fp.FP32`` is still an integer, not an
   arbitrary FP32 value).  ``Range`` returns ``ListFormat(INTEGER)``;
   ``Enumerate(xs)`` returns ``ListFormat(TupleFormat(INTEGER, xs.elt))``.
-- **Function calls** (``Call``): conservatively the top format of the callee's
-  return type.
+- **Function calls** (``Call``): the callee's return format, analyzed at the
+  call site's context and argument formats; the return type's bound when the
+  callee is not an FPy :class:`Function`.
 - **Variable references** (``Var``): the format of the variable's definition.
 - **Numeric literals** (``Decnum``, ``Integer``, ``Rational``, …):
   ``SetFormat({v})`` — the singleton set containing the literal's exact value.
@@ -376,7 +383,7 @@ class Special(enum.Enum):
     NAN = 2
 
     def __repr__(self) -> str:
-        # `NEG_ZERO`, not `<Special.NEG_ZERO: 0>`, to match `NegZero` in a set
+        # `POS_INF`, not `<Special.POS_INF: 0>`, to match `NegZero` in a set
         return self.name
 
 
@@ -399,13 +406,10 @@ class SetFormat:
     Format for a real-valued expression with a known, finite set of values.
 
     Strictly more precise than any :class:`Format` that contains every value;
-    when joined with such a format the format is returned (otherwise the join
-    widens to ``REAL_FORMAT``).
+    when joined with such a format the format is returned.
 
     Values are :data:`SetValue`, so the set says *which* zero it holds:
-    ``Fraction(0)`` is ``+0.0`` and :data:`NEG_ZERO` is ``-0.0``.  That is a
-    property of the representation rather than an invariant maintained by the
-    producers, which is what it replaced.
+    ``Fraction(0)`` is ``+0.0`` and :data:`NEG_ZERO` is ``-0.0``.
     """
     values: frozenset[SetValue]
 
@@ -449,7 +453,6 @@ def _free_var_format(val: object) -> 'FormatBound':
         case Float():
             if not val.is_finite():
                 return None
-            # A captured `-0.0` is statable now: `NEG_ZERO` is a `SetValue`.
             if val.is_zero() and val.s:
                 return SetFormat.from_value(NEG_ZERO)
             return SetFormat.from_value(val.as_rational())
@@ -695,12 +698,6 @@ def _bound_of_type(ty: Type) -> FormatBound:
     types, so a monomorphized ``list[Real[FP32]]`` becomes
     ``ListFormat(IEEEFormat(es=8, nbits=32))``.  For non-numeric types
     (bool, context, function, type variable) the result is ``None``.
-
-    Note: the function is no longer always the *top* of the lattice —
-    when a concrete ctx is present the result is a pinned, possibly
-    non-top format.  The name reflects that it derives a bound *from a
-    type* (parallel to :meth:`_bound_of_def`, which retrieves a bound
-    by definition site).
     """
     match ty:
         case RealType():
@@ -1048,9 +1045,7 @@ def _is_zero_set(f: FormatBound) -> bool:
     """``f`` is the precise singleton ``{0}`` — and therefore exactly ``+0.0``.
 
     Callers use this to apply algebraic identities that hold for ``+0.0`` and
-    not for ``-0.0``, so reading the sign off the set is load-bearing — and it is
-    now structural: a negative zero is :data:`NEG_ZERO`, a different element, so
-    ``{Fraction(0)}`` cannot be holding one.  No invariant to maintain.
+    not for ``-0.0``; a negative zero is :data:`NEG_ZERO`, a different element.
     """
     return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
 
@@ -1580,23 +1575,7 @@ def _join_bounds(
 
 
 def _literal_bound(e: Decnum | Hexnum) -> FormatBound:
-    """A numeric literal's bound: the singleton set of its exact value.
-
-    Including a **signed zero**.  ``-0.0`` is a distinct real -- it compares
-    equal to ``+0.0`` but is told apart by ``copysign``, and by division, where
-    ``x / -0.0`` and ``x / +0.0`` have opposite signs -- and a :class:`Fraction`
-    cannot represent it.  :data:`NEG_ZERO` can, so the set states this literal's
-    value exactly like any other.
-
-    The discriminator is the literal's **value**, not the type ``as_real``
-    happens to return.  ``as_real`` returns a :class:`Float` only for a signed
-    zero today, but that invariant lives in :mod:`fpy2.ast.fpyast` and this
-    function cannot enforce it: a ``Float`` holding ``1e-400`` is not a zero, and
-    answering ``NEG_ZERO`` for it would be a false bound no consumer could
-    detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
-    ``as_rational`` path; an infinity or a NaN -- which no literal parses to --
-    has no rational value at all, so the honest answer is the scalar top.
-    """
+    """A numeric literal's bound: the singleton set of its exact value."""
     v = e.as_real()
     if isinstance(v, Float):
         if v.is_zero():
@@ -1670,15 +1649,7 @@ def _format_of_scope(scope: ContextScope) -> Format:
 
 
 #####################################################################
-# Pre-analysis cache.
-#
-# The three structural analyses :class:`DefineUse`, :class:`TypeInfer`,
-# :class:`ContextUse`, :class:`ArraySizeInfer` are independent of the
-# active rounding context — they describe the function's structure, not
-# its numerical formats.  When the same :class:`FuncDef` is reached from
-# multiple call sites (potentially under different contexts), we run
-# those analyses once and share the result; only :class:`FormatInfer`
-# itself re-runs per instantiation.
+# Pre-analysis cache: structural analyses, shared across instantiations.
 
 
 @dataclass(frozen=True)
@@ -1979,23 +1950,9 @@ class _FormatInferInstance(Visitor):
         self._scope_ctx_cache = {}
         # Digit-bound inference's answers, when a prior pass supplied them.
         self._digit_bound = digit_bound
-        # The instantiation signature the caller pinned.  ``None``
-        # means "no substitution" — the function is analyzed
-        # standalone, with declared parameter types and any symbolic
-        # function-level scope degrading to ``REAL_FORMAT`` at
-        # affected op sites.  Read by :meth:`_visit_function` to
-        # initialize parameter formats and by
-        # :meth:`_resolve_active_ctx` for scope substitution.
+        # Signature the caller pinned; `None` analyzes standalone.
         self._fn_fmt = fn_fmt
-        # Running join of every :class:`ReturnStmt` format the body
-        # walk has seen so far.  :meth:`_visit_return` folds each
-        # new return into this slot; :meth:`_visit_function` reads
-        # it after the body walk.  ``None`` doubles as both the
-        # "no returns visited yet" sentinel and the legitimate
-        # bound for void/bool returns — they coincide operationally
-        # since :class:`TypeInfer` already guarantees every return
-        # has the same static type, so the analysis can't see a
-        # mix of bool and non-bool returns in a single function.
+        # Join of every return's format; `None` until the first.
         self._return_fmt = None
         self._loop_iter_limit = loop_iter_limit
         self._range_set_threshold = range_set_threshold
@@ -2311,10 +2268,7 @@ class _FormatInferInstance(Visitor):
         how call-site instantiation flows that in.  A scope introduced by a
         ``with`` gets no such substitution — its context is whatever the
         ``with`` expression evaluates to, which has nothing to do with the
-        caller.  Substituting there reported an inner
-        ``with fp.MPFixedContext(n):`` as the caller's context, making the
-        rounding look like the identity and yielding a format that *excludes*
-        the real result."""
+        caller."""
         resolved = self._resolve_scope_ctx(e)
         return resolved if isinstance(resolved, Context) else None
 
@@ -2378,7 +2332,7 @@ class _FormatInferInstance(Visitor):
         """Returns the format of the rounding context scope for *e*.
 
         Symbolic scopes resolve through :attr:`_outer_ctx` when one
-        was provided; otherwise the legacy ``REAL_FORMAT`` fallback
+        was provided; otherwise the ``REAL_FORMAT`` fallback
         applies."""
         resolved = self._resolve_active_ctx(e)
         if resolved is not None:
@@ -2960,7 +2914,6 @@ class _FormatInferInstance(Visitor):
             case _:
                 return self._op_bound(e)
 
-    # Function calls: conservatively the top format of the return type
     def _visit_call(self, e: Call, ctx: None) -> FormatBound:
         for arg in e.args:
             self._visit_expr(arg, ctx)
@@ -3042,16 +2995,7 @@ class _FormatInferInstance(Visitor):
         if not isinstance(fn, Function):
             return None
         callee_outer = self._resolve_active_ctx(e)
-        # Build the callee's instantiation signature from this call
-        # site: the active rounding context, plus one format per
-        # parameter taken straight from the call-site argument
-        # expression.  This is what gives the callee the right
-        # signature: a callee invoked with ``FP64`` arguments under
-        # an ``FP32`` outer scope gets ``a: FP64, b: FP64, → FP32``
-        # — and any FP32-rounded operation on those doubles will
-        # trip the op-table's lossy-implicit-cast guard at emission
-        # time.  The ``ret_fmt`` slot is a placeholder; the
-        # sub-analysis will compute the real value from the body.
+        # Signature from the call site; the sub-analysis computes `ret_fmt`.
         arg_fmts = tuple(self.by_expr.get(arg) for arg in e.args)
         # Values, not just formats: a rounding mode has no format, and it is
         # exactly what a `PartialContext` in the callee needs to close.
@@ -3478,52 +3422,9 @@ class FormatInfer:
     """
     Format inference for FPy functions.
 
-    This analysis bounds the number format for each expression and variable
-    definition in an FPy program.  It uses two pre-analyses
-    (:class:`TypeInfer` and :class:`ContextUse`) and then performs a single
-    forward pass over the AST.
-
-    **Format lattice**::
-
-        FormatBound ::= None
-                      | SetFormat(values)     (known finite set of reals)
-                      | Format               (REAL_FORMAT is the scalar top)
-                      | TupleFormat(elts)
-                      | ListFormat(elt)
-
-    **Join rule**::
-
-        join(None, None)                 = None
-        join(SetFormat(a), SetFormat(b)) = SetFormat(a ∪ b)
-        join(SetFormat(s), fmt)          = fmt if every value in s fits in fmt
-                                         = REAL_FORMAT otherwise
-        join(f, f)                       = f
-        join(f1, f2)                     = (AbstractFormat.from_format(f1)
-                                            | AbstractFormat.from_format(f2)).format()
-                                                          (when both abstractable)
-                                         = REAL_FORMAT     (otherwise)
-        join(Tuple(a..), Tuple(b..))     = Tuple(join(ai, bi)..)
-        join(List(a), List(b))           = List(join(a, b))
-
-    This rule is applied at all control-flow merge points (phi nodes), including
-    branch merges (``if``/``if1``) and loop back-edges (``while``/``for``).
-
-    **Loops** are handled in one of two modes:
-
-    - **Bounded iteration**: when a ``for`` loop's iterable has a
-      statically-known length (per :class:`ArraySizeAnalysis`), the
-      analysis drives the phi update for *exactly* that many body
-      executions.  This mirrors runtime semantics and avoids any
-      widening fall-back — important for the exact-arithmetic lattice,
-      which has infinite ascending chains.
-    - **Fixpoint + widening**: ``while`` loops and ``for`` loops over
-      symbolic-length iterables iterate body + join until phi bounds
-      stop changing.  The AbstractFormat-mediated scalar join introduces
-      infinite ascending chains when exact arithmetic
-      (``+``/``-``/``*`` under :data:`REAL`) is applied to a phi'd
-      value, so the fixpoint runs at most ``loop_iter_limit`` iterations
-      before switching joins to widen-mode (distinct scalar Formats fall
-      back to ``REAL_FORMAT``) to force convergence.
+    Bounds the number format of each expression and variable definition in
+    an FPy program; see :mod:`fpy2.analysis.format_infer.analysis` for the
+    lattice, join rule, and inference rules.
 
     **Usage**::
 
@@ -3624,10 +3525,9 @@ class FormatInfer:
                 to bypass the declared parameter types — typically
                 derived from the caller's call-site argument
                 formats).  The ``ret_fmt`` slot is treated as
-                expected and overwritten in the result.  ``None``
-                falls back to the legacy behaviour: symbolic outer
-                scopes degrade to ``REAL_FORMAT`` and parameter
-                formats come from the declared types.
+                expected and overwritten in the result.  With ``None``,
+                symbolic outer scopes degrade to ``REAL_FORMAT`` and
+                parameter formats come from the declared types.
             loop_iter_limit:
                 Number of loop body+join iterations to run before
                 forcing joins of distinct scalar Formats to widen to

@@ -308,7 +308,6 @@ class _TypeInferInstance(Visitor):
                 length = _merge_length(a_ty.length, b_ty.length)
                 return self.tvars.add(ListType(elt_ty, length))
             case TupleType(), TupleType():
-                # TODO: what if the length doesn't match
                 if len(a_ty.elts) != len(b_ty.elts):
                     raise TypeInferError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
                 elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elts, b_ty.elts)]
@@ -386,15 +385,12 @@ class _TypeInferInstance(Visitor):
         else:
             match e:
                 case Len():
-                    # length operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType(None)
                 case Range1():
-                    # range operator
                     self._unify(arg_ty, RealType(None))
                     return ListType(RealType(None))
                 case Dim():
-                    # dimension operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType(None)
                 case Fst():
@@ -413,16 +409,13 @@ class _TypeInferInstance(Visitor):
                     self._unify(arg_ty, TupleType(head, tail))
                     return tail
                 case Enumerate():
-                    # enumerate operator
                     ty = self._fresh_type_var()
                     self._unify(arg_ty, ListType(ty))
                     return ListType(TupleType(RealType(None), ty))
                 case Sum() | AMin() | AMax():
-                    # list-reduce operators: list[real] -> real
                     self._unify(arg_ty, ListType(RealType(None)))
                     return RealType(None)
                 case AnyOf() | AllOf():
-                    # boolean list-reduce operators: list[bool] -> bool
                     self._unify(arg_ty, ListType(BoolType()))
                     return BoolType()
                 case _:
@@ -440,12 +433,10 @@ class _TypeInferInstance(Visitor):
         else:
             match e:
                 case Size():
-                    # size operator
                     self._unify(lhs_ty, ListType(self._fresh_type_var()))
                     self._unify(rhs_ty, RealType(None))
                     return RealType(None)
                 case Range2():
-                    # range2 operator
                     self._unify(lhs_ty, RealType(None))
                     self._unify(rhs_ty, RealType(None))
                     return ListType(RealType(None))
@@ -466,7 +457,6 @@ class _TypeInferInstance(Visitor):
         else:
             match e:
                 case Range3():
-                    # range3 operator
                     self._unify(first, RealType(None))
                     self._unify(second, RealType(None))
                     self._unify(third, RealType(None))
@@ -624,32 +614,25 @@ class _TypeInferInstance(Visitor):
         return ty
 
     def _visit_list_slice(self, e: ListSlice, ctx: None) -> Type:
-        # type check array
         value_ty = self._visit_expr(e.value, None)
         self._unify(value_ty, ListType(self._fresh_type_var()))
-        # type check endpoints
         if e.start is not None:
             start_ty = self._visit_expr(e.start, None)
             self._unify(start_ty, RealType(None))
         if e.stop is not None:
             stop_ty = self._visit_expr(e.stop, None)
             self._unify(stop_ty, RealType(None))
-        # same type as value_ty
         return value_ty
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> Type:
-        # type check condition
         cond_ty = self._visit_expr(e.cond, None)
         self._unify(cond_ty, BoolType())
 
-        # type check branches
         ift_ty = self._visit_expr(e.ift, None)
         iff_ty = self._visit_expr(e.iff, None)
         return self._unify(ift_ty, iff_ty)
 
     def _visit_attribute(self, e: Attribute, ctx: None) -> VarType:
-        # TODO: how to type check attributes?
-        # we expected the attribute value to be a module, but how do we propogate this information?
         self._visit_expr(e.value, None)
         return self._fresh_type_var()
 
@@ -701,21 +684,17 @@ class _TypeInferInstance(Visitor):
             self._unify(lhs_ty, rhs_ty)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None) -> None:
-        # type check condition
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
 
-        # type check body
         self._visit_block(stmt.body, None)
 
         self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None) -> None:
-        # type check condition
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
 
-        # type check branches
         self._visit_block(stmt.ift, None)
         self._visit_block(stmt.iff, None)
 
@@ -727,7 +706,6 @@ class _TypeInferInstance(Visitor):
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
 
-        # type check body
         self._visit_block(stmt.body, None)
 
         self._exit_loop(stmt)
@@ -741,7 +719,6 @@ class _TypeInferInstance(Visitor):
 
         self._enter_loop(stmt)
 
-        # type check body
         self._visit_block(stmt.body, None)
 
         self._exit_loop(stmt)
@@ -784,7 +761,6 @@ class _TypeInferInstance(Visitor):
             self._visit_statement(stmt, None)
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FunctionType:
-        # infer types from annotations
         arg_tys: list[Type] = []
         for arg in func.args:
             arg_ty = self._ann_to_type(arg.type)
@@ -802,12 +778,10 @@ class _TypeInferInstance(Visitor):
                 ty = self._fresh_type_var()
             self._set_type(d, ty)
 
-        # type check body
         self._visit_block(func.body, None)
         if self.ret_type is None:
             raise TypeInferError(f'function {func.name} has no return type')
 
-        # generalize the function type
         arg_tys = [self._resolve_type(ty) for ty in arg_tys]
         ret_ty = self._resolve_type(self.ret_type)
         return FunctionType(None, arg_tys, ret_ty)
@@ -818,10 +792,8 @@ class _TypeInferInstance(Visitor):
         return ret_ty
 
     def analyze(self) -> TypeAnalysis:
-        # type check the body
         ty = self._visit_function(self.func, None)
 
-        # generalize the output type
         fn_ty, subst = self._generalize(ty)
         fn_ty = cast(FunctionType, fn_ty)
 

@@ -2,27 +2,9 @@
 Call graph analysis.
 
 Builds the call graph of a :class:`~fpy2.ast.FuncDef` and everything it
-transitively calls.  The graph is keyed on ``FuncDef`` objects (by
-identity); each edge ``caller -> callee`` corresponds to a :class:`Call`
-targeting a user-defined :class:`~fpy2.function.Function`.  A call's
-target is its parse-time-resolved ``fn`` when set; when ``fn`` is ``None``
-(a call built without env resolution, e.g. FPCore import or an AST
-transform) the callee name is resolved against the containing function's
-environment.  Calls to primitives, context constructors, or builtins have
-no FPy body to recurse into, so they are treated as external leaves and
-excluded from the graph.
-
-FPy does not support recursion, so the call graph is a DAG.  This
-invariant is *enforced*: a direct (``f -> f``) or mutual
-(``a -> b -> a``) cycle raises :class:`CallGraphError`.  Downstream
-analyses may therefore assume acyclicity and a valid topological order.
-(The parser already rejects forward references, so a cycle cannot arise
-through ``@fpy`` decoration; the cycle check is a guard for
-programmatically-built ASTs, e.g. FPCore import or AST transforms.)
-
-The analysis exposes a *leaves-first* iteration order (callees before
-callers, the root last), which is the natural order for bottom-up
-analyses that need a callee's result before processing its callers.
+transitively calls.  Calls to primitives, context constructors, or builtins are
+external leaves, excluded from the graph.  A cycle raises :class:`CallGraphError`.
+The analysis exposes a *leaves-first* iteration order (callees before callers).
 """
 
 import dataclasses

@@ -88,9 +88,6 @@ class RealFloat(numbers.Rational):
         The significand may be specified with `c` or `m` (unless `x` is given).
         If `x` is given, any field not specified is copied from `x`.
         """
-        # if x is not None and not isinstance(x, RealFloat):
-        #     raise TypeError(f'expected RealFloat, got {type(x)}')
-
         # c and negative
         if c is not None:
             if m is not None:
@@ -231,10 +228,7 @@ class RealFloat(numbers.Rational):
                 other = RealFloat.from_int(other)
             case float():
                 if math.isnan(other) or math.isinf(other):
-                    # ``self`` is always finite; nan / +/-inf absorb the
-                    # addend.  Return ``other`` directly — converting
-                    # ``self`` to a Python float would raise for any
-                    # ``RealFloat`` outside ``float``'s representable range.
+                    # ``self`` is finite; nan / +/-inf absorb the addend
                     return other
                 else:
                     other = RealFloat.from_float(other)
@@ -337,7 +331,6 @@ class RealFloat(numbers.Rational):
                 other = RealFloat.from_int(other)
             case float():
                 if math.isnan(other) or math.isinf(other):
-                    # Convert self to float and perform float arithmetic
                     other_sgn = math.copysign(1.0, other) # extract the sign bit
                     s = self._s != (other_sgn < 0)
                     res_sgn = -1.0 if s else 1.0
@@ -1007,8 +1000,6 @@ class RealFloat(numbers.Rational):
         If `p` or `n` is specified, then `self` is normalized
         accordingly before computing the next value.
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
-
-        If `self == 0`, then a ValueError is raised.
         """
         if n is None:
             n = self.n
@@ -1058,7 +1049,7 @@ class RealFloat(numbers.Rational):
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
         """
         if self._c == 0:
-            # step away from zero towards positive infinity
+            # step away from zero towards negative infinity
             x = self if self._s else RealFloat(s=True, exp=self._exp)
             return x.next_away_zero(p, n)
         elif self._s:
@@ -1392,7 +1383,7 @@ class RealFloat(numbers.Rational):
         If only `min_n` is given, rounding is performed like fixed-point
         rounding and the resulting significand may have more than `max_p` bits
         (any values can be clamped after this operation).
-        If only `min_p` is given, rounding is performed liked floating-point
+        If only `max_p` is given, rounding is performed liked floating-point
         without an exponent bound; the integer significand has at
         most `max_p` digits.
         If both are specified, rounding is performed like IEEE 754 floating-point
@@ -1402,12 +1393,11 @@ class RealFloat(numbers.Rational):
         When `num_randbits=0`, the rounding is performed by rounding
         using the rounding mode specified by `rm`.
 
-        When `randbits` is specified, the rounding is performed stochastically
-        using `randbits` rounding bits to decide which way to round. If `randbits=None`,
+        When `num_randbits` is specified, the rounding is performed stochastically
+        using `num_randbits` rounding bits to decide which way to round. If `num_randbits=None`,
         then all additional bits are considered rounding bits. The rounding mode specified
         by `rm` decides how the additional rounding bits are themselves rounded.
-        If `randbits=None`, rounding is decided by Python's native `random` module,
-        otherwise the value is used as the "randomly" sampled bits.
+        The random bits are drawn from `rng`, or Python's native `random` module if `rng=None`.
         """
 
         if max_p is not None and not isinstance(max_p, int):

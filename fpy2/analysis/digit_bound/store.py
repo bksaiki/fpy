@@ -385,7 +385,7 @@ class DigitBoundStore:
         """The :meth:`prec` of a value bounded by *msb* on the grid *lsb*, the
         finest digit position *lsb* reaches, and *msb*'s greatest value.
 
-        Asked as one query: a backend that optimizes (`z3-opt`) answers all
+        Asked as one query: a backend that optimizes answers all
         three in one search; the default bisects each in turn.
         """
         prec, (neg_exp, mag) = self._prec(msb, lsb, (-lsb, msb), assuming)

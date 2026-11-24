@@ -49,17 +49,12 @@ must hold, tried in this order:
 
 Three conditions on the third rule are load-bearing, not cautious:
 
-* **Both roundings to nearest.** Measured: ``add`` through an intermediate far
-  wider than any rule asks still disagrees with a *directed* target.
-  Multiplication escapes this only by going through ``rndExact``.
+* **Both roundings to nearest.** Multiplication escapes this only by going through ``rndExact``.
 * **Every operand representable in the target.** FPy's signature is
   ``op: Fx -> Fy -> F1`` -- only the result is rounded -- so this needs checking.
   An operand on a finer grid lets the exact result land within half an
   intermediate ulp of a target midpoint, which the proofs' separation argument
-  rules out.  Measured, 3-digit target over the rule's exact 7-digit
-  intermediate: 4-digit operands already disagree on 16 of 6400 pairs, 6-digit
-  on 1748 of 102400.  Containment is against ``F1``, not ``F2`` -- every one of
-  those operands is inside ``F2``.
+  rules out.  Containment is against ``F1``, not ``F2``.
 * **No mixed exponent family for ``/`` and ``sqrt``**, which are proved
   separately for FLX and FLT.  ``+`` is stated over ``WithBot`` and spans both.
 
@@ -148,7 +143,7 @@ _NOT_SPLITTABLE = (
     Len, Size, Dim, Fst, Snd,
     # `min`/`max` *select* an argument and hand it back with its own format
     # rather than rounding to the active context, so there is no rounding here
-    # to split -- measured: every other real-valued operation does round
+    # to split
     Min, Max,
     # not finite reals, which is what the theorems quantify over
     ConstInf, ConstNan,

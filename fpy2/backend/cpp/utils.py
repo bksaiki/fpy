@@ -5,8 +5,7 @@ The compiler's :meth:`CppCompiler.compile` returns just a function
 definition (so single-function tests can use exact-string equality).
 Callers that want a complete translation unit pull
 :meth:`CppCompiler.headers` and :meth:`CppCompiler.helpers`
-explicitly and concatenate them — same shape as the legacy
-``cpp/`` backend.
+explicitly and concatenate them.
 
 Headers track exactly what the emitter uses; the list below is the whole
 dependency set.

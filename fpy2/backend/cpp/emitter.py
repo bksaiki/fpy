@@ -187,8 +187,8 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTN: 'FE_DOWNWARD',
 }
 
-# Nullary constants.  C++11 has no spelling for these, but each is fixed once
-# the active context is known, so it is evaluated and emitted as a literal.
+# Nullary constants.  Each is fixed once the active context is known, so it is
+# evaluated and emitted as a literal (or `numeric_limits`, for NaN and infinity).
 _NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstPi: fpy_ops.const_pi,
     ConstE: fpy_ops.const_e,
@@ -1028,8 +1028,7 @@ class CppEmitter(Visitor):
         name = self.variables.def_to_name[self.storage.class_members[c][0]]
         storage = self.storage.class_storage[c]
         # Zero-initialise via ``T name{};`` so reads-before-writes
-        # are well-defined (FPy analyses ensure this can't happen,
-        # but the initialiser also serves as a paper-trail).
+        # are well-defined.
         if isinstance(storage, CppList):
             # a bare handle is a *null* ``shared_ptr``, not an empty list, so a
             # hoisted list must be given one
@@ -1062,8 +1061,6 @@ class CppEmitter(Visitor):
                 # ``x = y`` binds a reference rather than copying: a tuple
                 # copy is O(size), a handle copy a refcount bump.
                 if self._binds_reference(target_def):
-                    # ``x = y`` where both are read-only aggregates: bind a
-                    # const reference instead of copying the whole value.
                     src = self._visit_expr(stmt.expr, ctx)
                     target_name = self.variables.def_to_name[target_def]
                     # `auto&` when the alias must stay writable
@@ -1278,18 +1275,9 @@ class CppEmitter(Visitor):
     ) -> bool:
         """Can a value bounded by *bound*, emitted as *src*, live in *want*?
 
-        The third question about a conversion, after what type the *place* holds
-        and what type the *expression* has -- the weaker one, and the one
-        soundness turns on: :func:`scalar_fits_in` asks whether the two *types*
-        nest, where a conversion only needs the *values* to.  They come apart
-        wherever storage is wider than the bound it was chosen to hold:
-        ``round_SINT64(x: FP32)`` reports ``int64_t`` and is 24 significand
-        bits, which a ``float`` holds exactly.
-
-        Takes the *bound* rather than the expression, since a list element has
-        no expression of its own; see `docs/todos/backend-cpp.md`.  *cls*, where
-        there is an expression, narrows the bound by the special values it
-        rules out (:func:`bound_fits_in_scalar`).
+        Weaker than :func:`scalar_fits_in`, which asks whether the *types* nest:
+        ``round_SINT64(x: FP32)`` is ``int64_t`` but fits a ``float``.  *cls*
+        narrows the bound by the special values it rules out.
         """
         return scalar_fits_in(src, want) or bound_fits_in_scalar(bound, want, cls)
 
@@ -1706,9 +1694,6 @@ class CppEmitter(Visitor):
                 at=stmt,
             )
         rctx = self._resolve_used_ctx(stmt)
-        # ``REAL`` doesn't correspond to any C++ rounding mode — see
-        # the same comment in :meth:`_visit_function`.  Treat it as
-        # a pass-through; per-op widening dispatch handles the body.
         if rctx is None or rctx is REAL:
             # No op uses this scope, or the scope is REAL (no fenv mode).
             self._visit_block(stmt.body, ctx)
@@ -1744,8 +1729,7 @@ class CppEmitter(Visitor):
         return self._emit_real_literal(e.as_real(), at=e)
 
     def _visit_integer(self, e: Integer, ctx: None) -> str:
-        # Through the shared path, which range-checks: `str(e.val)` here was a
-        # second way to emit an integer too large for a C++ integer literal.
+        # through the shared path, which range-checks
         return self._emit_numeric_literal(e.as_rational(), at=e)
 
     def _visit_rational(self, e: Rational, ctx: None) -> str:
@@ -2037,8 +2021,7 @@ class CppEmitter(Visitor):
 
         Two passes, to prefer a narrower signature: first those whose output
         already *is* ``result_ty``, then those needing the downcast.  Each is
-        tried on types before values: :func:`scalar_fits_in` first, so every
-        signature the table used to pick it still picks, and
+        tried on types before values: :func:`scalar_fits_in` first, and
         :meth:`_value_fits` only where nothing qualified.
 
         A class narrows both ``result_ty`` and the operand storages, so it
@@ -2115,33 +2098,20 @@ class CppEmitter(Visitor):
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case Cast():
-                # ``Cast(arg)`` rounds ``arg`` into the active context
-                # and asserts the round was lossless (it's an error to
-                # cast a value the target format can't hold exactly).
-                # Lowered as ``static_cast`` → bind to a temp →
-                # ``assert(arg == tmp || (NaN-aware equality))``.
                 return self._emit_exact_cast(e, arg)
             case Not():
-                # Logical negation — operand is bool, result is bool.
-                # No rounding context involved.
                 return f'(!{arg})'
             case IsFinite() | IsInf() | IsNan() | IsNormal() | Signbit():
                 return self._emit_fp_predicate(e, arg)
             case Range1():
                 return self._emit_range(e, ctx)
             case Dim():
-                # ``dim(xs)`` returns the nesting depth of a list — a
-                # static property of the value's storage shape.  Read
-                # it off format inference and emit the literal int.
+                # nesting depth: a static property of the storage shape
                 result_ty = self._storage_for_expr(e)
                 depth = _list_depth(self._storage_for_expr(e.arg))
                 return f'static_cast<{result_ty.format()}>({depth})'
             case Len():
-                # ``len(xs)`` — result format is INTEGER, which storage
-                # selection rounds to a concrete C++ integer type.
-                # Casting ``size()`` (a ``size_t``) keeps the inferred
-                # type stable across platforms where ``size_t``
-                # differs from ``int64_t``.
+                # cast ``size_t`` to the inferred integer storage
                 result_ty = self._storage_for_expr(e)
                 arg_ty = self._storage_for_expr(e.arg)
                 return (
@@ -2569,12 +2539,6 @@ class CppEmitter(Visitor):
             access = self._list_at(level, access, '0')
         result_ty = self._storage_for_expr(e)
         return f'static_cast<{result_ty.format()}>({self._list_len(levels[-1], access)})'
-
-    # ------------------------------------------------------------------
-    # Stubs for AST nodes not yet handled — classification ops
-    # (``IsFinite`` / ``IsNan`` / etc.) and statement kinds
-    # (``Assert`` / ``Effect`` / ``Pass``) raise a clean error
-    # pointing at the node kind.
 
     def _unsupported(self, kind: str, at: Ast | None = None) -> NoReturn:
         raise CppEmitError(
@@ -3469,13 +3433,7 @@ class CppEmitter(Visitor):
     def _value_class(self, e: Expr) -> ValueClass:
         """Which of NaN / infinity / zero / finite *e* can be.
 
-        A class is a fact about the FPy value, where the guards below protect a
-        C++ operation on its *storage*.  The two coincide because storage is
-        chosen to contain the expression's format, so a value in that format
-        survives the trip -- the invariant the rest of the backend already rests
-        on.  A narrowing `Cast` is not a counterexample: the analysis rounds
-        through the target context, so casting ``1e300`` to `FP32` comes back
-        admitting an infinity, and the guard stays.
+        Sound for its storage, since storage contains the expression's format.
         """
         return self.class_info.classify(e)
 
@@ -3876,9 +3834,7 @@ class CppEmitter(Visitor):
     def _visit_list_ref(self, e: ListRef, ctx: None) -> str:
         # ``xs[i]`` — C++ ``operator[]`` takes ``size_t``, so we route
         # the index through an explicit ``static_cast<size_t>`` rather
-        # than relying on implicit conversion.  Bounds-checking is
-        # still TODO (FPy's interpreter is strict; we currently match
-        # C++'s undefined-behaviour-on-out-of-range).
+        # than relying on implicit conversion.
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         return self._list_at(self._storage_for_expr(e.value), value, index)
@@ -3886,7 +3842,7 @@ class CppEmitter(Visitor):
     def _visit_list_slice(self, e: ListSlice, ctx: None) -> str:
         # `auto&& _tmpN = <xs>` binds an lvalue without copying and
         # lifetime-extends a prvalue, so `<xs>` is evaluated exactly once, as
-        # the interpreter does.  Bounds-checking is a TODO; see backend-cpp.md.
+        # the interpreter does.
         arr_ty = self._storage_for_expr(e.value)
         arr_tmp = self._bind_operand(self._visit_expr(e.value, ctx))
 
@@ -3912,8 +3868,7 @@ class CppEmitter(Visitor):
         # ``cond ? ift : iff`` — both branches must share a C++ type,
         # so when their storages differ we cast each to the IfExpr's
         # unified storage (chosen by format inference + storage
-        # selection over the merged formats).  Non-scalar branches
-        # must already match — there's no widening for lists/tuples.
+        # selection over the merged formats).
         out_ty = self._storage_for_expr(e)
         if not isinstance(out_ty, CppScalar):
             # A list or tuple arm is built at the ternary's storage, or
@@ -4110,9 +4065,6 @@ class CppEmitter(Visitor):
         A ``Range*`` is a counter loop using *decl* as given; anything else is a
         range-for, where :meth:`_foreach_decl` decides the element binding and a
         ``None`` *target_def* marks a discarded element.
-
-        Shared with :meth:`_open_comp_loop`, which needs the header alone -- it
-        leaves the writer open for its caller to fill the body.
         """
         match iterable:
             case Range1():
@@ -4188,7 +4140,7 @@ class CppEmitter(Visitor):
         target = self.variables.def_to_name[target_def]
         # Fold the type into the for header iff the counter is a
         # single-writer class (the common case).  Otherwise the counter
-        # was hoisted at the function top and we just reassign here.
+        # was hoisted before the outermost ``IfStmt`` and we reassign here.
         if target_def in self.variables.declare_at_assign:
             # A range counter transiently reaches the exit-test overshoot,
             # which the loop variable's element storage may be too narrow to

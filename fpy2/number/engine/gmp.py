@@ -57,13 +57,7 @@ def _mpfr_eval(
     *args: Float,
     prec: int | None = None,
     n: int | None = None) -> Float:
-    """
-    Evaluates `gmp_fn(*args)` such that the result may be safely re-rounded.
-    Either specify:
-    - `prec`: the number of digits, or
-    - `n`: the first unrepresentable digit
-    If both are specified, `prec` takes precedence.
-    """
+    """Evaluates `gmp_fn(*args)` such that the result may be safely re-rounded."""
     gmp_args = tuple(float_to_mpfr(x) for x in args)
     return mpfr_call(gmp_fn, gmp_args, prec=prec, n=n)
 

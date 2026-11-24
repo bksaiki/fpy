@@ -197,8 +197,6 @@ class AbstractFormat:
         """
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
-        # exponent: min(e1, e2)
-        # bounds: b1 + b2
         exp = min(self.exp, other.exp)
         pos_bound = self.pos_bound + other.pos_bound
         neg_bound = self.neg_bound + other.neg_bound
@@ -256,10 +254,6 @@ class AbstractFormat:
         """
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
-        # precision: p1 + p2 (clamped to >=1 so an exactly-zero
-        # product still has valid ``prec``)
-        # exponent: e1 + e2
-        # bounds: b1 * b2
         p_self, p_other = self.effective_prec(), other.effective_prec()
         if p_self == 1 or p_other == 1:
             # A single-precision-bit format holds nothing but powers of two
@@ -383,11 +377,7 @@ class AbstractFormat:
         ``enable_*`` flags.
 
         ``has_neg_zero`` round-trips via ``enable_neg_zero``, which every fixed
-        *and* float format carries.  It has to: an integer-valued bound
-        materializes as a float-shaped ``MPBFloatFormat``, whose value set
-        includes a ``-0.0`` unless told otherwise, and a bound claiming one is
-        kept off the integer rungs of the C++ storage ladder by containment --
-        correctly, as no C++ integer type has one.
+        *and* float format carries.
         """
         if not isinstance(fmt, Format):
             raise TypeError(f'Expected \'Format\', got {fmt}')
@@ -485,8 +475,7 @@ class AbstractFormat:
                     # Only integers: describe it as fixed-point.  Materializing
                     # as a float would be correct but perverse — every value would
                     # be subnormal — and, more to the point, a float format has a
-                    # signed zero.  `int8 + int8` lands here, and describing it as a
-                    # float is what cost it its `int16_t` storage.
+                    # signed zero.
                     return MPBFixedFormat(
                         self.exp - 1, pos_bound, neg_bound,
                         enable_nan=enable_nan, enable_inf=enable_inf,
@@ -622,9 +611,7 @@ class AbstractFormat:
         Condition 4 of :meth:`contained_in`, factored out because storage
         selection needs it *without* the magnitude conditions: its fallback for an
         unbounded integer deliberately ignores the bounds, but must not ignore
-        these.  Keeping one implementation is the point -- ``has_neg_zero`` was
-        added to the containment check and missed in that fallback, which let a
-        bound carrying a ``-0.0`` reach an integer storage.
+        these.
         """
         return not (
             (self.has_pos_inf and not other.has_pos_inf)

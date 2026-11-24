@@ -1,35 +1,9 @@
 """
 Storage inference: one storage format per runtime object.
 
-Format inference bounds an expression by the smallest format its value can take;
-storage inference picks, from a distinguished set the target can spell, one
-format that *contains* that bound:
-
-    e : real   fmt(e) = F   F <= S
-    ------------------------------
-              store(e) = S
-
-The definitions denoting one runtime object form a class -- a union-find over
-``reaching_defs.same_object_defs``, which unions on phi edges and in-place
-updates and nothing else -- and each class stores at the join of its members'
-bounds.  A plain rebind starts a *new* class with its own, possibly narrower,
-storage: ``store`` is per object, not per name.
-
-The domain is :class:`FormatBound` itself, so a backend supplies an ordered
-sequence of formats and a fallback hook (:class:`StorageDomain`), nothing more.
-Spelling a format in the target's own types is the backend's, as is
-*representation* -- whether a list is a handle or a value is no property of a
-format.
-
-The join gives *containment*: every member of a class fits its class's storage.
-It says nothing about *realizability* -- whether a value can be got into a place
-whose storage was fixed elsewhere, such as a parameter or a callee's result --
-which is where every refusal a consumer raises comes from.  For a scalar that is
-a question about formats; for a list it is one about the heap, since changing an
-element type means a new buffer and so a new object.
-
-Termination rests on ``FormatBound`` being finite-depth: a cycle would need
-``xs[0] = xs``, which fails to unify.
+The definitions denoting one runtime object form a class (a union-find over
+``reaching_defs.same_object_defs``), and each class stores at the join of its
+members' bounds, chosen from a backend's :class:`StorageDomain`.
 """
 
 from collections import defaultdict

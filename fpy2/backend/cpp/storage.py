@@ -82,8 +82,8 @@ _LADDER_RANK: dict[CppScalar, int] = {ty: i for i, (ty, _) in enumerate(_SIGMA)}
 
 
 def ladder_rank(ty: CppScalar) -> int:
-    """Where *ty* sits on the ladder :func:`choose_storage_scalar` walks,
-    narrowest first; anything off the ladder ranks widest.
+    """Where *ty* sits on the storage ladder, narrowest first; anything off
+    the ladder ranks widest.
 
     A *total* order where :func:`scalar_fits_in` is only partial -- `int32_t`
     and `float` each hold values the other does not.
@@ -113,11 +113,7 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
 def choose_storage(bound: FormatBound, cls: ClassBound = None) -> CppType:
     """The storage containing *bound*, spelled.
 
-    One implementation, in the analysis: :func:`of_bound` searches the domain and
-    :func:`to_cpp` spells the result.  The search has a subtlety worth not
-    repeating -- the sequence is a tie-break, not a presentation order -- so the
-    backend asks rather than walking the ladder itself.  *cls* narrows the
-    bound; see :func:`~fpy2.analysis.storage_infer.of_bound`.
+    *cls* narrows the bound; see :func:`~fpy2.analysis.storage_infer.of_bound`.
     """
     return to_cpp(of_bound(DOMAIN, bound, cls))
 

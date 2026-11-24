@@ -22,12 +22,7 @@ __all__ = [
 
 
 def zero_sign(x: RealFloat | Float, enable_neg_zero: bool) -> bool:
-    """The sign *x* keeps under a context with `enable_neg_zero`.
-
-    Dropped for a zero the context has no negative of, so a rounding's result
-    is always one of `format()`'s own values.  A negative value can round
-    *down* to zero, so this is asked after rounding as well as before it.
-    """
+    """The sign *x* keeps under a context with `enable_neg_zero`."""
     return x.s and (enable_neg_zero or not x.is_zero())
 
 
@@ -174,13 +169,13 @@ class Context(ABC):
 
     def round_at(self, x: Real | RealFloat | str, n: int, *, exact: bool = False) -> Float:
         """
-        Rounding any number of a representable value with
+        Rounds any number to a representable value with
         an unnormalized exponent of at minimum `n + 1`.
 
         Rounding is done by the following rules:
 
         - if `x` is representable and has an unnormalized exponent
-          of at minimum `n + 1`, then `self.round_n(x, n) == x`
+          of at minimum `n + 1`, then `self.round_at(x, n) == x`
         - if `x` is between two representable values `i1 < x < i2`
           where both `i1` and `i2` have unnormalized exponents of at
           minimum `n + 1`,  then the context information determines

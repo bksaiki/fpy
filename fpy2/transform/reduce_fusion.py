@@ -14,11 +14,8 @@ eliminating the intermediate ``list[bool]``::
 
 (``all`` seeds ``True`` and combines with ``and``.)
 
-Unfused, the comprehension materializes the whole list before the reduction
-scans it.  Whether skipping that is a *win* depends on the list's
-representation, and where the length is proven it is a loss -- see "When
-``ReduceFusion`` pays, and when it costs" in ``docs/todos/backend-cpp.md`` for
-the measurements; *sized* says where it is skipped.
+Where the list's length is proven, fusing is a loss (see
+``docs/todos/backend-cpp.md``); *sized* says where it is skipped.
 
 ``b`` is bound rather than inlined into ``acc or <elt>``, and the bind is
 load-bearing: FPy's ``or`` short-circuits, so an inlined element would stop
@@ -28,10 +25,7 @@ observable.  Binding forces every element, matching both the unfused program
 and CPython — whose ``any`` short-circuits the *iterable*, but is handed an
 already-built list.
 
-Only the boolean reductions are fused, and the others turn out not to want it:
-fusing ``Sum`` / ``AMin`` / ``AMax`` measures neutral-to-worse, and is *also*
-blocked on the cpp emitter accepting an implicit narrowing inside
-``std::accumulate`` that it rejects at an ordinary assignment.  Both are in
+Only the boolean reductions are fused; for ``Sum`` / ``AMin`` / ``AMax``, see
 ``docs/todos/backend-cpp.md``.  Multi-stage comprehensions
 (``[e for a in xs for b in ys]``) would need nested loops and are left alone.
 
@@ -109,7 +103,7 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
         return self._visit_function(self.func, None)
 
     # ------------------------------------------------------------------
-    # Block walk — the ``_Ctx``-accumulator pattern from ``ZipElim``.
+    # Block walk — the accumulator pattern of ``iter_elim.Ctx``.
 
     def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, Any]:
         block_ctx = _Ctx.default()

@@ -287,25 +287,18 @@ class _FPCoreCompileInstance(Visitor):
         return fpc.UnknownOperator(*args, name=name)
 
     def _visit_round(self, e: Round, ctx: None) -> fpc.Expr:
-        # round expression
         match e.arg:
             case Decnum():
-                # round(n) => n
                 return fpc.Decnum(e.arg.val)
             case Hexnum():
-                # round(n) => n
                 return fpc.Hexnum(e.arg.val)
             case Integer():
-                # round(n) => n
                 return fpc.Integer(e.arg.val)
             case Rational():
-                # round(p/q) => p/q
                 return fpc.Rational(e.arg.p, e.arg.q)
             case Digits():
-                # round(digits(m, e, b)) => digits(m, e, b)
                 return fpc.Digits(e.arg.m, e.arg.e, e.arg.b)
             case _:
-                # round(e) => cast(e)
                 arg = self._visit_expr(e.arg, ctx)
                 return fpc.Cast(arg)
 
@@ -517,8 +510,6 @@ class _FPCoreCompileInstance(Visitor):
         )
 
     def _visit_min(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # Left-fold pairwise via the NaN-propagating, signed-zero-correct
-        # minimum (see :meth:`_fpc_minimum`).
         vals = [self._visit_expr(arg, ctx) for arg in args]
         min_expr = vals[0]
         for val in vals[1:]:
@@ -526,8 +517,6 @@ class _FPCoreCompileInstance(Visitor):
         return min_expr
 
     def _visit_max(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # Left-fold pairwise via the NaN-propagating, signed-zero-correct
-        # maximum (see :meth:`_fpc_maximum`).
         vals = [self._visit_expr(arg, ctx) for arg in args]
         max_expr = vals[0]
         for val in vals[1:]:
@@ -535,17 +524,12 @@ class _FPCoreCompileInstance(Visitor):
         return max_expr
 
     def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # sum(xs) → fold over the list with +.  Shape documented on
-        # :meth:`_visit_list_reduce`.
         return self._visit_list_reduce(arg, fpc.Add, ctx)
 
     def _visit_amin(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # min(xs) → fold over the list with the IEEE 754-2019 ``minimum``
-        # (see :meth:`_fpc_minimum`).
         return self._visit_list_reduce(arg, self._fpc_minimum, ctx)
 
     def _visit_amax(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # max(xs) → fold over the list with the IEEE 754-2019 ``maximum``.
         return self._visit_list_reduce(arg, self._fpc_maximum, ctx)
 
     def _visit_list_reduce(
@@ -636,45 +620,35 @@ class _FPCoreCompileInstance(Visitor):
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
         if type(e) not in _NULLARY:
-            # unknown operator
             raise NotImplementedError('no FPCore operator for', e)
         return _NULLARY[type(e)]
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
         cls = _UNARY.get(type(e))
         if cls is not None:
-            # known unary operator
             arg = self._visit_expr(e.arg, ctx)
             return cls(arg)
         else:
             match e:
                 case Len():
-                    # len expression
                     return self._visit_len(e.arg, ctx)
                 case Range1():
-                    # range expression
                     return self._visit_range1(e.arg, ctx)
                 case Dim():
-                    # dim expression
                     return self._visit_dim(e.arg, ctx)
                 case Fst() | Snd():
                     # tuple accessors — fold a chain (e.g. ``fst(snd(e))``)
                     # into a single ``ref``.
                     return self._emit_tuple_accessor(e, ctx)
                 case Enumerate():
-                    # enumerate expression
                     return self._visit_enumerate(e.arg, ctx)
                 case Sum():
-                    # sum expression
                     return self._visit_sum(e.arg, ctx)
                 case AMin():
-                    # min(xs) reduce-form
                     return self._visit_amin(e.arg, ctx)
                 case AMax():
-                    # max(xs) reduce-form
                     return self._visit_amax(e.arg, ctx)
                 case AnyOf() | AllOf():
-                    # any(bs) / all(bs) boolean reduce-forms
                     return self._visit_bool_reduce(e, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
@@ -682,26 +656,21 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
         cls = _BINARY.get(type(e))
         if cls is not None:
-            # known binary operator
             arg0 = self._visit_expr(e.first, ctx)
             arg1 = self._visit_expr(e.second, ctx)
             return cls(arg0, arg1)
         else:
             match e:
                 case Size():
-                    # size expression
                     return self._visit_size(e.first, e.second, ctx)
                 case Range2():
-                    # range expression
                     return self._visit_range2(e.first, e.second, ctx)
                 case _:
-                    # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
         cls = _TERNARY.get(type(e))
         if cls is not None:
-            # known ternary operator
             arg0 = self._visit_expr(e.first, ctx)
             arg1 = self._visit_expr(e.second, ctx)
             arg2 = self._visit_expr(e.third, ctx)
@@ -709,33 +678,25 @@ class _FPCoreCompileInstance(Visitor):
         else:
             match e:
                 case Range3():
-                    # range expression
                     return self._visit_range3(e.first, e.second, e.third, ctx)
                 case _:
-                    # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
         cls = _NARY.get(type(e))
         if cls is not None:
-            # known n-ary operator
             return cls(*[self._visit_expr(c, ctx) for c in e.args])
         else:
             match e:
                 case Zip():
-                    # zip expression
                     return self._visit_zip(e.args, ctx)
                 case Min():
-                    # min expression
                     return self._visit_min(e.args, ctx)
                 case Max():
-                    # max expression
                     return self._visit_max(e.args, ctx)
                 case Empty():
-                    # empty expression
                     return self._visit_empty(e.args, ctx)
                 case _:
-                    # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _check_comparable(self, e: Compare) -> None:
@@ -1278,13 +1239,6 @@ class _FPCoreCompileInstance(Visitor):
 
         for stmt in reversed(stmts):
             if isinstance(stmt, ReturnStmt):
-                # FPCore is functional — every construct produces a
-                # single expression value, so multiple-exit control
-                # flow has no natural lowering.  FPy allows multiple
-                # ``return`` statements for the interpreter and cpp
-                # backends; the FPCore backend specifically rejects
-                # them.  Use the FPy interpreter, or rewrite to a
-                # single tail return, if you need this program.
                 raise FPCoreCompileError(
                     'FPCore does not support multiple return statements'
                 )

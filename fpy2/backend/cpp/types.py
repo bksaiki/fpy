@@ -5,9 +5,6 @@ A *storage type* is the C++ type used to hold a value at runtime.  It
 is distinct from the *rounding format* (per :mod:`format_infer`) — the
 two are related but not equal: storage shapes the variable's
 declaration, rounding shapes which arithmetic the result respects.
-
-The ladder mirrors :mod:`fpy2.backend.cpp.types` but storage selection
-is driven by :class:`FormatInfer` rather than concrete contexts.
 """
 
 import enum

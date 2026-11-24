@@ -12,7 +12,8 @@ The pipeline, in order, and why:
    before inlining copies what it would clear.
 4. The normal form, then ``unfold_round`` and the normal form again: the
    lowering sees inlined callees and emits branches of its own.
-5. ``Simplify``: clears what the lowerings leave.
+5. ``Simplify`` and ``hoist``: clears what the lowerings leave, then hoists
+   loop-invariant work.
 6. ``split_names``, as Triton holds a name a loop assigns at one type; then
    tiling, after the normal form so it sees inlined loops; then ``Simplify``.
 

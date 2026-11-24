@@ -15,23 +15,17 @@ There are boolean and real number scalar types,
 rounding contexts, (heterogenous) tuples, (homogenous) lists,
 function types, and type variables.
 
-The type system may be extended with statically known rounding contexts.
+The type system may be extended with statically known formats and caller contexts.
 
 t' ::= bool
-         | real C
+         | real F
          | context
          | t1' x t2'
          | list t'
          | [C] t1' -> t2'
          | a
 
-where C is an inferred context variable or a context variable.
-
-Compared to the standard FPy type system, the differences are:
-- real types are annotated with a context to indicate
-the rounding context under which the number is constructed
-- function types have a caller context to indicate
-the context in which the function is called (this is usually a variable).
+where F is a format and C is a context variable or a concrete context.
 """
 
 from abc import ABC, abstractmethod
@@ -48,7 +42,6 @@ __all__ = [
     'FunctionType',
     'ListType',
     'RealType',
-    # aliases
     'ScalarType',
     'TupleType',
     'Type',
@@ -242,16 +235,13 @@ class ListType(Type):
     length: int | NamedId | None
     """optional list size: a known ``int``, a symbolic ``NamedId``, or
     ``None`` (unknown).  This is *metadata* — like :attr:`RealType.fmt` it
-    is ignored by ``__eq__`` / ``__hash__`` (and hence by unification), and
-    is read only by array-size inference, monomorphization, and the FPCore
-    backend."""
+    is ignored by ``__eq__`` / ``__hash__`` (and hence by unification)."""
 
     def __init__(self, elt: Type, length: int | NamedId | None = None) -> None:
         self.elt = elt
         self.length = length
 
     def __eq__(self, other: object) -> bool:
-        # ``length`` is metadata and deliberately excluded from equality.
         return isinstance(other, ListType) and self.elt == other.elt
 
     def __hash__(self) -> int:

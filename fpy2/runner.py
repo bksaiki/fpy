@@ -1,5 +1,5 @@
 """
-This module defines a running for design-space exploration tasks.
+This module defines a runner for design-space exploration tasks.
 """
 
 import concurrent.futures

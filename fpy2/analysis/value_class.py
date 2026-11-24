@@ -1,65 +1,8 @@
 """
 Path-sensitive value-class analysis.
 
-One question per expression: can this value be a NaN, an infinity of either
-sign, a zero, or a finite non-zero?  The five atoms form a finite lattice —
-union is the join, intersection the meet, so no widening is needed — and it is
-*refined* at every ``if`` statement that tests a value's class.  Not at an
-``IfExpr``, as format inference does not: a backend may evaluate both arms.
-
-Format inference cannot answer this, and this is deliberately not a fourth flag
-on :class:`~fpy2.analysis.format_infer.AbstractFormat`, which already carries
-``has_nan`` / ``has_pos_inf`` / ``has_neg_inf``.  A format bounds a value's
-magnitude and says whether the *format* has a NaN, not whether *this* value is
-one, and it structurally cannot say **not zero**: ``pos_bound >= 0 >= neg_bound``
-holds by convention there, so every format represents a ``+0``.  A no-zero bit
-would have to be threaded through ``__add__``, ``__mul__``, the join and storage
-selection to buy nothing those need.
-
-That bit is the load-bearing one: the emitted guards a consumer wants to drop
-follow from ``x`` being finite *and non-zero*, which is what an ``elif`` ladder
-establishes::
-
-    if fp.isnan(x):   ...
-    elif fp.isinf(x): ...
-    elif x == 0:      ...
-    else:                     # x : {Finite}, so logb(x) : {Zero, Finite}
-        e = fp.logb(x)
-
-Results are keyed per *expression*, not per definition: the same definition of
-``x`` is every class at the ``isnan`` test and only ``Finite`` three arms later.
-Expression keys are identities, so **any rewrite of the AST invalidates the
-result** — a transform must query the AST it was handed, before rewriting it.
-
-Soundness assumption
---------------------
-Only executions in which every operation *has* a result are described.  An
-operation handed a value its rounding context refuses has none — the interpreter
-raises, the C++ backend asserts — so it contributes no class.  That is what makes
-a guard removable at all, and it stays honest: a consumer drops a guard only
-where no class reaching the operation is refused, so the abort survives wherever
-FPy has no answer.
-
-Precision
----------
-Sound by default, precise where it has been taught to be.  An operation with no
-rule here reports the classes its rounding context can represent, which for an
-unbounded or symbolic context is every class — so adding a rule can only narrow,
-never correct.
-
-A call to an FPy function has the class its callee returns, analyzed with the
-call's argument classes rather than summarized once: ``max(logb(x), emin)`` is
-finite only where the caller has ruled out a NaN ``x``.
-
-A list or tuple carries no class of its own; a list's elements share one per
-region, or per definition where a region holds several lists
-(:data:`_ElementKey`).
-
-Not yet taught: the sign of a zero, which would let ``signbit`` refine;
-magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
-refinement; the class of a numeric free variable; and a ``for`` target over
-``range``.  After an early return only the rest of its own block is refined,
-not what follows the statement enclosing it.
+Results are keyed by expression identity, so any rewrite of the AST invalidates
+them.
 """
 
 import enum
@@ -313,7 +256,7 @@ _POW_SMALL_BASE = {
 
 _POW_ONE_BASE = dict.fromkeys(_ATOMS, _FINITE)
 """``1 ** y`` is ``1`` whatever ``y`` is -- a NaN exponent included, which is
-what IEEE 754 says and what the sweep against the interpreter confirms."""
+what IEEE 754 says."""
 
 
 def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
@@ -475,8 +418,7 @@ class ValueClassAnalysis:
     """Class of each variable definition, *unrefined* -- the class the defining
     expression had, joined across incoming edges at a phi.  A consumer wants
     :attr:`by_expr`, which is where a branch's refinement shows up; this is the
-    per-definition view the other analyses expose, and what
-    ``tests/infra/analysis/value_class.py`` dumps."""
+    per-definition view the other analyses expose."""
 
     alias: AliasAnalysis
     """Underlying alias analysis: which lists may be the same location.  A class
@@ -1946,9 +1888,7 @@ class ValueClassInfer:
     Path-sensitive value-class analysis.
 
     Computes, for every expression, which of ``{NaN, Inf, Zero, Finite}`` it can
-    evaluate to, refining at each branch that tests a value's class.  See the
-    module docstring for the lattice, the soundness assumption, and what the
-    analysis has not been taught.
+    evaluate to, refining at each branch that tests a value's class.
     """
 
     @staticmethod

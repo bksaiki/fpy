@@ -696,10 +696,8 @@ class ExprSiteRewriter(PreambleScoped):
     """A rewrite whose sites are expressions and whose replacement needs a
     statement slot.
 
-    Holds the walk the expression-site rewrites share: decide the refusal before an
-    index is spent, count the site, and either list it or emit.  A subclass
-    says which expressions it considers (`_candidate`), whether one may be
-    rewritten (`_check`), and what replaces it (`_emit`).
+    A subclass says which expressions it considers (`_candidate`), whether one
+    may be rewritten (`_check`), and what replaces it (`_emit`).
 
     A site must be strict (see :class:`~fpy2.analysis.Hoistability`), and the
     operands its statement evaluates before it are named first.
@@ -801,14 +799,9 @@ class ScopedRoundingRewriter(ExprSiteRewriter):
     :class:`fpy2.transform.RescaleFixed`.
 
     A site is a `Round` -- or a `Cast`, where `_casts` -- wherever the scope it
-    runs under can be restated, which `ContextUse` answers and the shape of the
-    program around it does not.  A subclass says whether a given context can be
+    runs under can be restated.  A subclass says whether a given context can be
     restated (`_verify`) and appends the statements that restate it
     (`_ladder`).
-
-    Sibling of :class:`RoundingRewriter`, which lifts an operation into a block
-    of its own rather than replacing it: same seal on positions with no
-    statement slot, different thing emitted into that slot.
     """
 
     _no_slot = (

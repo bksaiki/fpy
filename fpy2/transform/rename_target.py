@@ -12,7 +12,6 @@ class _RenameTargetInstance(DefaultTransformVisitor):
         self.rename = rename
 
     def _visit_var(self, var: Var, ctx: None) -> Var:
-        """Renames variables."""
         name = self.rename.get(var.name, var.name)
         return Var(name, var.loc)
 
@@ -64,5 +63,4 @@ class RenameTarget:
         if not isinstance(block, StmtBlock):
             raise TypeError(f"Expected \'StmtBlock\' for {block}, got {type(block)}")
         ast, _ = _RenameTargetInstance(rename)._visit_block(block, None)
-        # TODO: how to check block
         return ast

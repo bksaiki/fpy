@@ -2,8 +2,7 @@
 Real arithmetic engine for exact computation.
 
 This engine handles exact arithmetic on Float and Fraction types,
-computing results without any rounding. It only works when the
-context requests exact computation (prec=None, n=None).
+computing results without any rounding.
 """
 
 from fractions import Fraction
@@ -62,9 +61,7 @@ class RealEngine(Engine):
     """
     Engine that performs exact real arithmetic.
 
-    This engine only handles operations when the context requests
-    exact computation (both prec and n are None). It works with
-    both Float and Fraction types.
+    It works with both Float and Fraction types.
     """
 
     @staticmethod

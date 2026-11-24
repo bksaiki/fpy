@@ -30,39 +30,30 @@ __all__ = [
     'AMax',
     'AMin',
     'Abs',
-    # Trigonometric functions
     'Acos',
-    # Hyperbolic functions
     'Acosh',
-    # IEEE 754 arithmetic
     'Add',
     'AllOf',
     'And',
     'AnyOf',
-    # Type annotations
     'AnyTypeAnn',
-    # Function definition
     'Argument',
     'Asin',
     'Asinh',
     'AssertStmt',
     'Assign',
-    # Base classes
     'Ast',
     'Atan',
     'Atan2',
     'Atanh',
     'Attribute',
-    # Formatter
     'BaseFormatter',
     'BinaryOp',
     'BoolTypeAnn',
     'BoolVal',
-    # Other expressions
     'Call',
     'Cast',
     'Cbrt',
-    # Rounding and truncation
     'Ceil',
     'Compare',
     'CompareOp',
@@ -74,7 +65,6 @@ __all__ = [
     'ConstLn2',
     'ConstLog2E',
     'ConstLog10E',
-    # Constants
     'ConstNan',
     'ConstPi',
     'ConstPi_2',
@@ -94,15 +84,12 @@ __all__ = [
     'EffectStmt',
     'Empty',
     'Enumerate',
-    # Integral functions
     'Erf',
     'Erfc',
-    # Exponential/logarithmic functions
     'Exp',
     'Exp2',
     'Expm1',
     'Expr',
-    # Composite arithmetic
     'Fdim',
     'Floor',
     'Fma',
@@ -112,23 +99,19 @@ __all__ = [
     'Fst',
     'FuncDef',
     'FuncMeta',
-    # Type aliases
     'FuncSymbol',
     'Hexnum',
     'Hypot',
-    # Re-exports
     'Id',
     'If1Stmt',
     'IfExpr',
     'IfStmt',
     'IndexedAssign',
     'Integer',
-    # Classification
     'IsFinite',
     'IsInf',
     'IsNan',
     'IsNormal',
-    # Tensor operators
     'Len',
     'Lgamma',
     'ListComp',
@@ -142,7 +125,6 @@ __all__ = [
     'Log2',
     'Log10',
     'Logb',
-    # Other arithmetic
     'Max',
     'Min',
     'Mod',
@@ -155,11 +137,8 @@ __all__ = [
     'NaryExpr',
     'NaryOp',
     'NearbyInt',
-    # Sign operations
     'Neg',
-    # Logical operators
     'Not',
-    # N-ary operations
     'NullaryOp',
     'Or',
     'PassStmt',
@@ -173,11 +152,9 @@ __all__ = [
     'RealVal',
     'Remainder',
     'ReturnStmt',
-    # Rounding operator
     'Round',
     'RoundAt',
     'RoundInt',
-    # Numerical data
     'Signbit',
     'Sin',
     'Sinh',
@@ -186,7 +163,6 @@ __all__ = [
     'SourceId',
     'Sqrt',
     'Stmt',
-    # Statements
     'StmtBlock',
     'Sub',
     'Sum',
@@ -202,7 +178,6 @@ __all__ = [
     'UnaryOp',
     'UnderscoreId',
     'ValueExpr',
-    # Value expressions
     'Var',
     'WhileStmt',
     'Zip',
@@ -1439,8 +1414,7 @@ class StmtBlock(Ast):
     """FPy AST: list of statements"""
     __slots__ = ('stmts',)
 
-    # list makes it easier to modify in-place
-    # not ideal since it's ideally immutable, but it simplifies the code
+    # mutable list for in-place edits
     stmts: list[Stmt]
 
     def __init__(self, stmts: list[Stmt]) -> None:
@@ -1676,10 +1650,7 @@ class AssertStmt(Stmt):
         return (
             isinstance(other, AssertStmt)
             and self.test.is_equiv(other.test)
-            # ``==`` on an ``Expr`` is identity, so structurally-equal messages
-            # on distinct objects would compare unequal — which every
-            # ``DefaultTransformVisitor`` pass produces, since it rebuilds
-            # every node.
+            # ``==`` on an ``Expr`` is identity
             and _opt_is_equiv(self.msg, other.msg)
         )
 

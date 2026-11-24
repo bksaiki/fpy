@@ -93,8 +93,7 @@ class _Witness:
 
 @dataclass(frozen=True)
 class _Last:
-    """A loop's last iteration, by the loop's `id`, or a partial write's last
-    writer, by its phi's."""
+    """A loop's last iteration, by the loop's `id`."""
 
     of: int
 
@@ -226,7 +225,7 @@ class DigitBoundAnalysis:
 
     def bounds(self, e: Expr) -> Bounds | None:
         """*e*'s precision, digit position and magnitude, each infinite where
-        the store leaves it open (§4.3: an open magnitude is a format with
+        the store leaves it open (an open magnitude is a format with
         `b = inf`).  ``None`` where all three are open.
         """
         terms = self.by_expr.get(e)

@@ -31,16 +31,7 @@ _NAMES = (
 
 
 class Flags:
-    """
-    The `Flags` class represents the status flags for arithmetic operations.
-    - `invalid`: the operation produced an invalid result
-    - `divzero`: the operation divided by zero
-    - `overflow`: the result exceeded the representable range
-    - `tiny_pre`: the result before rounding satisfies `|x| < 2^emin`
-    - `tiny_post`: the result after rounding (without subnormalization) satisfies `|x| < 2^emin`
-    - `inexact`: the rounded result is not the same as the exact result
-    - `carry`: the rounded result has a different exponent than the exact result
-    """
+    """Status flags for arithmetic operations."""
 
     __slots__ = ("_flags",)
 

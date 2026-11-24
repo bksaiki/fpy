@@ -107,12 +107,7 @@ class _FuncInline(SiteRewriter):
         self.def_use = def_use
         self.funcs = funcs
         self.where = where
-        # Cache of fully-inlined callee bodies, keyed by callee
-        # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
-        # sites instead of re-inlining the whole callee subtree each
-        # time.  ``FuncInline.apply`` may pre-populate it in leaves-first
-        # order (so every lookup is a hit); otherwise it fills lazily on
-        # first use.  Either way it is never re-built per call site.
+        # fully-inlined callee bodies by callee, reused across call sites
         self.inlined = {} if inlined is None else inlined
         self.recursive = recursive
 

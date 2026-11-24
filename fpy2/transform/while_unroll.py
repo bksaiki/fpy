@@ -106,8 +106,7 @@ class WhileUnroll:
 
         unroller = _WhileUnroll(func, where, times)
         out = unroller.apply()
-        # An in-range `where` matches, so `site_idx` exceeds it even though
-        # re-visiting a matched loop's body inflates the counter
+        # re-visited bodies inflate `site_idx`, but an in-range `where` still matches
         unroller.check_site('a `while` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(func, out, tuple(unroller.edits), exprs_preserved=True)
