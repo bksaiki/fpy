@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     'Runner',
@@ -61,7 +62,9 @@ class Runner[C, K, R](ABC):
     - R: The result type.
     """
 
-    def __init__(self, logging: bool = False):
+    logging: bool
+
+    def __init__(self, logging: bool = False) -> None:
         self.logging = logging
 
     @abstractmethod
@@ -118,7 +121,7 @@ class Runner[C, K, R](ABC):
         results: dict[C, R],
         output_dir: Path,
         seed: int
-    ):
+    ) -> None:
         """
         Plots the results of the design-space exploration.
 
@@ -130,7 +133,7 @@ class Runner[C, K, R](ABC):
         """
         ...
 
-    def log(self, where: str, *args):
+    def log(self, where: str, *args: Any) -> None:
         """
         Logs a message if logging is enabled.
         """
@@ -144,7 +147,7 @@ class Runner[C, K, R](ABC):
         num_threads: int = 1,
         no_cache: bool = False,
         replot: bool = False
-    ):
+    ) -> None:
         """
         Runs the design-space exploration.
 
@@ -261,7 +264,7 @@ class Runner[C, K, R](ABC):
         """
         return name
 
-    def _gen_cache_name(self, key) -> str:
+    def _gen_cache_name(self, key: Any) -> str:
         """
         Generates a cache file name from a key.
         """
@@ -271,7 +274,7 @@ class Runner[C, K, R](ABC):
             skey = str(key)
         return hashlib.md5(skey.encode()).hexdigest()
 
-    def _open_cache(self, output_dir: Path, cache_name: str = '__cache__'):
+    def _open_cache(self, output_dir: Path, cache_name: str = '__cache__') -> Path:
         """
         Opens (and creates) a cache directory inside the output directory.
         """
@@ -280,13 +283,13 @@ class Runner[C, K, R](ABC):
         self.log('open_cache', f'opened cache directory `{cache_dir}`')
         return cache_dir
 
-    def _write_cache(self, path: Path, data):
+    def _write_cache(self, path: Path, data: Any) -> None:
         """Writes data to a gzipped cache file."""
         self.log('write_cache', f'writing cache to `{path}`')
         with gzip.open(path, 'wb') as f:
             pickle.dump(data, f)
 
-    def _read_cache(self, path: Path):
+    def _read_cache(self, path: Path) -> Any:
         """Reads data from a gzipped cache file."""
         self.log('read_cache', f'reading cache from `{path}`')
         try:

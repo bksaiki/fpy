@@ -10,7 +10,7 @@ surface as :class:`CppCompileError`.
 
 import copy
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 
 from ...analysis import (
@@ -46,7 +46,6 @@ from ...ast.fpyast import (
     Var,
     Zip,
 )
-from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
 from ...number import Context
@@ -62,6 +61,7 @@ from ...transform import (
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
+from ...transform.path import walk_exprs, walk_stmts
 from ...types import Type
 from ..backend import Backend, CompileError, hoist
 from .emitter import CppEmitError, CppEmitter
@@ -133,16 +133,10 @@ class SpecAnalyses:
 
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
     """Every ``Call`` in *ast*'s body that targets a :class:`Function`."""
-    out: dict[Call, Function] = {}
-
-    class _Collector(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            if isinstance(e.fn, Function):
-                out[e] = e.fn
-            super()._visit_call(e, ctx)
-
-    _Collector()._visit_function(ast, None)
-    return out
+    return {
+        e: e.fn for _, e in walk_exprs(ast)
+        if isinstance(e, Call) and isinstance(e.fn, Function)
+    }
 
 
 def _returned_class(e: Expr, class_info: ValueClassAnalysis) -> ClassBound:
@@ -173,15 +167,10 @@ def _return_bound(ast: FuncDef, class_info: ValueClassAnalysis) -> ClassBound:
     """
     out: ClassBound | None = None
     first = True
-
-    class _Collector(DefaultVisitor):
-        def _visit_return(self, stmt: ReturnStmt, ctx):
-            nonlocal out, first
+    for _, stmt in walk_stmts(ast):
+        if isinstance(stmt, ReturnStmt):
             cls = _returned_class(stmt.expr, class_info)
             out, first = (cls if first else join_class(out, cls)), False
-            super()._visit_return(stmt, ctx)
-
-    _Collector()._visit_function(ast, None)
     return out
 
 
@@ -250,7 +239,8 @@ def _lowered_by_statement_form(e: Expr) -> Expr | None:
     if isinstance(e, (ListComp, Zip, Enumerate)):
         return e
     for _field, _i, sub in subexprs(e):
-        if (x := _lowered_by_statement_form(sub)) is not None:
+        x = _lowered_by_statement_form(sub)
+        if x is not None:
             return x
     return None
 
@@ -260,7 +250,8 @@ def _check_comparison_tails(ast: FuncDef) -> None:
     third operand onward: it has no slot, so nothing lowers it before the
     emitter.  See ``docs/todos/backend-cpp.md``."""
     for e, why in Hoistability.analyze(ast).sealed:
-        if why == 'comparison' and (x := _lowered_by_statement_form(e)) is not None:
+        x = _lowered_by_statement_form(e) if why == 'comparison' else None
+        if x is not None:
             raise CppCompileError(
                 f'`{ast.name}`: `{x.format()}` in a chained comparison past its '
                 'first pair is not supported; split the comparison with `and`.'
@@ -365,7 +356,7 @@ class CppCompiler(Backend):
         unfold: _UnfoldMode = UnfoldMode.NONE,
         enable_fenv: bool = True,
         namespace: str | None = None,
-    ):
+    ) -> None:
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
                 f'`unbox` must be an UnboxMode, got {unbox!r}; '
@@ -491,7 +482,7 @@ class CppCompiler(Backend):
         params: dict[FuncDef, CalleeAbi],
         only: set[int] | None = None,
         bound_params: dict[str, DigitBoundParams] | None = None,
-    ):
+    ) -> Iterator[tuple[Function, SpecAnalyses]]:
         """Analyze every spec leaves-first, filling *params* as it goes.
 
         One path, so :meth:`compile_module` and :meth:`signature` cannot reach
@@ -593,7 +584,8 @@ class CppCompiler(Backend):
         """The per-spec analyses one fully-specialized function is emitted
         from."""
         ast = func.ast
-        if bad := unclosed_data_free_vars(ast):
+        bad = unclosed_data_free_vars(ast)
+        if bad:
             raise CppCompileError(
                 f'unbound data free variable(s): {", ".join(bad)}'
             )

@@ -136,7 +136,7 @@ def isnar(x: fp.Real) -> bool:
 # Exponent extraction and scaling
 
 @fp.fpy
-def _logb_spec(x: fp.Real):
+def _logb_spec(x: fp.Real) -> fp.Real:
     """
     Returns the normalized exponent of `x`.
 
@@ -210,7 +210,7 @@ def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
 # Arithmetic
 
 @fp.fpy
-def tree_sum(xs: list[fp.Real]):
+def tree_sum(xs: list[fp.Real]) -> fp.Real:
     """
     Sums the elements of xs in a tree.
     Each sum is rounded under the current rounding context.
@@ -230,11 +230,11 @@ def tree_sum(xs: list[fp.Real]):
         assert fp.pow(2, depth) == n, "Length of xs must be a power of 2"
 
     t = [x for x in xs]
-    for _ in range(depth):
+    for _ in range(depth):  # type: ignore[call-overload]
         with fp.INTEGER:
             n /= 2
 
-        for i in range(n): # type: ignore[arg-type]
+        for i in range(n):  # type: ignore[call-overload]
             with fp.INTEGER:
                 j = 2 * i
                 k = 2 * i + 1

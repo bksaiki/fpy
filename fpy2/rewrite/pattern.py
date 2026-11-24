@@ -48,7 +48,7 @@ class ExprPattern(Pattern):
     _vars: set[NamedId]
     """set of pattern variables"""
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, func: FuncDef) -> None:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
 
@@ -85,7 +85,7 @@ class StmtPattern(Pattern):
     _vars: set[NamedId]
     """set of pattern variables"""
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, func: FuncDef) -> None:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)}')
 
@@ -111,5 +111,5 @@ class StmtPattern(Pattern):
         """Returns a string representation of the pattern."""
         return '@pattern\n' + self.block.format()
 
-    def to_ast(self):
+    def to_ast(self) -> FuncDef:
         return self._func

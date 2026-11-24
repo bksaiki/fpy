@@ -5,6 +5,7 @@ numbers with subnormals. Hence, "MP-S."
 """
 
 from fractions import Fraction
+from typing import Any
 
 from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
@@ -47,7 +48,7 @@ class MPSFloatFormat(OrdinalFormat):
         enable_nan: bool = True,
         enable_inf: bool = True,
         enable_neg_zero: bool = True,
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -62,7 +63,7 @@ class MPSFloatFormat(OrdinalFormat):
         self.enable_inf = enable_inf
         self.enable_neg_zero = enable_neg_zero
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPSFloatFormat)
             and self.pmax == other.pmax
@@ -72,7 +73,7 @@ class MPSFloatFormat(OrdinalFormat):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__, self.pmax, self.emin, self.enable_nan,
             self.enable_inf, self.enable_neg_zero,
@@ -335,7 +336,7 @@ class MPSFloatContext(OrdinalContext):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -381,7 +382,7 @@ class MPSFloatContext(OrdinalContext):
         self.inf_value = inf_value
         self._fmt = fmt
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPSFloatContext)
             and self.pmax == other.pmax
@@ -395,7 +396,7 @@ class MPSFloatContext(OrdinalContext):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.pmax,
             self.emin,
@@ -409,12 +410,12 @@ class MPSFloatContext(OrdinalContext):
         ))
 
     @property
-    def expmin(self):
+    def expmin(self) -> int:
         """Minimum unnormalized exponent."""
         return self.emin - self.pmax + 1
 
     @property
-    def nmin(self):
+    def nmin(self) -> int:
         """First unrepresentable digit for every value in the representation."""
         return self.expmin - 1
 
@@ -430,7 +431,7 @@ class MPSFloatContext(OrdinalContext):
         enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPSFloatContext':
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
@@ -460,7 +461,7 @@ class MPSFloatContext(OrdinalContext):
         *,
         rm: RoundingMode = RoundingMode.RNE,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPSFloatContext':
@@ -477,10 +478,10 @@ class MPSFloatContext(OrdinalContext):
             inf_value=inf_value
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         else:

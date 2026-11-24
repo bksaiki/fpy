@@ -2,6 +2,7 @@
 Runtime utilities for integrating with FPCore from Titanic.
 """
 
+from types import TracebackType
 from typing import Any, Self
 
 from .number import (
@@ -58,7 +59,9 @@ class NoSuchContextError(Exception):
     Exception raised when a context is not found.
     """
 
-    def __init__(self, ctx: 'FPCoreContext'):
+    ctx: 'FPCoreContext'
+
+    def __init__(self, ctx: 'FPCoreContext') -> None:
         """
         Initialize the exception with the given context.
 
@@ -66,7 +69,7 @@ class NoSuchContextError(Exception):
         """
         self.ctx = ctx
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'No such context: {self.ctx}'
 
 
@@ -88,7 +91,7 @@ class FPCoreContext:
 
     props: dict[str, Any]
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         """
         Initialize the FPCore context with the given properties.
 
@@ -96,13 +99,18 @@ class FPCoreContext:
         """
         self.props = kwargs
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + '(' + ', '.join(f'{k}={v!r}' for k, v in self.props.items()) + ')'
 
     def __enter__(self) -> Self:
         raise RuntimeError('do not call')
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None
+    ) -> None:
         raise RuntimeError('do not call')
 
     def with_prop(self, key: str, value: Any) -> 'FPCoreContext':

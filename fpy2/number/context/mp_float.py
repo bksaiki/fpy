@@ -3,6 +3,8 @@ This module defines floating-point numbers as implemented by MPFR,
 that is, multi-precision floating-point numbers. Hence, "MP."
 """
 
+from typing import Any
+
 from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import RoundingMode
@@ -39,7 +41,7 @@ class MPFloatFormat(Format):
         enable_nan: bool = True,
         enable_inf: bool = True,
         enable_neg_zero: bool = True,
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -51,7 +53,7 @@ class MPFloatFormat(Format):
         self.enable_inf = enable_inf
         self.enable_neg_zero = enable_neg_zero
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPFloatFormat)
             and self.pmax == other.pmax
@@ -60,7 +62,7 @@ class MPFloatFormat(Format):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__, self.pmax, self.enable_nan, self.enable_inf,
             self.enable_neg_zero,
@@ -191,7 +193,7 @@ class MPFloatContext(Context):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -234,7 +236,7 @@ class MPFloatContext(Context):
         self.inf_value = inf_value
         self._fmt = fmt
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPFloatContext)
             and self.pmax == other.pmax
@@ -247,7 +249,7 @@ class MPFloatContext(Context):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__,
             self.pmax,
@@ -271,7 +273,7 @@ class MPFloatContext(Context):
         enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPFloatContext':
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
@@ -300,7 +302,7 @@ class MPFloatContext(Context):
         *,
         rm: RoundingMode = RoundingMode.RNE,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPFloatContext':
@@ -352,7 +354,7 @@ class MPFloatContext(Context):
         # step 4. wrap the result in a Float
         return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
     def round_params(self) -> tuple[int | None, int | None]:

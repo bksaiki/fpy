@@ -303,7 +303,7 @@ def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
     return None
 
 
-def _grid_below(c: Fraction, af: 'AbstractFormat') -> Fraction | None:
+def _grid_below(c: Fraction, af: AbstractFormat) -> Fraction | None:
     """The largest value on *af*'s grid below ``c > 0``, or `None` where the
     grid there is unbounded: just below ``c``, a step is the larger of the
     precision's and the finest digit's."""
@@ -347,16 +347,16 @@ class NegZero:
     """
     __slots__ = ()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return 'NEG_ZERO'
 
-    def __str__(self):
+    def __str__(self) -> str:
         return '-0.0'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, NegZero)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(())
 
 
@@ -375,7 +375,7 @@ class Special(enum.Enum):
     NEG_INF = 1
     NAN = 2
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         # `NEG_ZERO`, not `<Special.NEG_ZERO: 0>`, to match `NegZero` in a set
         return self.name
 
@@ -417,7 +417,7 @@ class SetFormat:
         return f'SetFormat(values=frozenset({{{inner}}}))'
 
     @staticmethod
-    def from_value(x: SetValue):
+    def from_value(x: SetValue) -> 'SetFormat':
         return SetFormat(frozenset((x,)))
 
     @staticmethod
@@ -488,7 +488,7 @@ class TupleFormat:
 class _NoValue:
     """Type of :data:`NO_VALUE`."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return 'NO_VALUE'
 
 
@@ -523,7 +523,7 @@ class FunctionFormat:
       three fields populated, describing the function as analyzed.
     """
 
-    ctx: 'Context | None'
+    ctx: Context | None
     """Incoming rounding context (mirrors :attr:`FunctionType.ctx`).
     Pins the function's outermost scope when :class:`ContextUse`
     produced a symbolic context variable there.  ``None`` means no
@@ -832,7 +832,7 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     )
 
 
-def to_abstract(f: 'FormatBound | AbstractFormat') -> AbstractFormat | None:
+def to_abstract(f: FormatBound | AbstractFormat) -> AbstractFormat | None:
     """Any format bound as an :class:`AbstractFormat`, or ``None`` where it has
     none -- a list, a tuple, a non-dyadic :class:`SetFormat`, or nothing known.
     """
@@ -845,7 +845,7 @@ def to_abstract(f: 'FormatBound | AbstractFormat') -> AbstractFormat | None:
     return None
 
 
-def _narrowed(fmt: 'FormatBound', af: AbstractFormat, cons: AbstractFormat) -> 'FormatBound':
+def _narrowed(fmt: FormatBound, af: AbstractFormat, cons: AbstractFormat) -> FormatBound:
     """*fmt*, abstractly *af*, met with *cons*: *fmt* itself where that buys
     nothing (the round trip loses the class: `FP32` comes back an
     `MPBFloatFormat`) or no `Format` materializes the meet."""
@@ -884,7 +884,7 @@ def _wraps_signed(ctx: Context | PartialContext | None) -> bool:
     return isinstance(ctx, FixedContext) and ctx.signed and ctx.overflow is OverflowMode.WRAP
 
 
-_ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
+_ZERO_SET: SetFormat = SetFormat.from_value(Fraction(0))
 
 def _set_as_fraction(v: SetValue) -> Fraction:
     """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``.
@@ -1000,7 +1000,7 @@ def _set_order(v: SetValue) -> tuple[int, Fraction]:
     return (0, v)
 
 
-def _set_pick(a: SetValue, b: SetValue, *, least: bool) -> 'frozenset[SetValue]':
+def _set_pick(a: SetValue, b: SetValue, *, least: bool) -> frozenset[SetValue]:
     """What ``min``/``max`` may return for *a* and *b*.
 
     Both, where they tie: the only tie is between the two zeros, and the
@@ -1044,7 +1044,7 @@ _SET_UNOPS: dict[Any, Callable[[SetValue], SetValue]] = {
 """Exact unary arithmetic over :data:`SetValue`; see :data:`_SET_BINOPS`."""
 
 
-def _is_zero_set(f: 'FormatBound') -> bool:
+def _is_zero_set(f: FormatBound) -> bool:
     """``f`` is the precise singleton ``{0}`` — and therefore exactly ``+0.0``.
 
     Callers use this to apply algebraic identities that hold for ``+0.0`` and
@@ -1055,19 +1055,19 @@ def _is_zero_set(f: 'FormatBound') -> bool:
     return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
 
 
-def _is_two_set(f: 'FormatBound') -> bool:
+def _is_two_set(f: FormatBound) -> bool:
     """``f`` is the precise singleton ``{2}`` — the one base whose powers a
     format can state exactly."""
     return isinstance(f, SetFormat) and f.values == frozenset({Fraction(2)})
 
 
 def exact_binop(
-    lhs: 'FormatBound',
-    rhs: 'FormatBound',
+    lhs: FormatBound,
+    rhs: FormatBound,
     op: Callable[[Any, Any], Any],
     *,
     cap: int | None = None,
-) -> 'SetFormat | AbstractFormat | None':
+) -> SetFormat | AbstractFormat | None:
     """Compute the exact unrounded result of an arithmetic binary op.
 
     *op* is applied either pointwise to a pair of :class:`SetFormat`
@@ -1148,13 +1148,13 @@ def exact_binop(
 
 
 def _clip_to_constant(
-    out: 'AbstractFormat',
-    lhs: 'FormatBound',
-    rhs: 'FormatBound',
-    af_a: 'AbstractFormat',
-    af_b: 'AbstractFormat',
+    out: AbstractFormat,
+    lhs: FormatBound,
+    rhs: FormatBound,
+    af_a: AbstractFormat,
+    af_b: AbstractFormat,
     op: Callable[[Any, Any], Any],
-) -> 'AbstractFormat':
+) -> AbstractFormat:
     """*out*, the abstract ``lhs op rhs``, with its bounds clipped to the
     interval ``+`` or ``-`` gives where one operand is a set: lifted to a
     format, a constant keeps no least magnitude, so ``x - 13`` would keep
@@ -1198,9 +1198,9 @@ def _clip_to_constant(
 
 
 def exact_unop(
-    arg: 'FormatBound',
+    arg: FormatBound,
     op: Callable[[Any], Any],
-) -> 'SetFormat | AbstractFormat | None':
+) -> SetFormat | AbstractFormat | None:
     """Unary analogue of :func:`exact_binop` — apply *op* either
     pointwise to a :class:`SetFormat`'s values or directly to a
     lifted :class:`AbstractFormat`.  Returns ``None`` when *arg* is
@@ -1231,7 +1231,7 @@ def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
     return int(af.neg_bound), int(af.pos_bound)
 
 
-def _set_any(fmt: 'FormatBound', pred: Callable[[SetValue], bool]) -> bool:
+def _set_any(fmt: FormatBound, pred: Callable[[SetValue], bool]) -> bool:
     """Does *fmt* (a list's, its elements') hold a value *pred* accepts?
     Only an exhaustive set can fail to; unknown reads as ``True``, which
     claims nothing."""
@@ -1240,12 +1240,12 @@ def _set_any(fmt: 'FormatBound', pred: Callable[[SetValue], bool]) -> bool:
     return not isinstance(fmt, SetFormat) or any(pred(v) for v in fmt.values)
 
 
-def _has_finite(fmt: 'FormatBound') -> bool:
+def _has_finite(fmt: FormatBound) -> bool:
     """Does *fmt* hold any finite value?"""
     return _set_any(fmt, lambda v: not isinstance(v, Special))
 
 
-def _has_digits(fmt: 'FormatBound') -> bool:
+def _has_digits(fmt: FormatBound) -> bool:
     """Does *fmt* hold a finite non-zero value?"""
     return _set_any(fmt, lambda v: isinstance(v, Fraction) and v != 0)
 
@@ -1259,7 +1259,7 @@ def _nonzero_bounds(af: AbstractFormat) -> list[RealFloat]:
     ]
 
 
-def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
+def _logb_range(fmt: FormatBound) -> tuple[int | None, int | None]:
     """``logb``'s least and greatest value over *fmt*, where each is finite.
 
     The smallest non-zero magnitude a format holds is ``2 ** exp`` and the
@@ -1279,7 +1279,7 @@ def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
     return lo, hi
 
 
-def exact_logb(arg: 'FormatBound', least: int | None = None) -> 'AbstractFormat | None':
+def exact_logb(arg: FormatBound, least: int | None = None) -> AbstractFormat | None:
     """The exact format of ``logb(x)`` for ``x`` in *arg*; with *least*, where
     ``|x| >= 2 ** least`` is known, ``logb(x) >= least`` and ``x`` is non-zero.
 
@@ -1330,7 +1330,7 @@ Comfortably past `binary128`'s, and far short of where materializing the
 format's precision becomes expensive."""
 
 
-def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
+def exact_exp2(arg: FormatBound) -> AbstractFormat | None:
     """The exact format of ``2 ** n`` for ``n`` in *arg*.
 
     Every result is a power of two, so ``prec`` is 1 however wide the exponent
@@ -1365,8 +1365,8 @@ def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
 
 
 def exact_select(
-    arg_fmts: 'list[FormatBound]', *, is_min: bool,
-) -> 'AbstractFormat | None':
+    arg_fmts: list[FormatBound], *, is_min: bool,
+) -> AbstractFormat | None:
     """The exact format of ``min``/``max`` over *arg_fmts*.
 
     Selection returns one operand, so the result needs every operand's
@@ -1408,7 +1408,7 @@ def exact_select(
 
 
 def round_is_identity(
-    unrounded: 'SetFormat | AbstractFormat | None',
+    unrounded: SetFormat | AbstractFormat | None,
     ctx: Context | None,
 ) -> bool:
     """Decide whether ``round_{ctx}(unrounded) == unrounded`` — i.e.,
@@ -1443,8 +1443,8 @@ def round_is_identity(
 
 
 def unrounded_format(
-    e: Expr, by_expr: 'dict[Expr, FormatBound]',
-) -> 'SetFormat | AbstractFormat | None':
+    e: Expr, by_expr: dict[Expr, FormatBound],
+) -> SetFormat | AbstractFormat | None:
     """The exact, unrounded result of a rounded operation.
 
     Pulls each child's stored post-round bound from *by_expr* and applies the
@@ -1483,7 +1483,7 @@ def unrounded_format(
 
 
 def rounds_exactly(
-    e: Expr, by_expr: 'dict[Expr, FormatBound]', ctx: Context | None,
+    e: Expr, by_expr: dict[Expr, FormatBound], ctx: Context | None,
 ) -> bool:
     """Whether *e*'s implicit round under *ctx* changes nothing: the soundness
     half of :class:`fpy2.transform.RoundElim`'s test, without its
@@ -1579,7 +1579,7 @@ def _join_bounds(
             )
 
 
-def _literal_bound(e) -> FormatBound:
+def _literal_bound(e: Decnum | Hexnum) -> FormatBound:
     """A numeric literal's bound: the singleton set of its exact value.
 
     Including a **signed zero**.  ``-0.0`` is a distinct real -- it compares
@@ -1703,8 +1703,10 @@ class PreAnalysisCache:
     how many call sites reach it or under how many contexts.
     """
 
-    def __init__(self):
-        self._table: dict[tuple[int, frozenset[tuple[int, int]]], PreAnalyses] = {}
+    _table: dict[tuple[int, frozenset[tuple[int, int]]], PreAnalyses]
+
+    def __init__(self) -> None:
+        self._table = {}
 
     def get(
         self,
@@ -1822,12 +1824,12 @@ class FormatAnalysis:
     reason as :attr:`array_size`: ``Specialize`` reads the values a call site
     pins from it."""
 
-    digit_bound: 'DigitBoundAnalysis | None'
+    digit_bound: DigitBoundAnalysis | None
     """The digit-bound inference this instantiation used, exposed so
     ``Specialize`` can replay a call site's constraints onto the callee's
     specialized copy; see :class:`DigitBoundParams`."""
 
-    scopes: dict[ContextScope, 'Context | PartialContext']
+    scopes: dict[ContextScope, Context | PartialContext]
     """Each context scope's resolved context, with call-site-pinned arguments
     filled in.  A scope absent here never resolved past what
     :class:`ContextUse` gave."""
@@ -1857,19 +1859,19 @@ class FormatAnalysis:
     # Declared as a protocol there, satisfied structurally here, so neither
     # module imports the other's analysis.
 
-    def logb_range(self, of: 'Expr | Definition') -> tuple[int | None, int | None]:
+    def logb_range(self, of: Expr | Definition) -> tuple[int | None, int | None]:
         """``logb``'s least and greatest value over *of*'s format."""
         return _logb_range(self._bound(of))
 
-    def has_finite(self, of: 'Expr | Definition') -> bool:
+    def has_finite(self, of: Expr | Definition) -> bool:
         """Does *of*'s format hold any finite value?"""
         return _has_finite(self._bound(of))
 
-    def has_digits(self, of: 'Expr | Definition') -> bool:
+    def has_digits(self, of: Expr | Definition) -> bool:
         """Does *of*'s format hold a finite non-zero value?"""
         return _has_digits(self._bound(of))
 
-    def has_non_finite(self, of: 'Expr | Definition') -> bool:
+    def has_non_finite(self, of: Expr | Definition) -> bool:
         """Can *of*, or an element of it, be an infinity or NaN?  Yes, where
         its format does not say."""
         fmt = self._bound(of)
@@ -1880,14 +1882,14 @@ class FormatAnalysis:
         af = to_abstract(fmt)
         return af is None or af.has_pos_inf or af.has_neg_inf or af.has_nan
 
-    def int_range(self, of: 'Expr | Definition') -> tuple[int, int] | None:
+    def int_range(self, of: Expr | Definition) -> tuple[int, int] | None:
         """*of*'s least and greatest values, when its format holds only
         integers."""
         fmt = self._bound(of)
         af = to_abstract(fmt)
         return None if af is None else _int_bounds(af)
 
-    def int_value(self, of: 'Expr | Definition') -> int | None:
+    def int_value(self, of: Expr | Definition) -> int | None:
         """*of*'s value, when its format is exactly one integer."""
         fmt = self._bound(of)
         if not isinstance(fmt, SetFormat) or len(fmt.values) != 1:
@@ -1899,7 +1901,7 @@ class FormatAnalysis:
         """The sub-analysis for *e*'s callee at this call site."""
         return self.by_call.get(e)
 
-    def _bound(self, of: 'Expr | Definition') -> FormatBound:
+    def _bound(self, of: Expr | Definition) -> FormatBound:
         return self.by_expr.get(of) if isinstance(of, Expr) else self.by_def.get(of)
 
 
@@ -1921,11 +1923,19 @@ class _FormatInferInstance(Visitor):
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
     partial_eval: PartialEvalInfo
+    alias: AliasAnalysis
+    pre: PreAnalyses
 
     by_def: dict[Definition, FormatBound]
     by_expr: dict[Expr, FormatBound]
     by_call: dict[Call, FormatAnalysis]
 
+    _refine: dict[Definition, AbstractFormat]
+    _least: dict[Definition, int]
+    _region_inserts: dict[Region, list[tuple[int, FormatBound, frozenset[Definition]]]]
+    _def_values: dict[Definition, object]
+    _scope_ctx_cache: dict[ContextScope, Context | PartialContext]
+    _digit_bound: DigitBoundAnalysis | None
     _pre_cache: PreAnalysisCache
     _fn_fmt: FunctionFormat | None
     _return_fmt: FormatBound | None
@@ -1943,8 +1953,8 @@ class _FormatInferInstance(Visitor):
         loop_iter_limit: int,
         range_set_threshold: int,
         set_format_threshold: int,
-        digit_bound: 'DigitBoundAnalysis | None' = None,
-    ):
+        digit_bound: DigitBoundAnalysis | None = None,
+    ) -> None:
         self.func = func
         self.type_info = pre.type_info
         self.ctx_use = pre.ctx_use
@@ -1953,13 +1963,11 @@ class _FormatInferInstance(Visitor):
         self.by_def = {}
         # Per-definition description to meet with on every *read*, from the
         # branches enclosing that read.  Saved and restored around each arm.
-        self._refine: dict[Definition, AbstractFormat] = {}
+        self._refine = {}
         # Beside it, `b` per definition where those branches prove
         # `|v| >= 2 ** b`, which no description states
-        self._least: dict[Definition, int] = {}
-        self._region_inserts: dict[
-            Region, list[tuple[int, FormatBound, frozenset[Definition]]]
-        ] = {}
+        self._least = {}
+        self._region_inserts = {}
         self.by_expr = {}
         self.by_call = {}
         self._pre_cache = pre_cache
@@ -1967,10 +1975,10 @@ class _FormatInferInstance(Visitor):
         # Values the call site pinned for parameters, and a memo for the
         # `PartialContext` resolution they feed -- which replays a call through
         # the interpreter, so it happens once per scope.
-        self._def_values: dict[Definition, object] = {}
-        self._scope_ctx_cache: dict[ContextScope, Context | PartialContext] = {}
+        self._def_values = {}
+        self._scope_ctx_cache = {}
         # Digit-bound inference's answers, when a prior pass supplied them.
-        self._digit_bound: DigitBoundAnalysis | None = digit_bound
+        self._digit_bound = digit_bound
         # The instantiation signature the caller pinned.  ``None``
         # means "no substitution" — the function is analyzed
         # standalone, with declared parameter types and any symbolic
@@ -1997,7 +2005,7 @@ class _FormatInferInstance(Visitor):
         # an :class:`AbstractFormat` union (which has infinite ascending
         # chains under arithmetic).  Saved/restored around each loop so that
         # nested loops manage their own state.
-        self._widen: bool = False
+        self._widen = False
 
     @property
     def _outer_ctx(self) -> Context | None:
@@ -2012,7 +2020,7 @@ class _FormatInferInstance(Visitor):
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
 
-    def _set_def_bound(self, d: Definition, fmt: FormatBound):
+    def _set_def_bound(self, d: Definition, fmt: FormatBound) -> None:
         self.by_def[d] = self._with_region_inserts(self.alias.region_of(d), fmt, d)
 
     def _store_paths(self, region: Region, written: Region, depth: int) -> list[_Path]:
@@ -2091,7 +2099,7 @@ class _FormatInferInstance(Visitor):
         finally:
             self._refine, self._least = saved, saved_least
 
-    def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, '_Fact']]:
+    def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, _Fact]]:
         """What *cond* being *truth* says about the variables it tests: only a
         comparison against a numeric literal, and only the direction
         :func:`_magnitude_constraint` can state.
@@ -2123,7 +2131,7 @@ class _FormatInferInstance(Visitor):
 
     def _implied_compare(
         self, cond: Compare, truth: bool
-    ) -> list[tuple[Definition, '_Fact']]:
+    ) -> list[tuple[Definition, _Fact]]:
         op = cond.ops[0] if truth else _NEGATE.get(cond.ops[0])
         if op is None:
             return []
@@ -2166,7 +2174,7 @@ class _FormatInferInstance(Visitor):
 
     def _implied_magnitude(
         self, v: Var, op: CompareOp, c: Fraction
-    ) -> list[tuple[Definition, '_Fact']]:
+    ) -> list[tuple[Definition, _Fact]]:
         """What `abs(v) op c` says about *v*.
 
         An upper bound holds on both sides at once, which a comparison against
@@ -2189,7 +2197,7 @@ class _FormatInferInstance(Visitor):
 
     def _at_least(
         self, d: Definition, binade: int
-    ) -> list[tuple[Definition, '_Fact']]:
+    ) -> list[tuple[Definition, _Fact]]:
         """What `|v| >= 2 ** binade` says about *v*: itself, for `logb`, and a
         value that large with at most `p` significant bits has no digit finer
         than `binade - p + 1`."""
@@ -2206,7 +2214,7 @@ class _FormatInferInstance(Visitor):
 
     def _implied_logb(
         self, d: Definition, op: CompareOp, c: Fraction
-    ) -> list[tuple[Definition, '_Fact']]:
+    ) -> list[tuple[Definition, _Fact]]:
         """What a *lower* bound on `logb(v)` says about `v` itself.
 
         ``logb(v) >= lo`` gives ``|v| >= 2 ** lo``.  This domain cannot say
@@ -2310,7 +2318,7 @@ class _FormatInferInstance(Visitor):
         resolved = self._resolve_scope_ctx(e)
         return resolved if isinstance(resolved, Context) else None
 
-    def _resolve_scope_ctx(self, e: ContextUseSite) -> 'Context | PartialContext | None':
+    def _resolve_scope_ctx(self, e: ContextUseSite) -> Context | PartialContext | None:
         """The context active at *e*, with call-site-pinned arguments filled in.
 
         A :class:`PartialContext` whose holes all close becomes a concrete
@@ -2331,7 +2339,7 @@ class _FormatInferInstance(Visitor):
 
     def _resolve_partial_ctx(
         self, ctx: PartialContext
-    ) -> 'Context | PartialContext':
+    ) -> Context | PartialContext:
         """Fill *ctx*'s holes from the values the call site pinned.
 
         A hole closes when it reads a parameter this instantiation pinned.  A
@@ -2340,7 +2348,7 @@ class _FormatInferInstance(Visitor):
         values back into constructor arguments; anything still open — or a
         constructor that rejects the combination — comes back tightened.
         """
-        def fill(v):
+        def fill(v: object) -> object:
             if not isinstance(v, Var):
                 return v
             d = self.def_use.find_def_from_use(v)
@@ -2523,7 +2531,7 @@ class _FormatInferInstance(Visitor):
         site: DefSite,
         binding: Id | TupleBinding,
         fmt: FormatBound,
-    ):
+    ) -> None:
         """Records *fmt* for every variable introduced by *binding* at *site*."""
         match binding:
             case NamedId():
@@ -2611,7 +2619,7 @@ class _FormatInferInstance(Visitor):
         # either may be tighter in any parameter, so meet them
         return _narrowed(fmt, cur, alt)
 
-    def _callee_digit_bound(self, e: Call) -> 'DigitBoundAnalysis | None':
+    def _callee_digit_bound(self, e: Call) -> DigitBoundAnalysis | None:
         """Digit-bound inference's sub-result for *e*'s callee, if a pass ran."""
         return self._digit_bound.by_call.get(e) if self._digit_bound is not None else None
 
@@ -2764,6 +2772,8 @@ class _FormatInferInstance(Visitor):
                 fitted = self._bound_if_fits(e, exact_exp2(arg_fmt))
                 if fitted is not None:
                     return fitted
+            case _:
+                pass
 
         return self._op_bound(e)
 
@@ -2887,6 +2897,8 @@ class _FormatInferInstance(Visitor):
                 fitted = self._bound_if_fits(e, exact_exp2(rhs))
                 if fitted is not None:
                     return fitted
+            case _:
+                pass
 
         return self._op_bound(e)
 
@@ -3001,14 +3013,15 @@ class _FormatInferInstance(Visitor):
             case TupleFormat():
                 for i, elt in enumerate(fmt.elts):
                     self._record_held(self.alias.region_field(region, i), elt)
+            case None | VarFormat() | SetFormat() | Format():
+                pass
+            case _:
+                raise RuntimeError(f'unreachable: {fmt}')
 
     def _linked_args(self, e: Call) -> frozenset[tuple[int, int]]:
         """Pairs of arguments that may hold one list, at any depth."""
-        held = [
-            self.alias.within(r) if (r := self.alias.region_of_expr(a)) is not None
-            else frozenset()
-            for a in e.args
-        ]
+        regions = [self.alias.region_of_expr(a) for a in e.args]
+        held = [frozenset() if r is None else self.alias.within(r) for r in regions]
         return frozenset(
             (i, j) for i in range(len(held)) for j in range(i + 1, len(held))
             if held[i] & held[j]
@@ -3090,7 +3103,7 @@ class _FormatInferInstance(Visitor):
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
-        def iterate():
+        def iterate() -> None:
             for target, iterable in zip(e.targets, e.iterables):
                 self._bind_live(e, target, iterable, self._visit_expr(iterable, ctx))
             self._visit_expr(e.elt, ctx)
@@ -3132,11 +3145,11 @@ class _FormatInferInstance(Visitor):
     # ------------------------------------------------------------------
     # Statement visitors
 
-    def _visit_assign(self, stmt: Assign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> None:
         fmt = self._visit_expr(stmt.expr, ctx)
         self._visit_binding(stmt, stmt.target, fmt)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         # ``xs[i1]…[iN] = expr`` is treated as ``xs = update(xs, …, expr)``
         # — a fresh SSA def of ``xs`` (per ``reaching_defs``).  The new
         # def's format is the original element format widened with the
@@ -3191,13 +3204,13 @@ class _FormatInferInstance(Visitor):
                     and self._store_paths(d_region, region, depth)):
                 self._set_def_bound(d, self.by_def[d])
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None) -> None:
         self._visit_expr(stmt.cond, ctx)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
         self._join_phis(self.def_use.phis[stmt])
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> None:
         self._visit_expr(stmt.cond, ctx)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)
@@ -3212,7 +3225,7 @@ class _FormatInferInstance(Visitor):
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
             self._set_def_bound(phi, self._join(lhs, rhs))
 
-    def _fixpoint(self, phis: Iterable[PhiDef], run_body: Callable[[], None]):
+    def _fixpoint(self, phis: Iterable[PhiDef], run_body: Callable[[], None]) -> None:
         """
         Drive a loop's phi-bound fixpoint to convergence.
 
@@ -3255,7 +3268,7 @@ class _FormatInferInstance(Visitor):
         phis: Iterable[PhiDef],
         run_body: Callable[[], None],
         n: int,
-    ):
+    ) -> None:
         """
         Drive a loop's phi update for up to ``n`` body executions.
 
@@ -3299,17 +3312,17 @@ class _FormatInferInstance(Visitor):
         return (self._insert_count() != inserts
                 or any(self.by_def[phi] != p for phi, p in zip(phis, prev)))
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
-        def iterate():
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> None:
+        def iterate() -> None:
             self._visit_expr(stmt.cond, ctx)
             self._visit_block(stmt.body, ctx)
 
         self._fixpoint(self.def_use.phis[stmt], iterate)
 
-    def _visit_for(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> None:
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
 
-        def iterate():
+        def iterate() -> None:
             self._bind_live(stmt, stmt.target, stmt.iterable, iter_fmt)
             self._visit_block(stmt.body, ctx)
 
@@ -3324,7 +3337,7 @@ class _FormatInferInstance(Visitor):
         else:
             self._fixpoint(self.def_use.phis[stmt], iterate)
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> None:
         # The context expression itself is not a numerical computation.
         # Record the context variable (if named) with format ``None``.
         if isinstance(stmt.target, NamedId):
@@ -3332,15 +3345,15 @@ class _FormatInferInstance(Visitor):
             self._set_def_bound(d, None)
         self._visit_block(stmt.body, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> None:
         self._visit_expr(stmt.test, ctx)
         if stmt.msg is not None:
             self._visit_expr(stmt.msg, ctx)
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+    def _visit_effect(self, stmt: EffectStmt, ctx: None) -> None:
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: None):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> None:
         # Fold each return's format into the running join here, as
         # the body walk encounters it — saves a second AST
         # traversal at function-end.  The first ``ReturnStmt`` sets
@@ -3352,10 +3365,10 @@ class _FormatInferInstance(Visitor):
         else:
             self._return_fmt = self._join(self._return_fmt, fmt)
 
-    def _visit_pass(self, stmt: PassStmt, ctx: None):
+    def _visit_pass(self, stmt: PassStmt, ctx: None) -> None:
         pass
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> None:
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
@@ -3563,7 +3576,7 @@ class FormatInfer:
         array_size: ArraySizeAnalysis | None = None,
         pre_cache: PreAnalysisCache | None = None,
         fn_fmt: FunctionFormat | None = None,
-        digit_bound_params: 'DigitBoundParams | None' = None,
+        digit_bound_params: DigitBoundParams | None = None,
         use_digit_bounds: bool = False,
         value_classes: ValueClassAnalysis | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,

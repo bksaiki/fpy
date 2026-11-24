@@ -20,7 +20,7 @@ from ...analysis.format_infer import (
 )
 from ...analysis.storage_infer import StorageAnalysis, StorageSelectionError, of_bound
 from ...analysis.value_class import ClassBound
-from ...ast.fpyast import Var
+from ...ast.fpyast import Expr, Var
 from ...number import (
     FP32,
     FP64,
@@ -151,24 +151,27 @@ class CppStorage:
     holds a value and not one the analysis has any business carrying.
     """
 
-    def __init__(self, analysis: StorageAnalysis):
+    analysis: StorageAnalysis
+    class_storage: dict[Definition, CppType]
+
+    def __init__(self, analysis: StorageAnalysis) -> None:
         self.analysis = analysis
-        self.class_storage: dict[Definition, CppType] = {
+        self.class_storage = {
             c: to_cpp(fmt) for c, fmt in analysis.class_storage.items()
         }
 
     @property
-    def def_class(self):
+    def def_class(self) -> dict[Definition, Definition]:
         return self.analysis.def_class
 
     @property
-    def class_members(self):
+    def class_members(self) -> dict[Definition, list[Definition]]:
         return self.analysis.class_members
 
     def storage_of(self, d: Definition) -> CppType:
         return self.class_storage[self.analysis.def_class[d]]
 
-    def of_expr(self, e) -> CppType | None:
+    def of_expr(self, e: Expr) -> CppType | None:
         """:meth:`StorageAnalysis.of_expr`, spelled.
 
         A ``Var`` resolves through :attr:`class_storage`, so it sees whatever

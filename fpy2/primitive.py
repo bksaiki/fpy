@@ -49,7 +49,7 @@ class Primitive[**P, R]:
         spec: Any | None = None,
         meta: dict[str, Any] | None = None,
         pure: bool = True
-    ):
+    ) -> None:
         self.func = func
         self.has_ctx_kwd = has_keyword(func, 'ctx')
         self.pure = pure
@@ -61,10 +61,10 @@ class Primitive[**P, R]:
         self.spec = spec
         self.meta = meta
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'{self.__class__.__name__}(func={self.func}, ...)'
 
-    def __call__(self, *args, ctx: Context = FP64):
+    def __call__(self, *args: Any, ctx: Context = FP64) -> R:
         # local import: the `interpret` package depends on this module
         from .interpret.value import to_value, unwrap_foreign
 

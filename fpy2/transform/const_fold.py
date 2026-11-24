@@ -34,7 +34,7 @@ from ..number import Context, Float
 from ..types import ListType, Type, VarType
 
 
-def _rational_literal(val: Fraction, loc):
+def _rational_literal(val: Fraction, loc: Location | None) -> Expr:
     """AST literal for an exact rational: an ``Integer`` when integral,
     otherwise a ``rational`` literal."""
     if val.is_integer():
@@ -42,7 +42,7 @@ def _rational_literal(val: Fraction, loc):
     return Rational(None, val.numerator, val.denominator, loc)
 
 
-def value_to_literal(val: object, loc):
+def value_to_literal(val: object, loc: Location | None) -> Expr | None:
     """Convert a value to an AST literal; return ``None`` if ``val`` has no
     FPy literal form (types, functions, modules, containers with
     non-emittable elements)."""
@@ -67,8 +67,9 @@ def value_to_literal(val: object, loc):
             # unlike `free_var_elim.inline_literal`, which keeps a `Context` free
             return ForeignVal(val, loc)
         case tuple() | list():
-            elts = [value_to_literal(elt, loc) for elt in val]
-            if any(e is None for e in elts):
+            lits = [value_to_literal(elt, loc) for elt in val]
+            elts = [e for e in lits if e is not None]
+            if len(elts) < len(lits):
                 return None
             return TupleExpr(elts, loc) if isinstance(val, tuple) else ListExpr(elts, loc)
         case _:
@@ -117,27 +118,27 @@ class _ShapeScan(DefaultVisitor):
     in_assert: bool
     _depth: int
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.found = False
         self.in_assert = False
         self._depth = 0
 
-    def _mark(self):
+    def _mark(self) -> None:
         self.found = True
         if self._depth > 0:
             self.in_assert = True
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: None):
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> None:
         if isinstance(e, Len | Dim):
             self._mark()
         super()._visit_unaryop(e, ctx)
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: None):
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> None:
         if isinstance(e, Size):
             self._mark()
         super()._visit_binaryop(e, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> None:
         self._depth += 1
         try:
             super()._visit_assert(stmt, ctx)
@@ -188,7 +189,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         def_use: DefineUseAnalysis,
         enable_context: bool,
         enable_op: bool,
-    ):
+    ) -> None:
         self.func = func
         self.partial_eval = partial_eval
         self.shape = shape
@@ -291,7 +292,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             bound = bound.elt
         return concrete_size(bound.size) if isinstance(bound, ListSize) else None
 
-    def _visit_expr(self, e: Expr, ctx) -> Expr:
+    def _visit_expr(self, e: Expr, ctx: None) -> Expr:
         # the chokepoint: every expression arrives here before the default
         # type-dispatched rewrite
         lit = self._fold(e)
@@ -302,7 +303,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             return lit
         return super()._visit_expr(e, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> tuple[Stmt, None]:
         self._in_assert = True
         try:
             return super()._visit_assert(stmt, ctx)

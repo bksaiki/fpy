@@ -70,6 +70,8 @@ class CppOp:
                 out = f'({self.name}{arg})'
             case CppOpStyle.CALL:
                 out = f'{self.name}({", ".join(args)})'
+            case _:
+                raise RuntimeError(f'unreachable: {self.style}')
         if self.cast_out:
             out_ty = choose_storage_scalar(self.out_ctx.format())
             return f'static_cast<{out_ty.format()}>({out})'

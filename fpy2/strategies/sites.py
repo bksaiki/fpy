@@ -3,6 +3,7 @@ Scheduling language: listing the sites a strategy can be aimed at
 """
 
 from collections.abc import Callable
+from typing import Any
 
 from ..function import Function
 from ..transform import (
@@ -97,7 +98,7 @@ def sites(
     func: Function,
     /,
     within: Cursor | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> list[Cursor]:
     """
     The sites `strategy` could rewrite in `func`, in the order a `where` index
@@ -183,7 +184,7 @@ def refusals(
     func: Function,
     /,
     within: Cursor | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> list[tuple[Cursor, str]]:
     """
     Why each program point `strategy` could have acted on in `func` is not a

@@ -15,7 +15,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
@@ -117,7 +117,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             return StmtBlock([s])
 
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> tuple[StmtBlock, None]:
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, ForStmt):

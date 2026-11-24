@@ -145,7 +145,7 @@ class _Scopes:
     wide: bool
     _formats: dict[Expr, FormatBound] | None
 
-    def __init__(self, func: FuncDef, wide: bool):
+    def __init__(self, func: FuncDef, wide: bool) -> None:
         self.func = func
         self.def_use = DefineUse.analyze(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)

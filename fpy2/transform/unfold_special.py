@@ -324,7 +324,7 @@ class _UnfoldSpecialInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis, where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.class_info = class_info

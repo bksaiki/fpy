@@ -23,7 +23,7 @@ class Gensym:
         self,
         reserved: Collection[NamedId] | None = None,
         rename_hook: Callable[[str], str] | None = None
-    ):
+    ) -> None:
         if reserved is None:
             self._idents = set()
             self._counter = 0
@@ -44,15 +44,17 @@ class Gensym:
                 return SourceId(id.base, id.loc, count)
             case NamedId():
                 return NamedId(id.base, count)
+            case _:
+                raise RuntimeError(f'unreachable: {id}')
 
-    def reserve(self, *idents: NamedId):
+    def reserve(self, *idents: NamedId) -> None:
         """Reserves a set of identifiers. Does not add to `self.generated`."""
         for ident in idents:
             if not isinstance(ident, NamedId):
                 raise TypeError('must be a list of identifiers', idents)
             self._idents.add(ident)
 
-    def refresh(self, ident: NamedId):
+    def refresh(self, ident: NamedId) -> NamedId:
         """Generates a unique identifier for an existing identifier."""
         ident = self._copy_id(ident)
         while ident in self._idents:
@@ -63,7 +65,7 @@ class Gensym:
         self._generated.add(ident)
         return ident
 
-    def fresh(self, prefix: str = 't'):
+    def fresh(self, prefix: str = 't') -> NamedId:
         """
         Generates a unique identifier with a given prefix.
 
@@ -74,17 +76,17 @@ class Gensym:
             prefix = self._rename_hook(prefix)
         return self.refresh(NamedId(prefix))
 
-    def __contains__(self, name: NamedId):
+    def __contains__(self, name: NamedId) -> bool:
         return name in self._idents
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._idents)
 
     @property
-    def names(self):
+    def names(self) -> set[NamedId]:
         return set(self._idents)
 
     @property
-    def generated(self):
+    def generated(self) -> set[NamedId]:
         """Returns the set of generated identifiers."""
         return set(self._generated)

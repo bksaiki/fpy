@@ -9,7 +9,7 @@ from . import core
 # Splitting
 
 @fp.fpy
-def veltkamp_split(x: fp.Real, s: fp.Real):
+def veltkamp_split(x: fp.Real, s: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Splits a floating-point number into a high and low part
     such that the high part is representable in `prec(x) - s` digits
@@ -30,7 +30,7 @@ def veltkamp_split(x: fp.Real, s: fp.Real):
 # Addition
 
 @fp.fpy
-def ideal_2sum(a: fp.Real, b: fp.Real):
+def ideal_2sum(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Error-free transformation of the sum of two floating-point numbers.
 
@@ -49,7 +49,7 @@ def ideal_2sum(a: fp.Real, b: fp.Real):
 
 
 @fp.fpy
-def fast_2sum(a: fp.Real, b: fp.Real):
+def fast_2sum(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Error-free transformation of the sum of two floating-point numbers.
     This algorithm is due to Dekker (1971).
@@ -73,7 +73,7 @@ def fast_2sum(a: fp.Real, b: fp.Real):
 
 
 @fp.fpy
-def classic_2sum(a: fp.Real, b: fp.Real):
+def classic_2sum(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Computes the sum of two floating-point numbers with error-free transformation.
     This algorithm is due to Knuth and Moller.
@@ -97,7 +97,7 @@ def classic_2sum(a: fp.Real, b: fp.Real):
 
 
 @fp.fpy
-def priest_2sum(a: fp.Real, b: fp.Real):
+def priest_2sum(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Computes the sum of two floating-point numbers with error-free transformation.
     This algorithm is due to Priest.
@@ -129,7 +129,7 @@ def priest_2sum(a: fp.Real, b: fp.Real):
 # Multiplication
 
 @fp.fpy
-def ideal_2mul(a: fp.Real, b: fp.Real):
+def ideal_2mul(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Error-free transformation of the product of two floating-point numbers.
 
@@ -147,7 +147,7 @@ def ideal_2mul(a: fp.Real, b: fp.Real):
     return s, t
 
 @fp.fpy
-def classic_2mul(a: fp.Real, b: fp.Real):
+def classic_2mul(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Computes the product of two floating-point numbers with error-free transformation.
     This algorithm is due to Dekker.
@@ -178,7 +178,7 @@ def classic_2mul(a: fp.Real, b: fp.Real):
 
 
 @fp.fpy
-def fast_2mul(a: fp.Real, b: fp.Real):
+def fast_2mul(a: fp.Real, b: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Error-free transformation of the product of two floating-point numbers.
 
@@ -198,7 +198,7 @@ def fast_2mul(a: fp.Real, b: fp.Real):
 # FMA
 
 @fp.fpy
-def ideal_fma(a: fp.Real, b: fp.Real, c: fp.Real):
+def ideal_fma(a: fp.Real, b: fp.Real, c: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Error-free transformation of the fused multiply-add operation.
 
@@ -216,7 +216,7 @@ def ideal_fma(a: fp.Real, b: fp.Real, c: fp.Real):
     return r, t
 
 @fp.fpy
-def classic_2fma(a: fp.Real, b: fp.Real, c: fp.Real):
+def classic_2fma(a: fp.Real, b: fp.Real, c: fp.Real) -> tuple[fp.Real, fp.Real, fp.Real]:
     """
     Computes the fused multiply-add operation with error-free transformation.
     This algorithm is due to Boldo and Muller.

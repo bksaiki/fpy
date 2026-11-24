@@ -12,7 +12,7 @@ class _ForUnpackInstance(DefaultTransformVisitor):
     func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
 

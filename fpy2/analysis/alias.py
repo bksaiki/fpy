@@ -89,6 +89,7 @@ cost precision, not soundness.
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import TYPE_CHECKING, Literal, overload
 
 from ..ast import (
@@ -102,6 +103,7 @@ from ..ast import (
     ForStmt,
     Fst,
     FuncDef,
+    Id,
     IfExpr,
     IndexedAssign,
     Integer,
@@ -119,6 +121,7 @@ from ..ast import (
     StmtBlock,
     TupleBinding,
     TupleExpr,
+    UnderscoreId,
     Var,
     WhileStmt,
     Zip,
@@ -134,7 +137,7 @@ from .array_size import (
     concrete_size,
 )
 from .define_use import DefineUse, DefineUseAnalysis
-from .reaching_defs import AssignDef, Definition, same_object_defs
+from .reaching_defs import AssignDef, Definition, DefSite, same_object_defs
 from .type_infer import TypeAnalysis, TypeInfer, TypeInferError
 
 if TYPE_CHECKING:
@@ -151,8 +154,12 @@ index would buy almost nothing.
 
 _PartKey = int | None
 
-_Missing = Literal['raise', 'create', 'none']
-"""What :meth:`_Regions.part` should do when the part does not exist yet."""
+class _Missing(Enum):
+    """What :meth:`_Regions.part` should do when the part does not exist yet."""
+
+    RAISE = auto()
+    CREATE = auto()
+    NONE = auto()
 
 
 def _carries_list(ty: Type | None) -> bool:
@@ -195,7 +202,7 @@ class AllocSite:
 
     __slots__ = ('depth', 'kind', 'node')
 
-    def __init__(self, kind: str, node: Expr | Argument, depth: int = 0):
+    def __init__(self, kind: str, node: Expr | Argument, depth: int = 0) -> None:
         self.kind = kind
         self.node = node
         self.depth = depth
@@ -203,7 +210,7 @@ class AllocSite:
     def __repr__(self) -> str:
         # Not `@default_repr`: it would inline the whole AST node, and a site is
         # usually printed as part of a list.
-        at = getattr(self.node, 'name', None) or type(self.node).__name__
+        at = self.node.name if isinstance(self.node, Argument | Var) else type(self.node).__name__
         return f'<{self.kind} {at}{f"[{self.depth}]" if self.depth else ""}>'
 
 
@@ -220,7 +227,7 @@ class Region:
 
     __slots__ = ('_kind',)
 
-    def __init__(self, kind: str):
+    def __init__(self, kind: str) -> None:
         self._kind = kind
 
     def __repr__(self) -> str:
@@ -234,22 +241,31 @@ class _Regions:
     arrangement ``storage_infer`` uses for storage classes.
     """
 
-    def __init__(self):
-        self._uf: Unionfind[Region] = Unionfind()
-        self._sites: dict[Region, set[AllocSite]] = {}
+    _uf: Unionfind[Region]
+    _sites: dict[Region, set[AllocSite]]
+    _names: dict[Region, set[NamedId]]
+    _slots: dict[Region, int]
+    _shared_out: set[Region]
+    _returned: set[Region]
+    _callee_written: set[Region]
+    _parts: dict[Region, dict[_PartKey, Region]]
+
+    def __init__(self) -> None:
+        self._uf = Unionfind()
+        self._sites = {}
         # A class's *referrers*: distinct source names plus container slots,
         # not regions.  A variable's SSA definitions are one place however many
         # times it is redefined; a slot is not a name but is how `[xs]` shares
         # `xs`; an allocation is neither, so `xs = [x, x]` has one referrer.
-        self._names: dict[Region, set[NamedId]] = {}
-        self._slots: dict[Region, int] = {}
+        self._names = {}
+        self._slots = {}
         # Two ways out of the function, distinguished because they mean opposite
         # things for ownership -- see `AliasAnalysis.transfers_ownership`.
-        self._shared_out: set[Region] = set()
-        self._returned: set[Region] = set()
+        self._shared_out = set()
+        self._returned = set()
         # handed to a callee that may store into it, which need not keep it
-        self._callee_written: set[Region] = set()
-        self._parts: dict[Region, dict[_PartKey, Region]] = {}
+        self._callee_written = set()
+        self._parts = {}
 
     @property
     def _flags(self) -> tuple[set[Region], ...]:
@@ -274,38 +290,38 @@ class _Regions:
     @overload
     def part(
         self, c: Region, key: _PartKey = ...,
-        *, missing: Literal['raise', 'create'] = ...,
+        *, missing: Literal[_Missing.RAISE, _Missing.CREATE] = ...,
     ) -> Region:
         ...
 
     @overload
     def part(
-        self, c: Region, key: _PartKey = ..., *, missing: Literal['none'],
+        self, c: Region, key: _PartKey = ..., *, missing: Literal[_Missing.NONE],
     ) -> Region | None:
         ...
 
     def part(
         self, c: Region, key: _PartKey = ELTS,
-        *, missing: _Missing = 'raise',
+        *, missing: _Missing = _Missing.RAISE,
     ) -> Region | None:
         """The region standing for part *key* of *c*: its elements, or a field.
 
         *missing* says what to do when that part does not exist yet, and has no
         default that silently does either thing:
 
-        - ``'raise'`` — a caller that expects a part has a bug if there is none,
+        - ``RAISE`` — a caller that expects a part has a bug if there is none,
           and quietly making one would hide it.
-        - ``'create'`` — make it; what building constraints wants.
-        - ``'none'`` — return ``None``; what a *query* wants.  A query must not
+        - ``CREATE`` — make it; what building constraints wants.
+        - ``NONE`` — return ``None``; what a *query* wants.  A query must not
           extend the structure it reads, and "nothing ever looked inside this
           list" is itself an answer.
         """
         root = self.find(c)
         parts = self._parts.get(root)
         if parts is None or key not in parts:
-            if missing == 'none':
+            if missing is _Missing.NONE:
                 return None
-            if missing == 'raise':
+            if missing is _Missing.RAISE:
                 raise KeyError(f'{c!r} has no part {key!r}')
             parts = self._parts.setdefault(root, {})
             parts[key] = self.new('part', slot=True)
@@ -471,7 +487,7 @@ class AliasAnalysis:
         for _ in range(depth):
             if region is None:
                 return None
-            region = self._regions.part(region, missing='none')
+            region = self._regions.part(region, missing=_Missing.NONE)
         return None if region is None else self._regions.find(region)
 
     def all_defs(self) -> frozenset[Definition]:
@@ -494,7 +510,7 @@ class AliasAnalysis:
         """The region held by field *i* of *region*'s tuple."""
         if region is None:
             return None
-        return self._regions.part(region, i, missing='none')
+        return self._regions.part(region, i, missing=_Missing.NONE)
 
     def defs_in(self, region: Region) -> frozenset[Definition]:
         """Every definition whose value may live in *region*."""
@@ -668,10 +684,12 @@ class _EscapeVars(DefaultVisitor):
     attribute walk so an unfamiliar node's children are still reached.
     """
 
-    def __init__(self, builder: '_Builder'):
+    builder: '_Builder'
+
+    def __init__(self, builder: '_Builder') -> None:
         self.builder = builder
 
-    def _visit_var(self, e: Var, ctx):
+    def _visit_var(self, e: Var, ctx: None) -> None:
         region = self.builder._region_for(e)
         if region is not None:
             self.builder.regions.mark_shared_out(region)
@@ -687,20 +705,31 @@ class _Builder(DefaultVisitor):
     twice.
     """
 
+    func: FuncDef
+    def_use: DefineUseAnalysis
+    types: TypeAnalysis
+    summaries: 'dict[FuncDef, EscapeSummary]'
+    linked: frozenset[tuple[int, int]]
+    regions: _Regions
+    sites: list[AllocSite]
+    by_def: dict[Definition, Region]
+    site_region: dict[AllocSite, Region]
+    _by_expr: dict[Expr, Region]
+
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis,
                  type_info: TypeAnalysis,
                  summaries: 'dict[FuncDef, EscapeSummary]',
-                 linked: frozenset[tuple[int, int]]):
+                 linked: frozenset[tuple[int, int]]) -> None:
         self.func = func
         self.def_use = def_use
         self.types = type_info
         self.summaries = summaries
         self.linked = linked
         self.regions = _Regions()
-        self.sites: list[AllocSite] = []
-        self.by_def: dict[Definition, Region] = {}
-        self.site_region: dict[AllocSite, Region] = {}
-        self._by_expr: dict[Expr, Region] = {}
+        self.sites = []
+        self.by_def = {}
+        self.site_region = {}
+        self._by_expr = {}
 
     def run(self) -> AliasAnalysis:
         self._merge_redefinitions()
@@ -727,7 +756,7 @@ class _Builder(DefaultVisitor):
 
     def _part(self, c: Region, key: _PartKey = ELTS) -> Region:
         """A part of *c*, created on first mention."""
-        return self.regions.part(c, key, missing='create')
+        return self.regions.part(c, key, missing=_Missing.CREATE)
 
     def _reg(self, d: Definition) -> Region:
         if d not in self.by_def:
@@ -822,6 +851,8 @@ class _Builder(DefaultVisitor):
                 for i, elt in enumerate(ty.elts):
                     if _carries_list(elt):
                         self._seed(self._part(region, i), elt, arg, depth)
+            case _:
+                raise RuntimeError(f'unreachable: {ty}')
 
     # -- the value-returning half ------------------------------------------
 
@@ -942,16 +973,20 @@ class _Builder(DefaultVisitor):
             if it is not None:
                 self._bind(target, self._part(it), e)
 
-    def _bind(self, target, region: Region, site) -> None:
+    def _bind(self, target: Id | TupleBinding, region: Region, site: DefSite) -> None:
         """Bind a name or a tuple pattern to *region*, field by field."""
         match target:
             case NamedId():
                 d = self.def_use.find_def_from_site(target, site)
                 if _carries_list(self.types.by_def.get(d)):
                     self.regions.merge(self._reg(d), region)
+            case UnderscoreId():
+                pass
             case TupleBinding():
                 for i, elt in enumerate(target.elts):
                     self._bind(elt, self._part(region, i), site)
+            case _:
+                raise RuntimeError(f'unreachable: {target}')
 
     def _summary(self, e: Call) -> 'EscapeSummary | None':
         """The callee's summary, computed when not given; ``None`` for a foreign
@@ -979,31 +1014,35 @@ class _Builder(DefaultVisitor):
                 for i, elt in enumerate(ty.elts):
                     if _carries_list(elt):
                         yield from self._lists_in(self._part(region, i), elt)
+            case _:
+                pass
 
     # -- constraint-generating hooks ---------------------------------------
     #
     # Each does its own work then delegates, so the framework keeps traversing.
 
-    def _visit_expr(self, e: Expr, ctx):
+    def _visit_expr(self, e: Expr, ctx: None) -> None:
         # The net that makes the analysis total: every list-carrying expression
         # gets a region, even in a position no hook below intercepts.  Memoized, so
         # an expression a hook already handled is not built twice.
         self._region_for(e)
         return super()._visit_expr(e, ctx)
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         """An argument the callee may write is marked so; one it may keep is
         shared outward and joins each same-shaped list in the result or in a
         written argument."""
         summary = self._summary(e)
         written = [a for i, a in enumerate(e.args) if summary is None or summary.writes(i)]
         retained = [a for i, a in enumerate(e.args) if summary is None or summary.retains(i)]
-        reach = [(x, xc) for x in (e, *written) if (xc := self._region_for(x)) is not None]
+        regions = [(x, self._region_for(x)) for x in (e, *written)]
+        reach = [(x, xc) for x, xc in regions if xc is not None]
         for x, xc in reach:
             if x is not e:
                 self.regions.mark_callee_written(xc)
         for a in retained:
-            if (ac := self._region_for(a)) is None:
+            ac = self._region_for(a)
+            if ac is None:
                 continue
             self.regions.mark_shared_out(ac)
             for x, xc in reach:
@@ -1011,13 +1050,13 @@ class _Builder(DefaultVisitor):
                     ac, self.types.by_expr.get(a), xc, self.types.by_expr.get(x))
         super()._visit_call(e, ctx)
 
-    def _visit_assign(self, stmt: Assign, ctx):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> None:
         rhs = self._region_for(stmt.expr)
         if rhs is not None:
             self._bind(stmt.target, rhs, stmt)
         super()._visit_assign(stmt, ctx)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         if isinstance(stmt.var, NamedId):
             d = self.def_use.find_def_from_site(stmt.var, stmt)
             cur = self._reg(d)
@@ -1028,13 +1067,13 @@ class _Builder(DefaultVisitor):
                 self.regions.merge(self._part(cur), rhs)
         super()._visit_indexed_assign(stmt, ctx)
 
-    def _visit_for(self, stmt: ForStmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> None:
         it = self._region_for(stmt.iterable)
         if it is not None:
             self._bind(stmt.target, self._part(it), stmt)
         super()._visit_for(stmt, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> None:
         rhs = self._region_for(stmt.expr)
         if rhs is not None:
             self.regions.mark_returned(rhs)
@@ -1049,47 +1088,60 @@ class _RegionFacts(DefaultVisitor):
     every merge has run.
     """
 
-    def __init__(self, alias: 'AliasAnalysis', def_use: DefineUseAnalysis):
+    alias: AliasAnalysis
+    def_use: DefineUseAnalysis
+    written: set[Region]
+    stored: set[Region]
+    slot_replaced: set[Region]
+    returned_levels: list[set[Region]]
+    consumed: dict[Region, set[Definition]]
+    _siblings: set[Stmt]
+    _repeats: int
+    _phi_of: dict[Definition, set[Definition]]
+
+    def __init__(self, alias: AliasAnalysis, def_use: DefineUseAnalysis) -> None:
         self.alias = alias
         self.def_use = def_use
-        self.written: set[Region] = set()
-        self.stored: set[Region] = set()
-        self.slot_replaced: set[Region] = set()
-        self.returned_levels: list[set[Region]] = []
-        self.consumed: dict[Region, set[Definition]] = {}
-        self._siblings: set[Stmt] = set()
+        self.written = set()
+        self.stored = set()
+        self.slot_replaced = set()
+        self.returned_levels = []
+        self.consumed = {}
+        self._siblings = set()
         self._repeats = 0
         # Which phi consumed each operand.  A phi is not a use site, so
         # sole-use would otherwise hold for a name whose value flows out of its
         # branch -- and a merge inside one object's own class, a loop head
         # threading a list through its fills, is not such a flow.
-        self._phi_of: dict[Definition, set[Definition]] = {}
+        self._phi_of = {}
         for ps in def_use.phis.values():
             for p in ps:
                 for i in (p.lhs, p.rhs):
                     self._phi_of.setdefault(def_use.defs[i], set()).add(p)
         for d in alias.all_defs():
             if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
-                if (r := alias.region_of(d)) is not None:
+                r = alias.region_of(d)
+                if r is not None:
                     self.written.add(r)
                 depth = len(d.site.indices) - 1
-                if (r := alias.region_of(d, depth)) is not None:
+                r = alias.region_of(d, depth)
+                if r is not None:
                     self.stored.add(r)
 
-    def _visit_block(self, block: StmtBlock, ctx):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> None:
         outer, self._siblings = self._siblings, set(block.stmts)
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
         self._siblings = outer
 
-    def _visit_while(self, stmt: WhileStmt, ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> None:
         # the condition re-runs every iteration, in the enclosing block
         self._repeats += 1
         self._visit_expr(stmt.cond, ctx)
         self._repeats -= 1
         self._visit_block(stmt.body, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> None:
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         # the element runs once per item, and is an expression rather than a
@@ -1098,11 +1150,11 @@ class _RegionFacts(DefaultVisitor):
         self._visit_expr(e.elt, ctx)
         self._repeats -= 1
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> None:
         self._note_consumed(e.elts)
         super()._visit_tuple_expr(e, ctx)
 
-    def _visit_list_expr(self, e: ListExpr, ctx):
+    def _visit_list_expr(self, e: ListExpr, ctx: None) -> None:
         self._note_consumed(e.elts)
         super()._visit_list_expr(e, ctx)
 
@@ -1141,7 +1193,7 @@ class _RegionFacts(DefaultVisitor):
                 return False
         return True
 
-    def _note_consumed(self, elts: 'tuple[Expr, ...]') -> None:
+    def _note_consumed(self, elts: tuple[Expr, ...]) -> None:
         """Record each operand of a construction whose value *moves* into it.
 
         Sound only where the construction provably runs once for that value, so
@@ -1180,10 +1232,11 @@ class _RegionFacts(DefaultVisitor):
                 continue
             if any(s not in self._siblings for s in allocs):
                 continue
-            if (r := self.alias.region_of(d)) is not None:
+            r = self.alias.region_of(d)
+            if r is not None:
                 self.consumed.setdefault(r, set()).update(cls)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         # Only a store of a *list* replaces a slot: a scalar write goes through
         # the cell, leaving whatever region the element held intact.
         if (
@@ -1191,13 +1244,17 @@ class _RegionFacts(DefaultVisitor):
             and self.alias.region_of_expr(stmt.expr) is not None
         ):
             d = self.def_use.find_def_from_site(stmt.var, stmt)
-            if (r := self.alias.region_of(d, len(stmt.indices))) is not None:
+            r = self.alias.region_of(d, len(stmt.indices))
+            if r is not None:
                 self.slot_replaced.add(r)
         super()._visit_indexed_assign(stmt, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> None:
         depth = 0
-        while (r := self.alias.region_of_expr(stmt.expr, depth)) is not None:
+        while True:
+            r = self.alias.region_of_expr(stmt.expr, depth)
+            if r is None:
+                break
             while len(self.returned_levels) <= depth:
                 self.returned_levels.append(set())
             self.returned_levels[depth].add(r)
@@ -1254,6 +1311,8 @@ def region_sizes(
                     seed(b, alias.region_field(region, i))
             case None:
                 contribute(region, None)
+            case _:
+                raise RuntimeError(f'unreachable: {bound}')
 
     for d in alias.all_defs():
         seed(array_size.by_def.get(d), alias.region_of(d))

@@ -29,31 +29,31 @@ class _Env:
         env: dict[NamedId, bool] | None = None,
         *,
         terminated: bool = False,
-    ):
+    ) -> None:
         if env is None:
             self.env = {}
         else:
             self.env = env.copy()
         self.terminated = terminated
 
-    def __contains__(self, key):
+    def __contains__(self, key: NamedId) -> bool:
         return key in self.env
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: NamedId) -> bool:
         return self.env[key]
 
-    def extend(self, var: NamedId):
+    def extend(self, var: NamedId) -> '_Env':
         copy = _Env(self.env, terminated=self.terminated)
         copy.env[var] = True
         return copy
 
-    def remove(self, vars: set[NamedId]):
+    def remove(self, vars: set[NamedId]) -> '_Env':
         copy = _Env(self.env, terminated=self.terminated)
         for var in vars:
             copy.env.pop(var, None)
         return copy
 
-    def merge(self, other: Self):
+    def merge(self, other: Self) -> '_Env':
         # Terminated paths don't reach the merge point.  If one
         # side terminates, the other is the only path; if both
         # terminate, the merge point itself is unreachable.
@@ -80,7 +80,7 @@ class _Ctx:
     """are we checking the function part of a call?"""
 
     @staticmethod
-    def default():
+    def default() -> '_Ctx':
         return _Ctx(_Env(), False)
 
 
@@ -98,14 +98,14 @@ class SyntaxCheckInstance(Visitor):
         free_vars: set[NamedId],
         ignore_unknown: bool,
         allow_wildcard: bool
-    ):
+    ) -> None:
         self.func = func
         self.free_vars = free_vars
         self.ignore_unknown = ignore_unknown
         self.allow_wildcard = allow_wildcard
         self.free_var_args = set()
 
-    def analyze(self):
+    def analyze(self) -> set[NamedId]:
         self._visit_function(self.func, _Ctx.default())
         return self.free_var_args
 
@@ -115,7 +115,7 @@ class SyntaxCheckInstance(Visitor):
         env: _Env,
         *,
         ignore_missing: bool = False
-    ):
+    ) -> None:
         if not ignore_missing:
             if name not in env:
                 raise FPySyntaxError(f'unbound variable `{name}`')
@@ -129,7 +129,7 @@ class SyntaxCheckInstance(Visitor):
         if name in self.free_vars:
             self.free_var_args.add(name)
 
-    def _visit_var(self, e: Var, ctx: _Ctx):
+    def _visit_var(self, e: Var, ctx: _Ctx) -> None:
         env = ctx.env
         match e.name:
             case NamedId():
@@ -140,69 +140,71 @@ class SyntaxCheckInstance(Visitor):
             case _:
                 raise FPySyntaxError(f'expected a NamedId, got {e.name}')
 
-    def _visit_bool(self, e: BoolVal, ctx: _Ctx):
+    def _visit_bool(self, e: BoolVal, ctx: _Ctx) -> None:
         pass
 
-    def _visit_foreign(self, e: ForeignVal, ctx: _Ctx):
+    def _visit_foreign(self, e: ForeignVal, ctx: _Ctx) -> None:
         pass
 
-    def _visit_decnum(self, e: Decnum, ctx: _Ctx):
+    def _visit_decnum(self, e: Decnum, ctx: _Ctx) -> None:
         pass
 
     @staticmethod
-    def _check_op_nameable(e: Expr):
+    def _check_op_nameable(
+        e: Hexnum | Rational | Digits | NullaryOp | NamedUnaryOp | NamedBinaryOp | NamedTernaryOp | NamedNaryOp
+    ) -> None:
         """A synthesized operator (`func is None`) must have a canonical
         name, or the pretty-printer cannot render it."""
-        if getattr(e, 'func', None) is None and type(e) not in CANONICAL_OP_NAMES:
+        if e.func is None and type(e) not in CANONICAL_OP_NAMES:
             raise FPySyntaxError(
                 f'operator `{type(e).__name__}` has no surface reference '
                 f'and no entry in CANONICAL_OP_NAMES'
             )
 
-    def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
+    def _visit_hexnum(self, e: Hexnum, ctx: _Ctx) -> None:
         self._check_op_nameable(e)
 
-    def _visit_integer(self, e: Integer, ctx: _Ctx):
+    def _visit_integer(self, e: Integer, ctx: _Ctx) -> None:
         pass
 
-    def _visit_rational(self, e: Rational, ctx: _Ctx):
+    def _visit_rational(self, e: Rational, ctx: _Ctx) -> None:
         self._check_op_nameable(e)
 
-    def _visit_digits(self, e: Digits, ctx: _Ctx):
+    def _visit_digits(self, e: Digits, ctx: _Ctx) -> None:
         self._check_op_nameable(e)
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx) -> None:
         self._check_op_nameable(e)
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
+    def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx) -> None:
         if isinstance(e, NamedUnaryOp):
             self._check_op_nameable(e)
         self._visit_expr(e.arg, ctx)
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
+    def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx) -> None:
         if isinstance(e, NamedBinaryOp):
             self._check_op_nameable(e)
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx) -> None:
         if isinstance(e, NamedTernaryOp):
             self._check_op_nameable(e)
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
 
-    def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
+    def _visit_naryop(self, e: NaryOp, ctx: _Ctx) -> None:
         if isinstance(e, NamedNaryOp):
             self._check_op_nameable(e)
         for c in e.args:
             self._visit_expr(c, ctx)
 
-    def _visit_compare(self, e: Compare, ctx: _Ctx):
+    def _visit_compare(self, e: Compare, ctx: _Ctx) -> None:
         for c in e.args:
             self._visit_expr(c, ctx)
 
-    def _visit_call(self, e: Call, ctx: _Ctx):
+    def _visit_call(self, e: Call, ctx: _Ctx) -> None:
         match e.func:
             case Var():
                 self._mark_use(e.func.name, ctx.env, ignore_missing=self.ignore_unknown)
@@ -215,38 +217,38 @@ class SyntaxCheckInstance(Visitor):
         for _, arg in e.kwargs:
             self._visit_expr(arg, ctx)
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx) -> None:
         for c in e.elts:
             self._visit_expr(c, ctx)
 
-    def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
+    def _visit_list_expr(self, e: ListExpr, ctx: _Ctx) -> None:
         for c in e.elts:
             self._visit_expr(c, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> None:
         for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
             env = self._visit_binding(target, ctx.env, fresh=True)
             ctx = _Ctx(env, ctx.within_call)
         self._visit_expr(e.elt, _Ctx(env, ctx.within_call))
 
-    def _visit_list_ref(self, e: ListRef, ctx: _Ctx):
+    def _visit_list_ref(self, e: ListRef, ctx: _Ctx) -> None:
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
 
-    def _visit_list_slice(self, e: ListSlice, ctx: _Ctx):
+    def _visit_list_slice(self, e: ListSlice, ctx: _Ctx) -> None:
         self._visit_expr(e.value, ctx)
         if e.start is not None:
             self._visit_expr(e.start, ctx)
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
 
-    def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
+    def _visit_if_expr(self, e: IfExpr, ctx: _Ctx) -> None:
         self._visit_expr(e.cond, ctx)
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
 
-    def _visit_attribute(self, e: Attribute, ctx: _Ctx):
+    def _visit_attribute(self, e: Attribute, ctx: _Ctx) -> None:
         if ctx.within_call and not isinstance(e.value, Var | Attribute):
             raise FPySyntaxError('attribute base in function position must be either a variable or another attribute')
         self._visit_expr(e.value, ctx)
@@ -258,7 +260,7 @@ class SyntaxCheckInstance(Visitor):
         bound: set[NamedId] | None = None,
         *,
         fresh: bool = False
-    ):
+    ) -> _Env:
         # `bound` accumulates the names of this binding alone: a name may
         # shadow an outer definition (unless `fresh`), but never repeat
         # within the same binding.
@@ -286,12 +288,12 @@ class SyntaxCheckInstance(Visitor):
                 raise RuntimeError('unreachable', binding)
         return env
 
-    def _visit_assign(self, stmt: Assign, ctx: _Ctx):
+    def _visit_assign(self, stmt: Assign, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._visit_expr(stmt.expr, ctx)
         return self._visit_binding(stmt.target, env)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._mark_use(stmt.var, env)
         for s in stmt.indices:
@@ -299,26 +301,26 @@ class SyntaxCheckInstance(Visitor):
         self._visit_expr(stmt.expr, ctx)
         return env
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._visit_expr(stmt.cond, ctx)
         ift_env = self._visit_block(stmt.body, ctx)
         return env.merge(ift_env)
 
-    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx) -> _Env:
         self._visit_expr(stmt.cond, ctx)
         ift_env = self._visit_block(stmt.ift, ctx)
         iff_env = self._visit_block(stmt.iff, ctx)
         return ift_env.merge(iff_env)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx) -> _Env:
         env = ctx.env
         body_env = self._visit_block(stmt.body, ctx)
         env = env.merge(body_env)
         self._visit_expr(stmt.cond, _Ctx(env, False))
         return env
 
-    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._visit_expr(stmt.iterable, ctx)
         body_env = self._visit_block(
@@ -329,7 +331,7 @@ class SyntaxCheckInstance(Visitor):
         # definition (`fresh`) nor escapes past the loop
         return env.merge(body_env).remove(stmt.target.names())
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
@@ -337,35 +339,35 @@ class SyntaxCheckInstance(Visitor):
         body_env = self._visit_block(stmt.body, _Ctx(env, False))
         return body_env # no merge
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._visit_expr(stmt.test, ctx)
         if stmt.msg is not None:
             self._visit_expr(stmt.msg, ctx)
         return env
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx) -> _Env:
         env = ctx.env
         self._visit_expr(stmt.expr, ctx)
         return env
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx) -> _Env:
         self._visit_expr(stmt.expr, ctx)
         # The control-flow path doesn't continue past a return —
         # mark the resulting env terminated so sibling-branch
         # merges drop it cleanly (see :meth:`_Env.merge`).
         return _Env(terminated=True)
 
-    def _visit_pass(self, stmt: PassStmt, ctx: _Ctx):
+    def _visit_pass(self, stmt: PassStmt, ctx: _Ctx) -> _Env:
         return ctx.env
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx) -> _Env:
         env = ctx.env
         for stmt in block.stmts:
             env = self._visit_statement(stmt, _Ctx(env, False))
         return env
 
-    def _visit_function(self, func: FuncDef, ctx: _Ctx):
+    def _visit_function(self, func: FuncDef, ctx: _Ctx) -> _Env:
         env = ctx.env
         for var in self.free_vars:
             env = env.extend(var)
@@ -419,7 +421,7 @@ class SyntaxCheck:
         free_vars: set[NamedId] | None = None,
         ignore_unknown: bool = True,
         allow_wildcard: bool = False
-    ):
+    ) -> set[NamedId]:
         """
         Analyzes the function for syntax errors.
 

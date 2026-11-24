@@ -43,6 +43,7 @@ the return type rejects.
 """
 
 import enum
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 from ...analysis import Definition
@@ -196,7 +197,7 @@ class UnboxAnalysis:
         return self._stamp(ty, at, 0)
 
     def _stamp(
-        self, ty: CppType, regions_at, depth: int,
+        self, ty: CppType, regions_at: Callable[..., set[Region]], depth: int,
         cls: Definition | None = None,
     ) -> CppType:
         """*ty* with a representation per list level, descending into tuple
@@ -256,9 +257,9 @@ class Unbox:
         def_use: DefineUseAnalysis,
         *,
         is_called: bool = False,
-        summary: 'EscapeSummary | None' = None,
-        callees: 'dict[FuncDef, CalleeAbi] | None' = None,
-        array_size: 'ArraySizeAnalysis | None' = None,
+        summary: EscapeSummary | None = None,
+        callees: dict[FuncDef, CalleeAbi] | None = None,
+        array_size: ArraySizeAnalysis | None = None,
     ) -> UnboxAnalysis:
         """Which lists may drop the handle.
 
@@ -355,8 +356,8 @@ def _regions(
     depth = 0
     while isinstance(ty, CppList | CppTuple):
         found = {
-            r for d in storage.class_members[cls]
-            if (r := alias.region_of(d, depth)) is not None
+            r for r in (alias.region_of(d, depth) for d in storage.class_members[cls])
+            if r is not None
         }
         assert len(found) <= 1, (
             f'storage class `{cls.name}` spans {len(found)} alias regions at '
@@ -373,11 +374,11 @@ def _regions(
 def _fields(alias: AliasAnalysis, regions: set[Region], i: int) -> set[Region]:
     """Field *i* of each of *regions*."""
     return {
-        f for r in regions if (f := alias.region_field(r, i)) is not None
+        f for f in (alias.region_field(r, i) for r in regions) if f is not None
     }
 
 
-def _at_depth(per_depth: list[Region | None]):
+def _at_depth(per_depth: list[Region | None]) -> Callable[[int], set[Region]]:
     """A ``regions_at`` callback over a storage class's per-depth regions.
 
     :func:`_stamp`'s other callers key off an expression or the return group;
@@ -413,31 +414,39 @@ class _Scan(DefaultVisitor):
     ``alias.written_regions`` already found here.
     """
 
+    alias: AliasAnalysis
+    callees: dict[FuncDef, CalleeAbi]
+    at_boundary: set[Region]
+    written: set[Region]
+
     def __init__(
         self,
         alias: AliasAnalysis,
-        callees: 'dict[FuncDef, CalleeAbi]',
-    ):
+        callees: dict[FuncDef, CalleeAbi],
+    ) -> None:
         self.alias = alias
         self.callees = callees
-        self.at_boundary: set[Region] = set()
-        self.written: set[Region] = set(alias.written_regions)
+        self.at_boundary = set()
+        self.written = set(alias.written_regions)
 
     def _levels(self, e: Expr) -> set[Region]:
         out, depth = set(), 0
-        while (r := self.alias.region_of_expr(e, depth)) is not None:
+        r = self.alias.region_of_expr(e, depth)
+        while r is not None:
             out.add(r)
             depth += 1
+            r = self.alias.region_of_expr(e, depth)
         return out
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         abi = self.callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
         for i, a in enumerate(e.args):
             param = abi.params[i] if abi and i < len(abi.params) else None
             if param is None or not _unboxed(param.ty):
                 self.at_boundary |= self._levels(a)
             if param is not None and param.written:
-                if (r := self.alias.region_of_expr(a)) is not None:
+                r = self.alias.region_of_expr(a)
+                if r is not None:
                     self.written.add(r)
         if abi is None or not _unboxed(abi.ret):
             self.at_boundary |= self._levels(e)
@@ -585,7 +594,8 @@ def check_strict(
             )
             offenders.append(f'`{name}` (depth {depth}): {reason}')
             if on_spine and depth < len(per_depth):
-                if (r := per_depth[depth]) is not None:
+                r = per_depth[depth]
+                if r is not None:
                     covered.add(r)
     for depth, on_spine in _boxed_levels(ret_ty):
         regions = (
@@ -610,7 +620,9 @@ def contains_boxed(ty: CppType) -> bool:
     return any(True for _ in _boxed_levels(ty))
 
 
-def _boxed_levels(ty: CppType, depth: int = 0, on_spine: bool = True):
+def _boxed_levels(
+    ty: CppType, depth: int = 0, on_spine: bool = True,
+) -> Iterator[tuple[int, bool]]:
     """``(depth, on_spine)`` for every boxed list level in *ty*.
 
     ``on_spine`` mirrors :meth:`UnboxAnalysis._stamp`: a reason is recorded

@@ -11,7 +11,9 @@ from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
     ContextUse,
+    ContextUseAnalysis,
     DefineUse,
+    DefineUseAnalysis,
     ListSize,
     concrete_size,
 )
@@ -269,6 +271,8 @@ def _target_of(
             return region_of(where)
         case ExprCursor():
             raise not_a_statement(where)
+        case _:
+            raise RuntimeError(f'unreachable: {where}')
 
 
 @dataclass(frozen=True)
@@ -284,11 +288,16 @@ class RoundingScopes:
     `where` index counts the same operations for a listing and for the rewrite.
     """
 
-    def __init__(self, func: FuncDef):
+    func: FuncDef
+    def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
+    _format_info: FormatAnalysis | None
+
+    def __init__(self, func: FuncDef) -> None:
         self.func = func
         self.def_use = DefineUse.analyze(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
-        self._format_info: FormatAnalysis | None = None
+        self._format_info = None
 
     @property
     def format_info(self) -> FormatAnalysis:
@@ -416,7 +425,7 @@ class SiteRewriter(DefaultTransformVisitor):
         if self._hoists:
             self._strict = Hoistability.analyze(func).strict
 
-    def _visit_function(self, func: FuncDef, ctx):
+    def _visit_function(self, func: FuncDef, ctx: Any) -> FuncDef:
         # a hoisting site's statement names its earlier operands, so the sites
         # the rewrite takes are found first
         if self._hoists and not self.listing:
@@ -609,7 +618,7 @@ class SiteRewriter(DefaultTransformVisitor):
             ]
         self.edits.append(Edit(path, pos, removed, inserted))
 
-    def _visit_block(self, block: StmtBlock, ctx):
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, None]:
         """Visit a block, recording what each statement was replaced by.
 
         A statement visitor emits its replacement into the list handed to it as
@@ -662,16 +671,24 @@ class PreambleScoped(SiteRewriter):
 
     _hoists = True
 
-    def _visit_if1(self, stmt: If1Stmt, ctx):
+    def _visit_if1(
+        self, stmt: If1Stmt, ctx: list[Stmt] | None
+    ) -> tuple[Stmt, list[Stmt] | None]:
         return super()._visit_if1(stmt, None)[0], ctx
 
-    def _visit_if(self, stmt: IfStmt, ctx):
+    def _visit_if(
+        self, stmt: IfStmt, ctx: list[Stmt] | None
+    ) -> tuple[Stmt, list[Stmt] | None]:
         return super()._visit_if(stmt, None)[0], ctx
 
-    def _visit_for(self, stmt: ForStmt, ctx):
+    def _visit_for(
+        self, stmt: ForStmt, ctx: list[Stmt] | None
+    ) -> tuple[Stmt, list[Stmt] | None]:
         return super()._visit_for(stmt, None)[0], ctx
 
-    def _visit_context(self, stmt: ContextStmt, ctx):
+    def _visit_context(
+        self, stmt: ContextStmt, ctx: list[Stmt] | None
+    ) -> tuple[Stmt, list[Stmt] | None]:
         return super()._visit_context(stmt, None)[0], ctx
 
 
@@ -693,9 +710,9 @@ class ExprSiteRewriter(PreambleScoped):
     """the refusal for a position no statement-level preamble reaches"""
 
     func: FuncDef
-    scopes: 'RoundingScopes'
+    scopes: RoundingScopes
     gensym: Gensym
-    where: 'Cursor | int | None'
+    where: Cursor | int | None
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -707,16 +724,16 @@ class ExprSiteRewriter(PreambleScoped):
         """Whether *e* is an expression this rewrite considers at all."""
         raise NotImplementedError
 
-    def _check(self, e: Expr):
+    def _check(self, e: Expr) -> object:
         """What `_emit` needs for *e*, or a `Declined` saying why it cannot be
         rewritten."""
         raise NotImplementedError
 
-    def _emit(self, e: Expr, info, out: list) -> Expr:
+    def _emit(self, e: Expr, info: Any, out: list) -> Expr:
         """What replaces *e*, with whatever it needs appended to `out`."""
         raise NotImplementedError
 
-    def _visit_expr(self, e: Expr, ctx) -> Expr:
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
         if not self._candidate(e):
             return super()._visit_expr(e, ctx)
 
@@ -756,9 +773,9 @@ class RoundingRewriter(ExprSiteRewriter):
         self,
         func: FuncDef,
         ctx: Context,
-        scopes: 'RoundingScopes',
-        where=None,
-    ):
+        scopes: RoundingScopes,
+        where: Cursor | int | None = None,
+    ) -> None:
         self.func = func
         self.ctx = ctx
         self.scopes = scopes
@@ -769,7 +786,7 @@ class RoundingRewriter(ExprSiteRewriter):
         """What replaces the operation, given the temporary holding it."""
         raise NotImplementedError
 
-    def _emit(self, e: Expr, info, out: list) -> Expr:
+    def _emit(self, e: Expr, info: Any, out: list) -> Expr:
         """:func:`lift_op` of *e* under `self.ctx`, then :meth:`_wrap`."""
         t = lift_op(e, self.ctx, out, lambda x: self._visit_expr(x, out), self._fresh)
         return self._wrap(t, e.loc)
@@ -801,8 +818,8 @@ class ScopedRoundingRewriter(ExprSiteRewriter):
     _casts: bool = False
     """whether a `fp.cast` is a candidate as well as a `fp.round`"""
 
-    where: 'Cursor | int | None'
-    _direct: 'tuple[NamedId, Expr] | None'
+    where: Cursor | int | None
+    _direct: tuple[NamedId, Expr] | None
     """the name a site may assign directly, and the expression that may take
     it: the right-hand side of the assignment being visited"""
 
@@ -813,23 +830,23 @@ class ScopedRoundingRewriter(ExprSiteRewriter):
     # ------------------------------------------------------------------
     # What a subclass supplies
 
-    def _verify(self, e: Expr, ctx: Context | None):
+    def _verify(self, e: Expr, ctx: Context | None) -> object:
         """What `_ladder` needs to restate *e*'s rounding, or a `Declined`
         saying why it cannot be.  `ctx` is the scope *e* runs under, or `None`
         where that scope stays symbolic."""
         raise NotImplementedError
 
-    def _check(self, e: Expr):
+    def _check(self, e: Expr) -> object:
         return self._verify(e, self.scopes.scope_ctx(e))
 
-    def _ladder(self, e: Expr, target: NamedId, out: list, info) -> None:
+    def _ladder(self, e: Expr, target: NamedId, out: list, info: Any) -> None:
         """Append to `out` the statements assigning `target` what *e* rounds
         to."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------
 
-    def _arg_name(self, e: 'Round | Cast', out: list) -> NamedId:
+    def _arg_name(self, e: Round | Cast, out: list) -> NamedId:
         """The name holding *e*'s operand, binding it where it is not one.
 
         A ladder names its operand several times, from inside the
@@ -852,7 +869,7 @@ class ScopedRoundingRewriter(ExprSiteRewriter):
         """
         return isinstance(e, (Round, Cast) if self._casts else Round)
 
-    def _emit(self, e: Expr, info, out: list) -> Expr:
+    def _emit(self, e: Expr, info: Any, out: list) -> Expr:
         """*e*'s ladder, appended to `out`; returns what reads its result."""
         direct = (
             self._direct[0]
@@ -867,7 +884,9 @@ class ScopedRoundingRewriter(ExprSiteRewriter):
             self._dropped = True
         return Var(target, e.loc)
 
-    def _visit_assign(self, stmt: Assign, ctx):
+    def _visit_assign(
+        self, stmt: Assign, ctx: list[Stmt] | None
+    ) -> tuple[Stmt, list[Stmt] | None]:
         # a site that is the whole right-hand side assigns this name directly,
         # rather than a temporary the statement copies onto it.  Not where the
         # assignment is annotated: the ladder has several branches to sit in

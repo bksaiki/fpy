@@ -28,7 +28,7 @@ class _Purity(DefaultVisitor):
     alias: AliasAnalysis | None
     """Computed on the first list write: most functions have none."""
 
-    def __init__(self, ast: FuncDef | Expr, def_use: DefineUseAnalysis):
+    def __init__(self, ast: FuncDef | Expr, def_use: DefineUseAnalysis) -> None:
         self.ast = ast
         self.def_use = def_use
         self.alias = None
@@ -46,7 +46,7 @@ class _Purity(DefaultVisitor):
             return False
         return True
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         super()._visit_call(e, ctx)
         match e.fn:
             case None:
@@ -68,7 +68,7 @@ class _Purity(DefaultVisitor):
                 # any other foreign callable (e.g. `print`) -> impure by default
                 raise _ImpureError(f'Impure: call to foreign function {e}')
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         """A list write is pure only where every list it may write was allocated
         in this call: a list with no allocation site (a free variable's) or a
         parameter's is visible to the caller."""

@@ -11,7 +11,7 @@ from .bits import is_power_of_two
 _DECIMAL_PATTERN = re.compile(r'([-+])?([0-9]+(\.[0-9]+)?|\.[0-9]+)(e([-+]?[0-9]+))?')
 _HEXNUM_PATTERN = re.compile(r'([-+])?0x([0-9a-f]+(\.[0-9a-f]+)?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
 
-def digits_to_fraction(m: int, e: int, b: int):
+def digits_to_fraction(m: int, e: int, b: int) -> Fraction:
     """Converts a mantissa, exponent, and base to a fraction."""
     if not isinstance(m, int):
         raise TypeError(f'Expected \'int\', got \'{type(m)}\' for m={m}')
@@ -22,7 +22,7 @@ def digits_to_fraction(m: int, e: int, b: int):
     return Fraction(m) * Fraction(b) ** e
 
 def _sci_to_fraction(
-    s: str | None,
+    negative: bool,
     i: str,
     f: str | None,
     e: str | None,
@@ -32,7 +32,7 @@ def _sci_to_fraction(
     """
     Converts a number in base `b` to a fraction.
 
-    :param s: sign (as a string)
+    :param negative: whether the number is negative
     :param i: integer part (as a string)
     :param f: fraction part (as a string)
     :param e: exponent part (as a string)
@@ -41,11 +41,7 @@ def _sci_to_fraction(
     assert base >= 2, f'base must be >= 2: base={base}'
     assert b >= 2, f'base must be >= 2: b={b}'
 
-    # sign (optional)
-    if s is not None and s == '-':
-        sign = -1
-    else:
-        sign = +1
+    sign = -1 if negative else +1
 
     # integer component (required)
     ipart = int(i, base)
@@ -68,7 +64,7 @@ def _sci_to_fraction(
     return sign * (ipart + fpart * Fraction(base) ** efrac) * (Fraction(b) ** exp)
 
 
-def decnum_to_fraction(s: str):
+def decnum_to_fraction(s: str) -> Fraction:
     """
     Converts a decimal number to a fraction.
 
@@ -82,7 +78,7 @@ def decnum_to_fraction(s: str):
     if not m:
         raise ValueError(f'invalid decimal number: {s}')
 
-    sign = m.group(1)
+    negative = m.group(1) == '-'
     mant = m.group(2)
     exp = m.group(5)
 
@@ -95,10 +91,10 @@ def decnum_to_fraction(s: str):
         i = mant
         f = None
 
-    return _sci_to_fraction(sign, i, f, exp, 10, 10)
+    return _sci_to_fraction(negative, i, f, exp, 10, 10)
 
 
-def hexnum_to_fraction(s: str):
+def hexnum_to_fraction(s: str) -> Fraction:
     """
     Converts a hexadecimal number to a fraction.
 
@@ -111,7 +107,7 @@ def hexnum_to_fraction(s: str):
     if not m:
         raise ValueError(f'invalid hexadecimal number: {s}')
 
-    sign = m.group(1)
+    negative = m.group(1) == '-'
     mant = m.group(2)
     exp = m.group(5)
 
@@ -124,7 +120,7 @@ def hexnum_to_fraction(s: str):
         i = mant
         f = None
 
-    return _sci_to_fraction(sign, i, f, exp, 16, 2)
+    return _sci_to_fraction(negative, i, f, exp, 16, 2)
 
 def is_dyadic(x: numbers.Rational) -> bool:
     """

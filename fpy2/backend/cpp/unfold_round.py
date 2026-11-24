@@ -47,8 +47,8 @@ def _target(enable_fenv: bool) -> UnfoldTarget:
         # round-to-nearest only: the per-operation rules take it and the
         # exactness rule takes any mode, and it needs no `fesetround` boundary
         intermediates=tuple(
-            c for es, nbits in ((8, 32), (11, 64))
-            if native(c := IEEEContext(es, nbits, RM.RNE))
+            c for c in (IEEEContext(8, 32, RM.RNE), IEEEContext(11, 64, RM.RNE))
+            if native(c)
         ),
     )
 

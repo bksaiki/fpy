@@ -33,12 +33,12 @@ class Id(ABC):
         """
         ...
 
-    def __lt__(self, other: 'Id'):
+    def __lt__(self, other: 'Id') -> bool:
         if not isinstance(other, Id):
             raise TypeError(f"'<' not supported between instances '{type(self)}' and '{type(other)}'")
         return str(self) < str(other)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         """
         Check if this identifier is equivalent to another identifier.
 
@@ -55,16 +55,16 @@ class UnderscoreId(Id):
     """
     __slots__ = ()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return 'UnderscoreId()'
 
-    def __str__(self):
+    def __str__(self) -> str:
         return '_'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, UnderscoreId)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(())
 
     def names(self) -> set['NamedId']:
@@ -83,7 +83,7 @@ class NamedId(Id):
     count: int | None
     _hash: int | None
 
-    def __init__(self, base: str, count: int | None = None):
+    def __init__(self, base: str, count: int | None = None) -> None:
         if not isinstance(base, str):
             raise TypeError(f'expected a str, for {base}')
 
@@ -98,23 +98,23 @@ class NamedId(Id):
         self.count = count
         self._hash = None
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'NamedId(\'{self!s}\')'
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.count is None:
             return self.base
         else:
             return f'{self.base}{self.count}'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, NamedId)
             and self.base == other.base
             and self.count == other.count
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         if self._hash is None:
             self._hash = hash((self.base, self.count))
         return self._hash
@@ -134,9 +134,9 @@ class SourceId(NamedId):
     loc: Location
     """source location"""
 
-    def __init__(self, base: str, loc: Location, count: int | None = None):
+    def __init__(self, base: str, loc: Location, count: int | None = None) -> None:
         super().__init__(base, count)
         self.loc = loc
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'SourceId(\'{self!s}\')'

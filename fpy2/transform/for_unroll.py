@@ -143,7 +143,7 @@ class _ForUnroll(SiteRewriter):
         idx_id: NamedId,
         array_size: ArraySizeAnalysis | None,
         use_fmod: bool = True
-    ):
+    ) -> None:
         super().__init__()
         self.func = func
         self.where = where
@@ -305,10 +305,10 @@ class _ForUnroll(SiteRewriter):
             # Statically-known length: the bound and remainder indices are
             # compile-time constants, so no `len`, no `fmod`, and the leftover
             # is peeled straight-line (no residual loop).
-            m = (size // k) * k
-            if m > 0:
-                emitted.append(self._main_loop(t, _int(m), k, stmt.target, body, stmt.loc, nested_gen))
-            for p in range(m, size):
+            prefix = (size // k) * k
+            if prefix > 0:
+                emitted.append(self._main_loop(t, _int(prefix), k, stmt.target, body, stmt.loc, nested_gen))
+            for p in range(prefix, size):
                 # literal index: exact by construction, no integer context
                 emitted.extend(
                     self._body_copy(stmt.target, t, _int(p), body=body, nested_gen=nested_gen)
@@ -334,13 +334,13 @@ class _ForUnroll(SiteRewriter):
 
         return emitted
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 
 def _lister(
     func: FuncDef, times: int, strategy: ForUnrollStrategy
-) -> '_ForUnroll':
+) -> _ForUnroll:
     """The pass instance a listing walks `func` with.
 
     `use_fmod` is absent on purpose: it changes which node a remainder is

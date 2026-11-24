@@ -326,7 +326,7 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
 def _aggregate(
     domain: StorageDomain,
     bounds: list[FormatBound],
-    classes: 'list[ClassBound] | None' = None,
+    classes: list[ClassBound] | None = None,
 ) -> FormatBound:
     """One storage containing every bound in *bounds*.
 
@@ -358,7 +358,7 @@ class StorageInfer:
         def_to_bound: dict[Definition, FormatBound],
         expr_to_bound: dict[Expr, FormatBound],
         domain: StorageDomain,
-        def_to_class: 'dict[Definition, ClassBound] | None' = None,
+        def_to_class: dict[Definition, ClassBound] | None = None,
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 

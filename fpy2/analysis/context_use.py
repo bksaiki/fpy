@@ -125,7 +125,7 @@ class ContextUseAnalysis:
         self,
         scopes: list[ContextScope],
         uses: dict[ContextScope, set[ContextUseSite]],
-    ):
+    ) -> None:
         self.scopes = scopes
         self.uses = uses
         self.use_to_scope = {}
@@ -154,7 +154,7 @@ class _ContextUseInstance(DefaultVisitor):
     scopes: list[ContextScope]
     uses: dict[ContextScope, set[ContextUseSite]]
 
-    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
+    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo) -> None:
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym()
@@ -197,7 +197,7 @@ class _ContextUseInstance(DefaultVisitor):
         self.uses[s] = set()
         return s
 
-    def _record_use(self, use: ContextUseSite, scope: ContextScope):
+    def _record_use(self, use: ContextUseSite, scope: ContextScope) -> None:
         if isinstance(use, _CTX_FREE_OPS):
             return
         self.uses[scope].add(use)
@@ -205,37 +205,37 @@ class _ContextUseInstance(DefaultVisitor):
     # ------------------------------------------------------------------
     # Expression visitors – record context-sensitive operations
 
-    def _visit_nullaryop(self, e: NullaryOp, scope: ContextScope):
+    def _visit_nullaryop(self, e: NullaryOp, scope: ContextScope) -> None:
         self._record_use(e, scope)
 
-    def _visit_unaryop(self, e: UnaryOp, scope: ContextScope):
+    def _visit_unaryop(self, e: UnaryOp, scope: ContextScope) -> None:
         self._visit_expr(e.arg, scope)
         self._record_use(e, scope)
 
-    def _visit_binaryop(self, e: BinaryOp, scope: ContextScope):
+    def _visit_binaryop(self, e: BinaryOp, scope: ContextScope) -> None:
         self._visit_expr(e.first, scope)
         self._visit_expr(e.second, scope)
         self._record_use(e, scope)
 
-    def _visit_ternaryop(self, e: TernaryOp, scope: ContextScope):
+    def _visit_ternaryop(self, e: TernaryOp, scope: ContextScope) -> None:
         self._visit_expr(e.first, scope)
         self._visit_expr(e.second, scope)
         self._visit_expr(e.third, scope)
         self._record_use(e, scope)
 
-    def _visit_naryop(self, e: NaryOp, scope: ContextScope):
+    def _visit_naryop(self, e: NaryOp, scope: ContextScope) -> None:
         for arg in e.args:
             self._visit_expr(arg, scope)
         self._record_use(e, scope)
 
-    def _visit_call(self, e: Call, scope: ContextScope):
+    def _visit_call(self, e: Call, scope: ContextScope) -> None:
         super()._visit_call(e, scope)
         self._record_use(e, scope)
 
     # ------------------------------------------------------------------
     # Statement visitors
 
-    def _visit_context(self, stmt: ContextStmt, scope: ContextScope):
+    def _visit_context(self, stmt: ContextStmt, scope: ContextScope) -> None:
         # Resolve the context expression, falling back to a symbolic
         # variable when partial evaluation cannot determine the value.
         ctx = self._resolve_ctx_expr(stmt.ctx)
@@ -253,7 +253,7 @@ class _ContextUseInstance(DefaultVisitor):
     # ------------------------------------------------------------------
     # Function entry point
 
-    def _visit_function(self, func: FuncDef, _scope: None):
+    def _visit_function(self, func: FuncDef, _scope: None) -> None:
         # Determine the body context from the function annotation.
         match func.ctx:
             case None:

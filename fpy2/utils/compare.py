@@ -12,11 +12,11 @@ class CompareOp(Enum):
     EQ = 4
     NE = 5
 
-    def symbol(self):
+    def symbol(self) -> str:
         """Get the symbol for the operator."""
         return _symbol_table[self]
 
-    def invert(self):
+    def invert(self) -> 'CompareOp':
         """Assuming `a op b`, returns `op` such that `b op a`."""
         match self:
             case CompareOp.LT:

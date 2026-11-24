@@ -249,7 +249,8 @@ def why_not_tileable(
     if body.scalar:
         return (f'`{min(body.scalar)}` is carried whole, which needs a '
                 'reduction across the loop')
-    if unread := carried - body.indexed:
+    unread = carried - body.indexed
+    if unread:
         return f'`{min(unread)}` is carried by something this backend cannot read'
     return _why_writes_refuse(stmt, def_use, Alias.analyze(func, def_use=def_use))
 
@@ -428,7 +429,7 @@ class TileResult:
         if missing:
             raise RuntimeError(f'a rewrite lost the tiled loop over {", ".join(missing)}')
         tiled = [by_name[n] for n in names]
-        guards = [g for t in tiled if (g := _guard(_tile_loop(t))) is not None]
+        guards = [g for g in (_guard(_tile_loop(t)) for t in tiled) if g is not None]
         grid = _grid(loops, tiled) if self.grid else []
         return TileResult(func, tiled, guards, _lanes(loops, tiled), grid)
 
@@ -467,5 +468,5 @@ def tile_loops(func: FuncDef, width: int | str) -> TileResult:
         func = SplitLoop.apply(func, factor, k, strategy=SplitLoopStrategy.MASK)
     after = _Loops(func)
     outers = [after.all[k] for k in tiled]
-    guards = [g for k in tiled if (g := _guard(after.all[k + 1]))]
+    guards = [g for g in (_guard(after.all[k + 1]) for k in tiled) if g]
     return TileResult(func, outers, guards, _lanes(after, outers), _grid(after, outers))

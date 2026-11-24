@@ -21,7 +21,8 @@ fresh module via ``add``, which discovers from the transformed AST.
 """
 
 from collections.abc import Callable, Collection, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from .analysis import CallGraph, CallGraphAnalysis
 from .ast import Call, FuncDef
@@ -37,10 +38,12 @@ class _RebindCalls(DefaultTransformVisitor):
     callers at their transformed callees; non-``Function`` call targets
     (primitives, builtins, ...) are left unchanged."""
 
-    def __init__(self, mapping: dict[Function, Function]):
+    _mapping: dict[Function, Function]
+
+    def __init__(self, mapping: dict[Function, Function]) -> None:
         self._mapping = mapping
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: Any) -> Call:
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         kwargs = [(k, self._visit_expr(v, ctx)) for k, v in e.kwargs]
         # ``Call.fn`` is ``object`` (may be a primitive, builtin, None, ...);
@@ -101,9 +104,11 @@ class ModuleCallGraph:
     order: list[Function]
     """all functions, leaves-first (callees before callers)"""
 
-    def __post_init__(self):
+    _publics: set[Function] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
         # cached for ``is_public`` — Function is identity-hashable
-        self._publics: set[Function] = set(self.publics)
+        self._publics = set(self.publics)
 
     # --- queries ---
 
@@ -120,7 +125,7 @@ class ModuleCallGraph:
     def callers_of(self, func: Function) -> list[Function]:
         return self.callers[func]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Function]:
         """Iterate functions leaves-first (callees before callers)."""
         return iter(self.order)
 
@@ -140,33 +145,32 @@ class ModuleCallGraph:
         for i, pub in enumerate(self.publics):
             if i > 0:
                 lines.append('')
-            self._format_node(pub, '', '', True, lines, seen)
+            self._format_node(pub, '', True, True, lines, seen)
         return '\n'.join(lines)
 
     def _format_node(
         self,
         func: Function,
         prefix: str,
-        connector: str,
+        is_last: bool,
         is_root: bool,
         lines: list[str],
         seen: set[Function],
     ) -> None:
         revisit = func in seen
         marker = ' (*)' if revisit else ''
+        connector = '' if is_root else '└─ ' if is_last else '├─ '
         lines.append(f'{prefix}{connector}{func.name}{marker}')
         if revisit:
             return
         seen.add(func)
         callees = self.callees[func]
         child_prefix = '' if is_root else prefix + (
-            '   ' if connector == '└─ ' else '│  '
+            '   ' if is_last else '│  '
         )
         for i, callee in enumerate(callees):
-            last = i == len(callees) - 1
-            child_connector = '└─ ' if last else '├─ '
             self._format_node(
-                callee, child_prefix, child_connector, False, lines, seen,
+                callee, child_prefix, i == len(callees) - 1, False, lines, seen,
             )
 
     def dot(self) -> str:
@@ -231,7 +235,7 @@ class Module:
     _privates_set: set[Function]
     _derived: _Derived | None  # memoized structural view; invalidated on `add`
 
-    def __init__(self, name: str | None = None):
+    def __init__(self, name: str | None = None) -> None:
         self.name = name
         self._entries = []
         self._by_name = {}

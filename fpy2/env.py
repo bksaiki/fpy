@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from types import CellType, ModuleType
 from typing import Any
@@ -12,13 +12,13 @@ class ForeignEnv:
     builtins: dict[str, Any]
 
     @staticmethod
-    def default():
+    def default() -> 'ForeignEnv':
         return ForeignEnv({}, {}, {})
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return key in self.globals or key in self.nonlocals or key in self.builtins
 
-    def __getitem__(self, key) -> Any:
+    def __getitem__(self, key: str) -> Any:
         if key in self.nonlocals:
             return self.nonlocals[key].cell_contents
         if key in self.globals:
@@ -27,7 +27,7 @@ class ForeignEnv:
             return self.builtins[key]
         raise KeyError(key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:
         if key in self.nonlocals:
             self.nonlocals[key].cell_contents = value
         elif key in self.globals:
@@ -38,7 +38,7 @@ class ForeignEnv:
             # default to globals if the key is not found in any environment
             self.globals[key] = value
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         # iterate over all keys in the environment
         return iter(self.nonlocals.keys() | self.globals.keys() | self.builtins.keys())
 
@@ -49,7 +49,7 @@ class ForeignEnv:
             self.builtins.copy()
         )
 
-    def get(self, key, default=None) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:
         """Like `get()` for `dict` instances."""
         try:
             return self[key]

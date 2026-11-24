@@ -61,7 +61,7 @@ class AssignDef:
     is_free: bool
     """is this definition a free variable?"""
 
-    def __lt__(self, other: 'AssignDef'):
+    def __lt__(self, other: 'AssignDef') -> bool:
         if not isinstance(other, AssignDef):
             raise TypeError(f"'<' not supported between instances '{type(self)}' and '{type(other)}'")
         return self.name < other.name
@@ -88,7 +88,7 @@ Definition = AssignDef | PhiDef
 """definition: either an assignment or a phi node"""
 
 
-def same_object_defs(d: 'Definition') -> tuple[int, ...]:
+def same_object_defs(d: Definition) -> tuple[int, ...]:
     """Indices of the definitions *d* denotes the *same runtime object* as.
 
     Two of SSA's fresh definitions allocate nothing: ``xs[i] = e`` mutates the
@@ -163,7 +163,7 @@ class ReachingDefsAnalysis:
         out_defs: dict[StmtBlock, DefCtx],
         reach: dict[Stmt, DefCtx],
         phis: dict[Stmt, set[PhiDef]]
-    ):
+    ) -> None:
         self.defs = defs
         self.name_to_defs = name_to_defs
         self.in_defs = in_defs
@@ -269,7 +269,7 @@ class _ReachingDefs(DefaultVisitor):
     reach: dict[Stmt, _DefCtx]
     phis: dict[Stmt, dict[NamedId, int]]
 
-    def __init__(self, ast: FuncDef | StmtBlock, def_ids: dict[StmtBlock, set[NamedId]]):
+    def __init__(self, ast: FuncDef | StmtBlock, def_ids: dict[StmtBlock, set[NamedId]]) -> None:
         self.ast = ast
         self.def_ids = def_ids
         self.reachability = Reachability.analyze(ast)
@@ -322,28 +322,28 @@ class _ReachingDefs(DefaultVisitor):
         and needs no phi -- matching `SyntaxCheck`'s terminated envs."""
         return not self.reachability.falls_through(block)
 
-    def _unify_def(self, i1: int, i2: int):
+    def _unify_def(self, i1: int, i2: int) -> int:
         """
         Unify two definitions in the union-find structure.
         The representative is the representative of `d1`.
         """
         return self.indices.union(i1, i2)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _DefCtx):
+    def _visit_list_comp(self, e: ListComp, ctx: _DefCtx) -> None:
         for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
             for name in target.names():
                 _, ctx = self._add_assign(name, e, ctx)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_assign(self, stmt: Assign, ctx: _DefCtx):
+    def _visit_assign(self, stmt: Assign, ctx: _DefCtx) -> _DefCtx:
         # visit expression and introduce new definitions
         self._visit_expr(stmt.expr, ctx)
         for name in stmt.target.names():
             _, ctx = self._add_assign(name, stmt, ctx)
         return ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _DefCtx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _DefCtx) -> _DefCtx:
         # Visit children first so reads of stmt.var (or anything else)
         # resolve to the pre-mutation context.
         for index in stmt.indices:
@@ -356,7 +356,7 @@ class _ReachingDefs(DefaultVisitor):
         _, ctx = self._add_assign(stmt.var, stmt, ctx)
         return ctx
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _DefCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _DefCtx) -> _DefCtx:
         # visit condition
         self._visit_expr(stmt.cond, ctx)
         # visit body
@@ -370,7 +370,7 @@ class _ReachingDefs(DefaultVisitor):
         self.phis[stmt] = phis
         return ctx
 
-    def _visit_if(self, stmt: IfStmt, ctx: _DefCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: _DefCtx) -> _DefCtx:
         # visit condition
         self._visit_expr(stmt.cond, ctx)
         # visit both true and false branches
@@ -426,14 +426,14 @@ class _ReachingDefs(DefaultVisitor):
         self.phis[stmt] = phis
         return ctx
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _DefCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _DefCtx) -> _DefCtx:
         def enter(body_in: _DefCtx) -> _DefCtx:
             self._visit_expr(stmt.cond, body_in)
             return body_in
 
         return self._visit_loop(stmt, ctx, enter)
 
-    def _visit_for(self, stmt: ForStmt, ctx: _DefCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: _DefCtx) -> _DefCtx:
         def enter(body_in: _DefCtx) -> _DefCtx:
             for name in stmt.target.names():
                 _, body_in = self._add_assign(name, stmt, body_in)
@@ -442,7 +442,7 @@ class _ReachingDefs(DefaultVisitor):
         self._visit_expr(stmt.iterable, ctx)
         return self._visit_loop(stmt, ctx, enter)
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _DefCtx):
+    def _visit_context(self, stmt: ContextStmt, ctx: _DefCtx) -> _DefCtx:
         # visit context expression and possibly introduce a binding
         self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
@@ -450,21 +450,21 @@ class _ReachingDefs(DefaultVisitor):
         # visit the body and continue with the resulting environment
         return self._visit_block(stmt.body, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _DefCtx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: _DefCtx) -> _DefCtx:
         self._visit_expr(stmt.test, ctx)
         if stmt.msg is not None:
             self._visit_expr(stmt.msg, ctx)
         return ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _DefCtx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: _DefCtx) -> _DefCtx:
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _DefCtx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _DefCtx) -> _DefCtx:
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_pass(self, stmt: PassStmt, ctx: _DefCtx):
+    def _visit_pass(self, stmt: PassStmt, ctx: _DefCtx) -> _DefCtx:
         return ctx
 
     def _visit_block(self, block: StmtBlock, ctx: _DefCtx) -> _DefCtx:
@@ -475,7 +475,7 @@ class _ReachingDefs(DefaultVisitor):
         self.out_defs[block] = ctx
         return ctx
 
-    def _visit_function(self, func: FuncDef, ctx: _DefCtx):
+    def _visit_function(self, func: FuncDef, ctx: _DefCtx) -> None:
         # process named arguments
         for arg in func.args:
             if isinstance(arg.name, NamedId):
@@ -486,7 +486,7 @@ class _ReachingDefs(DefaultVisitor):
         # visit body
         self._visit_block(func.body, ctx)
 
-    def _normalize(self):
+    def _normalize(self) -> ReachingDefsAnalysis:
         # create a map from indices to representative indices
         #  index -> canonical index -> representative index (0, 1, 2, ..., N-1)
         repr_count = 0
@@ -568,7 +568,7 @@ class ReachingDefs:
     """
 
     @staticmethod
-    def analyze(ast: FuncDef | StmtBlock):
+    def analyze(ast: FuncDef | StmtBlock) -> ReachingDefsAnalysis:
         if not isinstance(ast, FuncDef | StmtBlock):
             raise TypeError(f'unexpected AST node {ast}')
         def_ids = DefAnalysis.analyze(ast)

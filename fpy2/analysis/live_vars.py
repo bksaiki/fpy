@@ -9,11 +9,11 @@ class LiveVarsInstance(Visitor):
 
     ast: FuncDef | Expr
 
-    def __init__(self, ast: FuncDef | Expr):
+    def __init__(self, ast: FuncDef | Expr) -> None:
         super().__init__()
         self.ast = ast
 
-    def analyze(self):
+    def analyze(self) -> _LiveSet:
         match self.ast:
             case FuncDef():
                 return self._visit_function(self.ast, set())
@@ -28,7 +28,7 @@ class LiveVarsInstance(Visitor):
     def _visit_bool(self, e: BoolVal, ctx: None) -> _LiveSet:
         return set()
 
-    def _visit_foreign(self, e: ForeignVal, ctx: None):
+    def _visit_foreign(self, e: ForeignVal, ctx: None) -> _LiveSet:
         return set()
 
     def _visit_decnum(self, e: Decnum, ctx: None) -> _LiveSet:
@@ -119,7 +119,7 @@ class LiveVarsInstance(Visitor):
         iff_live = self._visit_expr(e.iff, ctx)
         return cond_live | ift_live | iff_live
 
-    def _visit_attribute(self, e, ctx):
+    def _visit_attribute(self, e: Attribute, ctx: None) -> _LiveSet:
         return self._visit_expr(e.value, ctx)
 
     def _visit_assign(self, stmt: Assign, live: _LiveSet) -> _LiveSet:
@@ -191,7 +191,7 @@ class LiveVarsInstance(Visitor):
             live = self._visit_statement(stmt, live)
         return live
 
-    def _visit_function(self, func: FuncDef, ctx: _LiveSet):
+    def _visit_function(self, func: FuncDef, ctx: _LiveSet) -> _LiveSet:
         live =  self._visit_block(func.body, ctx)
         for arg in func.args:
             if isinstance(arg.name, NamedId):
@@ -211,7 +211,7 @@ class LiveVars:
     """Live variable analysis for the FPy AST."""
 
     @staticmethod
-    def analyze(ast: FuncDef | Expr):
+    def analyze(ast: FuncDef | Expr) -> _LiveSet:
         """Analyze the live variables in a function."""
         if not isinstance(ast, FuncDef | Expr):
             raise TypeError(f'expected a \'Function\' or \'Expr\', got {ast}')

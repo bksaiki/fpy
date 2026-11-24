@@ -32,7 +32,7 @@ class _RewriteContext:
     repeat: int
     is_nested: bool
 
-    def __init__(self, repeat: int, *, is_nested: bool = False):
+    def __init__(self, repeat: int, *, is_nested: bool = False) -> None:
         self.repeat = repeat
         self.is_nested = is_nested
 
@@ -49,20 +49,20 @@ class _RewriteEngine(SiteRewriter):
     times_applied: int
     """number of times the rewrite rule was applied"""
 
-    def __init__(self, lhs: Pattern, rhs: Pattern):
+    def __init__(self, lhs: Pattern, rhs: Pattern) -> None:
         self.matcher = Matcher(lhs)
         self.applier = Applier(rhs)
         # only an expression rule may be aimed with an `ExprCursor`
         self._expr_sited = isinstance(lhs, ExprPattern)
         self.times_applied = 0
 
-    def apply(self, func: FuncDef, *, where: Cursor | None = None, repeat: int = 1):
+    def apply(self, func: FuncDef, *, where: Cursor | None = None, repeat: int = 1) -> tuple[FuncDef, int]:
         self.where = where
         self.times_applied = 0
         ast = self._visit_function(func, _RewriteContext(repeat))
         return ast, self.times_applied
 
-    def _nested_applier(self, num_times: int):
+    def _nested_applier(self, num_times: int) -> Applier:
         if num_times == 1:
             return self.applier
         else:
@@ -97,7 +97,7 @@ class _RewriteEngine(SiteRewriter):
                     raise RuntimeError(f'unreachable case: {pattern}')
         return pattern
 
-    def _visit_expr(self, e: Expr, ctx: _RewriteContext):
+    def _visit_expr(self, e: Expr, ctx: _RewriteContext) -> Expr:
         # an expression cursor names the *source* node, so keep it before the
         # visit rebuilds this one
         src = e
@@ -112,9 +112,10 @@ class _RewriteEngine(SiteRewriter):
                 # program-level `where` says
                 if idx == 0 if ctx.is_nested else self._selects_expr(src, idx):
                     applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
-                    e = applier.apply(subst)
-                    if not isinstance(e, Expr):
-                        raise TypeError(f'Substitution produced \'Expr\', got {type(e)} for {e}')
+                    rw = applier.apply(subst)
+                    if not isinstance(rw, Expr):
+                        raise TypeError(f'Substitution produced \'Expr\', got {type(rw)} for {rw}')
+                    e = rw
                     self.times_applied += 1
                     if not ctx.is_nested:
                         # the statement survives with an expression rewritten, so
@@ -122,7 +123,7 @@ class _RewriteEngine(SiteRewriter):
                         self._mark_exprs(*self._site)
         return e
 
-    def _visit_block(self, block: StmtBlock, ctx: _RewriteContext):
+    def _visit_block(self, block: StmtBlock, ctx: _RewriteContext) -> tuple[StmtBlock, None]:
         pattern = self.matcher.pattern
         # the path of the block being visited, before the visit rebuilds it
         path = self._paths.get(id(block))
@@ -189,7 +190,7 @@ class Rewrite:
     _engine: _RewriteEngine
     """underlying rewrite rule applier"""
 
-    def __init__(self, lhs: Pattern, rhs: Pattern, *, name: str | None = None):
+    def __init__(self, lhs: Pattern, rhs: Pattern, *, name: str | None = None) -> None:
         """
         Initialize a rewrite rule.
 

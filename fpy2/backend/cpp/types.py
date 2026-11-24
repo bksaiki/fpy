@@ -71,6 +71,8 @@ class CppScalar(enum.Enum):
                 return 'int32_t'
             case CppScalar.S64:
                 return 'int64_t'
+            case _:
+                raise RuntimeError(f'unreachable: {self}')
 
 
 @default_repr
@@ -107,7 +109,7 @@ class CppList:
 
     def __init__(
         self, elt: 'CppType', boxed: bool = True, size: int | None = None,
-    ):
+    ) -> None:
         assert not (boxed and size is not None), (
             f'a boxed list cannot carry a static size: {size}'
         )
@@ -115,7 +117,7 @@ class CppList:
         self.boxed = boxed
         self.size = size
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, CppList)
             and self.elt == other.elt
@@ -123,7 +125,7 @@ class CppList:
             and self.size == other.size
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((CppList, self.elt, self.boxed, self.size))
 
     def format(self) -> str:
@@ -140,13 +142,13 @@ class CppTuple:
     """``std::tuple<T1, …, Tn>``."""
     elts: tuple['CppType', ...]
 
-    def __init__(self, elts: Iterable['CppType']):
+    def __init__(self, elts: Iterable['CppType']) -> None:
         self.elts = tuple(elts)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, CppTuple) and self.elts == other.elts
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((CppTuple, self.elts))
 
     def format(self) -> str:

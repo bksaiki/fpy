@@ -14,12 +14,13 @@ class SubstitutionError(Exception):
     Outside the :class:`TransformError` hierarchy: a malformed *rule*, not a bad
     reference into a program, so a try/fallback schedule must not swallow it.
     """
+    message: str
 
-    def __init__(self, message: str):
+    def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'SubstitutionError: {self.message}'
 
 class _ExprApplierInst(DefaultTransformVisitor):
@@ -33,14 +34,14 @@ class _ExprApplierInst(DefaultTransformVisitor):
     pattern: ExprPattern
     subst: Subst
 
-    def __init__(self, pattern: ExprPattern, subst: Subst):
+    def __init__(self, pattern: ExprPattern, subst: Subst) -> None:
         self.pattern = pattern
         self.subst = subst
 
-    def run(self):
+    def run(self) -> Expr:
         return self._visit_expr(self.pattern.expr, {})
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> Expr:
         if e.name in self.subst:
             # a replacement may use a variable twice, and two program points
             # must not share AST nodes
@@ -62,7 +63,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
     subst: Subst
     free: dict[NamedId, NamedId]
 
-    def __init__(self, pattern: StmtPattern, subst: Subst):
+    def __init__(self, pattern: StmtPattern, subst: Subst) -> None:
         self.pattern = pattern
         self.subst = subst
         self.free = {}
@@ -70,12 +71,12 @@ class _StmtApplierInst(DefaultTransformVisitor):
             # TODO: generate a fresh identifier
             self.free[pvar] = pvar
 
-    def run(self):
+    def run(self) -> StmtBlock:
         # apply substitution
         block, _ = self._visit_block(self.pattern.block, None)
         return block
 
-    def _visit_target(self, name: NamedId):
+    def _visit_target(self, name: NamedId) -> NamedId:
         if name in self.subst:
             # name in the substitution
             e = self.subst[name]
@@ -86,21 +87,21 @@ class _StmtApplierInst(DefaultTransformVisitor):
             # variable if free in the pattern
             return self.free[name]
 
-    def _visit_id(self, ident: Id):
+    def _visit_id(self, ident: Id) -> Id:
         match ident:
             case NamedId():
                 return self._visit_target(ident)
             case _:
                 return ident
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> Expr:
         if e.name in self.subst:
             return clone(self.subst[e.name])
         else:
             # variable is free in the pattern
             return Var(self.free[e.name], None)
 
-    def _visit_list_comp(self, e: ListComp, ctx: None):
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> Expr:
         targets: list[Id | TupleBinding] = []
         for target in e.targets:
             match target:
@@ -115,7 +116,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, None)
         return ListComp(targets, iterables, elt, None)
 
-    def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
+    def _visit_binding(self, binding: Id | TupleBinding, ctx: None) -> Id | TupleBinding:
         match binding:
             case Id():
                 return self._visit_id(binding)
@@ -124,23 +125,23 @@ class _StmtApplierInst(DefaultTransformVisitor):
             case _:
                 raise RuntimeError(f'unreachable case: {binding}')
 
-    def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):
+    def _visit_tuple_binding(self, binding: TupleBinding, ctx: None) -> TupleBinding:
         return TupleBinding([binding for binding in binding.elts], None)
 
-    def _visit_assign(self, stmt: Assign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> tuple[Stmt, None]:
         binding = self._visit_binding(stmt.target, None)
         expr = self._visit_expr(stmt.expr, None)
         s =  Assign(binding, stmt.type, expr, None)
         return s, None
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        var = self._visit_id(stmt.var)
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> tuple[Stmt, None]:
+        var = self._visit_target(stmt.var)
         slices = [self._visit_expr(s, None) for s in stmt.indices]
         expr = self._visit_expr(stmt.expr, None)
         s = IndexedAssign(var, slices, expr, None)
         return s, None
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> tuple[Stmt, None]:
         cond = self._visit_expr(stmt.cond, None)
         ift, _ = self._visit_block(stmt.ift, None)
         if stmt.iff is None:
@@ -150,20 +151,20 @@ class _StmtApplierInst(DefaultTransformVisitor):
             s = IfStmt(cond, ift, iff, None)
         return s, None
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> tuple[Stmt, None]:
         cond = self._visit_expr(stmt.cond, None)
         body, _ = self._visit_block(stmt.body, None)
         s = WhileStmt(cond, body, None)
         return s, None
 
-    def _visit_for(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> tuple[Stmt, None]:
         target = self._visit_binding(stmt.target, None)
         iterable = self._visit_expr(stmt.iterable, None)
         body, _ = self._visit_block(stmt.body, None)
         s = ForStmt(target, iterable, body, None)
         return s, None
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> tuple[Stmt, None]:
         context = self._visit_expr(stmt.ctx, None)
         body, _ = self._visit_block(stmt.body, None)
         if stmt.target is None:
@@ -173,18 +174,18 @@ class _StmtApplierInst(DefaultTransformVisitor):
             s = ContextStmt(name, context, body, None)
             return s, None
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> tuple[Stmt, None]:
         # TODO: message?
         test = self._visit_expr(stmt.test, None)
         s = AssertStmt(test, stmt.msg, None)
         return s, None
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+    def _visit_effect(self, stmt: EffectStmt, ctx: None) -> tuple[Stmt, None]:
         expr = self._visit_expr(stmt.expr, None)
         s = EffectStmt(expr, None)
         return s, None
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: None):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> tuple[Stmt, None]:
         expr = self._visit_expr(stmt.expr, None)
         s = ReturnStmt(expr, None)
         return s, None
@@ -200,12 +201,12 @@ class Applier:
 
     pattern: Pattern
 
-    def __init__(self, pattern: Pattern):
+    def __init__(self, pattern: Pattern) -> None:
         if not isinstance(pattern, Pattern):
             raise TypeError(f'Expected \'Pattern\', got {type(pattern)}')
         self.pattern = pattern
 
-    def apply(self, subst: Subst):
+    def apply(self, subst: Subst) -> Expr | StmtBlock:
         """
         Applies the substitution to the pattern.
         The result is always a valid IR fragment (including locally SSA).
@@ -219,7 +220,7 @@ class Applier:
             case _:
                 raise RuntimeError(f'unreachable case: {self.pattern}')
 
-    def _check_valid_subst(self, subst: Subst):
+    def _check_valid_subst(self, subst: Subst) -> None:
         """Checks that the substitution is valid."""
         for pvar in self.pattern.vars():
             if pvar not in subst:

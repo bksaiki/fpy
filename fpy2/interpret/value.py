@@ -42,23 +42,23 @@ class Foreign:
     __slots__ = ('val',)
     val: Any
 
-    def __init__(self, val: Any):
+    def __init__(self, val: Any) -> None:
         self.val = val
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'Foreign({self.val!r})'
 
     # loud, not payload truthiness: a silently-truthy wrapper would
     # flip branches on falsy payloads
-    def __bool__(self):
+    def __bool__(self) -> bool:
         raise TypeError(f'cannot branch on a foreign value: {self.val!r}')
 
     # identity, not `==`: a foreign `__eq__` may be arbitrary
     # (e.g. numpy returns an array), and identity is total
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, Foreign) and self.val is other.val
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return id(self.val)
 
 
@@ -101,7 +101,7 @@ def to_value(arg: Any) -> Value:
             return Foreign(arg)
 
 
-def _has_foreign(x) -> bool:
+def _has_foreign(x: Value) -> bool:
     match x:
         case Foreign():
             return True
@@ -111,7 +111,7 @@ def _has_foreign(x) -> bool:
             return False
 
 
-def unwrap_foreign(x: Value):
+def unwrap_foreign(x: Value) -> Any:
     """
     Recursively unwraps :class:`Foreign` for a value crossing to native
     Python. Containers are rebuilt only when one is inside, so sharing
@@ -130,7 +130,7 @@ def unwrap_foreign(x: Value):
             raise TypeError(f'unreachable: {x!r}')
 
 
-def _is_boundary_value(x) -> bool:
+def _is_boundary_value(x: Value) -> bool:
     match x:
         case bool() | Float() | Context():
             return True
@@ -146,7 +146,7 @@ def _is_boundary_value(x) -> bool:
             raise TypeError(f'not an FPy value: {x!r}')
 
 
-def _cvt_boundary(x: Value):
+def _cvt_boundary(x: Value) -> Any:
     match x:
         case bool() | Float() | Context():
             return x
@@ -164,7 +164,7 @@ def _cvt_boundary(x: Value):
             raise TypeError(f'not an FPy value: {x!r}')
 
 
-def from_value(x: Value):
+def from_value(x: Value) -> Any:
     """
     Converts a :data:`Value` crossing out of FPy to a Python object.
 

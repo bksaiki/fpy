@@ -289,8 +289,13 @@ def _describe(ctx: Context) -> _Source | Declined:
 
     # a format without subnormals states no `emin`: every value then rounds
     # at a position read off its own exponent
+    emin, expmin = (
+        (ctx.emin, ctx.expmin)
+        if isinstance(ctx, (EFloatContext, MPBFloatContext, MPSFloatContext))
+        else (None, None)
+    )
     return _Source(
-        ctx.pmax, getattr(ctx, 'emin', None), getattr(ctx, 'expmin', None),
+        ctx.pmax, emin, expmin,
         emax, maxval, ctx.rm, policy, specials, specials[4].s,
     )
 
@@ -309,7 +314,7 @@ def _ctx_call(
     itself fixes and no downstream analysis can recover.  Stating it gives the
     rescaled rounding a width.
     """
-    def mode(name: str, value) -> tuple[str, Expr]:
+    def mode(name: str, value: RoundingMode | OverflowMode) -> tuple[str, Expr]:
         return (name, attribute(alias, type(value).__name__, value.name, loc=loc))
 
     kwargs: list[tuple[str, Expr]] = []
@@ -342,6 +347,8 @@ def _ctx_call(
             kwargs.append(mode('overflow', OverflowMode.OVERFLOW))
             kwargs.append(('enable_nan', BoolVal(True, loc)))
             kwargs.append(('inf_value', ConstNan(None, loc)))
+        case _:
+            raise RuntimeError(f'unreachable: {src.policy}')
 
     assert src.maxval is not None
     return Call(
@@ -370,7 +377,7 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis, where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.class_info = class_info

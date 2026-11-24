@@ -26,6 +26,7 @@ analyses that need a callee's result before processing its callers.
 """
 
 import dataclasses
+from collections.abc import Iterator
 
 from ..ast import *
 from ..function import Function
@@ -42,10 +43,10 @@ class _CallCollector(DefaultVisitor):
 
     calls: list[Call]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = []
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         self.calls.append(e)
         super()._visit_call(e, ctx)
 
@@ -90,14 +91,14 @@ class CallGraphAnalysis:
         ``(*)`` and not re-expanded (keeping shared subtrees compact —
         and the output finite even if a cycle ever slipped through)."""
         lines: list[str] = []
-        self._format_node(self.root, '', '', True, lines, set())
+        self._format_node(self.root, '', False, True, lines, set())
         return '\n'.join(lines)
 
     def _format_node(
         self,
         func: FuncDef,
         prefix: str,
-        connector: str,
+        is_last: bool,
         is_root: bool,
         lines: list[str],
         seen: set[FuncDef],
@@ -105,6 +106,7 @@ class CallGraphAnalysis:
         """Append the subtree rooted at *func* to *lines*."""
         revisit = func in seen
         marker = ' (*)' if revisit else ''
+        connector = '' if is_root else '└─ ' if is_last else '├─ '
         lines.append(f'{prefix}{connector}{func.name}{marker}')
         if revisit:
             return
@@ -114,14 +116,12 @@ class CallGraphAnalysis:
         # last of its siblings (``└─``), in which case the column is
         # blank below it.  The root's children start at column zero.
         child_prefix = '' if is_root else prefix + (
-            '   ' if connector == '└─ ' else '│  '
+            '   ' if is_last else '│  '
         )
         callees = self.callees[func]
         for i, callee in enumerate(callees):
-            last = i == len(callees) - 1
-            child_connector = '└─ ' if last else '├─ '
             self._format_node(
-                callee, child_prefix, child_connector, False, lines, seen,
+                callee, child_prefix, i == len(callees) - 1, False, lines, seen,
             )
 
     def dot(self) -> str:
@@ -140,11 +140,11 @@ class CallGraphAnalysis:
         lines.append('}')
         return '\n'.join(lines)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[FuncDef]:
         """Iterate functions leaves-first (callees before callers)."""
         return iter(self.order)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.nodes)
 
     def __contains__(self, func: object) -> bool:
@@ -164,7 +164,7 @@ class _CallGraphInstance:
     _stack: list[FuncDef]
     """functions being visited, outermost first"""
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, func: FuncDef) -> None:
         self.func = func
         self.nodes = set()
         self.callees = {}
@@ -193,7 +193,7 @@ class _CallGraphInstance:
                     return val
         return None
 
-    def _visit(self, fdef: FuncDef):
+    def _visit(self, fdef: FuncDef) -> None:
         self._stack.append(fdef)
         self.nodes.add(fdef)
         self.callees.setdefault(fdef, [])

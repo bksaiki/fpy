@@ -190,7 +190,7 @@ class _UnfoldNegZeroInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.gensym = Gensym(scopes.def_use.names())

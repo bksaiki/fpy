@@ -2,6 +2,7 @@
 
 import dataclasses
 from collections.abc import Callable
+from typing import NoReturn
 
 import titanfp.fpbench.fpcast as fpc
 
@@ -130,7 +131,7 @@ _NARY: dict[type[NaryOp], type[fpc.Expr]] = {
 class FPCoreCompileError(CompileError):
     """Any FPCore compilation error"""
 
-def _nary_mul(args: list[fpc.Expr]):
+def _nary_mul(args: list[fpc.Expr]) -> fpc.Expr:
     assert args != [], 'must be at least 1 argument'
     if len(args) == 1:
         return args[0]
@@ -140,7 +141,7 @@ def _nary_mul(args: list[fpc.Expr]):
             e = fpc.Mul(e, arg)
         return e
 
-def _size0_expr(x: str):
+def _size0_expr(x: str) -> fpc.Size:
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
@@ -154,7 +155,7 @@ class _FPCoreCompileInstance(Visitor):
     unsafe_int_cast: bool
     _type_info: TypeAnalysis | None
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
@@ -193,7 +194,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
 
-    def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[fpc.Expr]):
+    def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[fpc.Expr]) -> list[tuple[str, fpc.Expr]]:
         tuple_binds: list[tuple[str, fpc.Expr]] = []
         for i, elt in enumerate(binding):
             # `pos` indexes the outer dimensions, so the element position goes
@@ -210,7 +211,7 @@ class _FPCoreCompileInstance(Visitor):
                     raise FPCoreCompileError('unexpected tensor element', elt)
         return tuple_binds
 
-    def _compile_comp_binding(self, tuple_id: str, target, idx: fpc.Expr):
+    def _compile_comp_binding(self, tuple_id: str, target: Id | TupleBinding, idx: fpc.Expr) -> list[tuple[str, fpc.Expr]]:
         """The bindings one comprehension clause's target needs.
 
         Under the target's own name: `elt` is compiled against those.
@@ -225,7 +226,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', target)
 
-    def _compile_compareop(self, op: CompareOp):
+    def _compile_compareop(self, op: CompareOp) -> type[fpc.Expr]:
         match op:
             case CompareOp.LT:
                 return fpc.LT
@@ -245,7 +246,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_var(self, e: Var, ctx: None) -> fpc.Expr:
         return fpc.Var(str(e.name))
 
-    def _visit_bool(self, e: BoolVal, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None) -> fpc.Expr:
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
     def _visit_foreign(self, e: ForeignVal, ctx: None) -> fpc.Expr:
@@ -360,12 +361,12 @@ class _FPCoreCompileInstance(Visitor):
             elt = self._visit_empty(args[1:], ctx)
             return fpc.Tensor([(tuple_id, size)], elt)
 
-    def _visit_size(self, arr: Expr, dim: Expr, ctx) -> fpc.Expr:
+    def _visit_size(self, arr: Expr, dim: Expr, ctx: None) -> fpc.Expr:
         tup = self._visit_expr(arr, ctx)
         idx = self._visit_expr(dim, ctx)
         return fpc.Size(tup, idx)
 
-    def _visit_dim(self, arr: Expr, ctx) -> fpc.Expr:
+    def _visit_dim(self, arr: Expr, ctx: None) -> fpc.Expr:
         tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
@@ -381,7 +382,7 @@ class _FPCoreCompileInstance(Visitor):
             raise FPCoreCompileError('missing type for tuple accessor operand', e)
         return ty
 
-    def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> fpc.Expr:
+    def _emit_tuple_accessor(self, e: UnaryOp, ctx: None) -> fpc.Expr:
         """Emit a (possibly nested) ``fst``/``snd`` chain.
 
         A chain that reads one element folds to a single ``ref`` — e.g.
@@ -402,7 +403,7 @@ class _FPCoreCompileInstance(Visitor):
         ]
         return fpc.Let([(tuple_id, acc.e)], fpc.Array(*refs))
 
-    def _tuple_access(self, e: Expr, ctx) -> _TupleAccess:
+    def _tuple_access(self, e: Expr, ctx: None) -> _TupleAccess:
         """Resolve a ``fst``/``snd`` chain over a tuple into a
         :class:`_TupleAccess`, peeling the nesting and tracking the net
         offset into the underlying base tuple."""
@@ -597,7 +598,7 @@ class _FPCoreCompileInstance(Visitor):
             )
         )
 
-    def _visit_bool_reduce(self, e: 'AnyOf | AllOf', ctx: None) -> fpc.Expr:
+    def _visit_bool_reduce(self, e: AnyOf | AllOf, ctx: None) -> fpc.Expr:
         """``any``/``all`` — fold the list with ``or``/``and``.  Builds::
 
             (let ([t <tuple>])
@@ -737,7 +738,7 @@ class _FPCoreCompileInstance(Visitor):
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
-    def _check_comparable(self, e: Compare):
+    def _check_comparable(self, e: Compare) -> None:
         """Reject a comparison of operands FPCore cannot compare.
 
         FPy's ``==`` is ``a -> a -> bool``, so an aggregate arrives well-typed.
@@ -881,7 +882,7 @@ class _FPCoreCompileInstance(Visitor):
                     )
                 )
 
-    def _generate_tuple_set(self, tuple_id: str, iter_id: str, idx_ids: list[str], val_id: str):
+    def _generate_tuple_set(self, tuple_id: str, iter_id: str, idx_ids: list[str], val_id: str) -> fpc.Tensor:
         # dimension bindings
         idx_id = idx_ids[0]
         tensor_dims = [(iter_id, _size0_expr(tuple_id))]
@@ -1024,7 +1025,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_attribute(self, e: Attribute, ctx: None) -> fpc.Expr:
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(e).__name__}')
 
-    def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
+    def _visit_assign(self, stmt: Assign, ctx: fpc.Expr) -> fpc.Let | fpc.LetStar:
         match stmt.target:
             case Id():
                 bindings = [(str(stmt.target), self._visit_expr(stmt.expr, None))]
@@ -1037,7 +1038,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', stmt.binding)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr) -> fpc.Let:
         # ``xs[i1]…[iN] = v`` lowers to the FPCore ``tensor`` form
         # produced by :meth:`_functional_list_update`, with
         # ``Var(stmt.var)`` as the list being updated.  The result
@@ -1051,7 +1052,7 @@ class _FPCoreCompileInstance(Visitor):
         )
         return fpc.Let([(str(stmt.var), update)], ctx)
 
-    def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr):
+    def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr) -> fpc.Expr:
         # check that only one variable is mutated in the loop
         # the `IfBundling` pass is required to ensure this
         mutated = self.def_use.mutated_in(stmt.body)
@@ -1079,7 +1080,7 @@ class _FPCoreCompileInstance(Visitor):
             # cannot compile to FPCore
             raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {sorted(mutated)}')
 
-    def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
+    def _visit_if(self, stmt: IfStmt, ret: fpc.Expr) -> fpc.Expr:
         # check that only one variable is mutated in the loop
         # the `IfBundling` pass is required to ensure this
         mutated_ift = self.def_use.mutated_in(stmt.ift)
@@ -1119,7 +1120,7 @@ class _FPCoreCompileInstance(Visitor):
             # cannot compile to FPCore
             raise FPCoreCompileError(f'if statements cannot have more than 1 mutated or introduced variable: {list(changed)}')
 
-    def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
+    def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr) -> fpc.Expr:
         # check that only one variable is mutated in the loop
         # the `WhileBundling` pass is required to ensure this
         mutated = self.def_use.mutated_in(stmt.body)
@@ -1144,7 +1145,7 @@ class _FPCoreCompileInstance(Visitor):
             raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {sorted(mutated)}')
 
 
-    def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
+    def _visit_for(self, stmt: ForStmt, ret: fpc.Expr) -> fpc.Expr:
         """Lower ``for <x> in <iterable>: <body>``.
 
         FPy's loop target ranges over the iterable's *elements*, while an
@@ -1209,7 +1210,7 @@ class _FPCoreCompileInstance(Visitor):
                     ret
             ))
 
-    def _visit_data(self, data):
+    def _visit_data(self, data: object) -> fpc.Expr | tuple:
         match data:
             case int():
                 return fpc.Integer(data)
@@ -1226,7 +1227,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise NotImplementedError(repr(data))
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> fpc.Ctx:
         # check if the context is bound
         if isinstance(stmt.target, NamedId):
             raise FPCoreCompileError('Context statements cannot bind to a variable', stmt.target)
@@ -1254,11 +1255,11 @@ class _FPCoreCompileInstance(Visitor):
             props[k] = fpc.Data(self._visit_data(props[k]))
         return fpc.Ctx(props, body)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: fpc.Expr) -> fpc.Expr:
         # strip the assertion
         return ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: fpc.Expr):
+    def _visit_effect(self, stmt: EffectStmt, ctx: fpc.Expr) -> NoReturn:
         raise FPCoreCompileError('FPCore does not support effectful computation')
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None) -> fpc.Expr:
@@ -1267,7 +1268,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_pass(self, stmt: PassStmt, ctx: None) -> fpc.Expr:
         return ctx
 
-    def _visit_block(self, block: StmtBlock, ctx: fpc.Expr | None):
+    def _visit_block(self, block: StmtBlock, ctx: fpc.Expr | None) -> fpc.Expr:
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)
             stmts = block.stmts[:-1]
@@ -1291,7 +1292,7 @@ class _FPCoreCompileInstance(Visitor):
 
         return e
 
-    def _visit_function(self, func: FuncDef, ctx: fpc.Expr | None):
+    def _visit_function(self, func: FuncDef, ctx: fpc.Expr | None) -> fpc.FPCore:
         args = [self._compile_arg(arg) for arg in func.args]
         body = self._visit_block(func.body, ctx)
 
@@ -1371,7 +1372,7 @@ class FPCoreCompiler(Backend):
     unsafe_int_cast: bool
     """any unrounded integer is automatically compiled under an integer context"""
 
-    def __init__(self, *, unsafe_int_cast: bool = False):
+    def __init__(self, *, unsafe_int_cast: bool = False) -> None:
         self.unsafe_int_cast = unsafe_int_cast
 
     def compile_module(self, module: Module) -> dict[str, fpc.FPCore]:
@@ -1406,7 +1407,8 @@ class FPCoreCompiler(Backend):
     def _emit_entry(self, entry: ModuleEntry) -> fpc.FPCore:
         """Emit one FPCore from a (post-pass) public entry."""
         ast = entry.func.ast
-        if bad := unclosed_data_free_vars(ast):
+        bad = unclosed_data_free_vars(ast)
+        if bad:
             raise FPCoreCompileError(
                 f'unbound data free variable(s): {", ".join(bad)}', ast
             )

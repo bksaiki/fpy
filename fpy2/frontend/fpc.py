@@ -97,7 +97,7 @@ _TERNARY: dict[str, Any] = {
     'fma': Fma
 }
 
-def _func_symbol(name: str):
+def _func_symbol(name: str) -> Var:
     return Var(NamedId(name), None)
 
 def _empty(ns: list[Expr]) -> Expr:
@@ -117,7 +117,7 @@ class _Ctx:
         env: dict[str, NamedId] | None = None,
         props: dict[str, Any] | None = None,
         stmts: list[Stmt] | None = None
-    ):
+    ) -> None:
         if env is None:
             self.env = {}
         else:
@@ -134,7 +134,7 @@ class _Ctx:
             self.stmts = stmts
 
 
-    def without_stmts(self):
+    def without_stmts(self) -> '_Ctx':
         ctx = _Ctx()
         ctx.env = dict(self.env)
         return ctx
@@ -147,7 +147,7 @@ class _FPCore2FPy:
     default_name: str
     env: ForeignEnv | None
 
-    def __init__(self, core: fpc.FPCore, default_name: str, env: ForeignEnv | None = None):
+    def __init__(self, core: fpc.FPCore, default_name: str, env: ForeignEnv | None = None) -> None:
         self.core = core
         self.gensym = Gensym(rename_hook=pythonize_id)
         self.default_name = default_name
@@ -699,7 +699,7 @@ class _FPCore2FPy:
             case _:
                 raise NotImplementedError(f'cannot convert to FPy {e}')
 
-    def _visit_data(self, data: DataElt):
+    def _visit_data(self, data: DataElt) -> Any:
         match data:
             case fpc.String():
                 return data.value
@@ -710,7 +710,7 @@ class _FPCore2FPy:
             case _:
                 raise NotImplementedError(repr(data))
 
-    def _visit_props(self, props: dict[str, fpc.Data], ctx: _Ctx):
+    def _visit_props(self, props: dict[str, fpc.Data], ctx: _Ctx) -> dict[str, Any]:
         new_props = dict(ctx.props)
         for k, v in props.items():
             match k:
@@ -735,7 +735,7 @@ class _FPCore2FPy:
         e = self._visit(data_as_expr(v, strict=True), prop_ctx)
         return StmtBlock(prop_ctx.stmts + [ReturnStmt(e, None)])
 
-    def _visit_function(self, f: fpc.FPCore):
+    def _visit_function(self, f: fpc.FPCore) -> FuncDef:
         # setup context
         ctx = _Ctx()
 
@@ -842,7 +842,7 @@ def fpcore_to_fpy(
     env: ForeignEnv | None = None,
     default_name: str = 'f',
     ignore_unknown: bool = False
-):
+) -> FuncDef:
     # TODO: support `prefix` argument to list how
     # FPy builtins are printed
     ast = _FPCore2FPy(core, default_name, env).convert()

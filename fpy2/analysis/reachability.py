@@ -45,13 +45,13 @@ class _ReachabilityInstance(DefaultVisitor):
     has_exit: dict[Stmt, bool]
     ret_stmts: set[ReturnStmt]
 
-    def __init__(self, func: FuncDef | StmtBlock):
+    def __init__(self, func: FuncDef | StmtBlock) -> None:
         self.func = func
         self.has_entry = {}
         self.has_exit = {}
         self.ret_stmts = set()
 
-    def analyze(self):
+    def analyze(self) -> ReachabilityAnalysis:
         match self.func:
             case FuncDef():
                 has_fallthrough = self._visit_function(self.func, True)
@@ -117,18 +117,18 @@ class _ReachabilityInstance(DefaultVisitor):
         # OUT[s] = IN[s]
         return reachable
 
-    def _visit_statement(self, stmt: Stmt, reachable: bool):
+    def _visit_statement(self, stmt: Stmt, reachable: bool) -> bool:
         self.has_entry[stmt] = reachable
         is_reachable = super()._visit_statement(stmt, reachable)
         self.has_exit[stmt] = is_reachable
         return is_reachable
 
-    def _visit_block(self, block: StmtBlock, reachable: bool):
+    def _visit_block(self, block: StmtBlock, reachable: bool) -> bool:
         for stmt in block.stmts:
             reachable = self._visit_statement(stmt, reachable)
         return reachable
 
-    def _visit_function(self, func: FuncDef, reachable: bool):
+    def _visit_function(self, func: FuncDef, reachable: bool) -> bool:
         return self._visit_block(func.body, reachable)
 
 class Reachability:
@@ -160,7 +160,7 @@ class Reachability:
         check_all_reachable: bool = False,
         check_no_fallthrough: bool = False,
         check_single_exit: bool = False,
-    ):
+    ) -> ReachabilityAnalysis:
         """Run the analysis.  Each ``check_*`` flag opts into one of
         the three optional assertions documented on the class."""
         if not isinstance(func, FuncDef | StmtBlock):

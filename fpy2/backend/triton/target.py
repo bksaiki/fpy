@@ -95,6 +95,8 @@ class TritonOp:
                 return f'{self.name}({", ".join(args)})'
             case TritonOpStyle.TEMPLATE:
                 return self.name.format(*args)
+            case _:
+                raise RuntimeError(f'unreachable: {self.style}')
 
 
 type OpTable = dict[type[Expr], list[TritonOp]]

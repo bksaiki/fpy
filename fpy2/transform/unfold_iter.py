@@ -25,6 +25,7 @@ from ..ast.fpyast import (
     ListComp,
     ListExpr,
     ListRef,
+    Location,
     NamedId,
     Range1,
     Stmt,
@@ -58,8 +59,9 @@ class _UnfoldIterInstance(ExprSiteRewriter):
     """the name every temporary this pass mints is a refresh of"""
 
     def __init__(
-        self, func: FuncDef, temp_id: NamedId | None = None, where=None,
-    ):
+        self, func: FuncDef, temp_id: NamedId | None = None,
+        where: Cursor | int | None = None,
+    ) -> None:
         self.func = func
         self.temp_id = NamedId('t') if temp_id is None else temp_id
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
@@ -71,11 +73,11 @@ class _UnfoldIterInstance(ExprSiteRewriter):
     # ------------------------------------------------------------------
     # What a subclass supplies
 
-    def _elt(self, args: list[Expr], i: NamedId, loc) -> Expr:
+    def _elt(self, args: list[Expr], i: NamedId, loc: Location | None) -> Expr:
         """The comprehension's element, over the bound arguments and index."""
         raise NotImplementedError
 
-    def _pre(self, args: list[Expr], loc) -> list[Stmt]:
+    def _pre(self, args: list[Expr], loc: Location | None) -> list[Stmt]:
         """Statements the unfolding claims before the comprehension."""
         return []
 
@@ -126,7 +128,7 @@ class _UnfoldIterInstance(ExprSiteRewriter):
 class _UnfoldZipInstance(_UnfoldIterInstance):
     _node = Zip
 
-    def _pre(self, args: list[Expr], loc) -> list[Stmt]:
+    def _pre(self, args: list[Expr], loc: Location | None) -> list[Stmt]:
         """``len(xsk) == len(xs1)`` for each argument past the first.
 
         The length is the first iterable's and unequal lengths are undefined,
@@ -144,14 +146,14 @@ class _UnfoldZipInstance(_UnfoldIterInstance):
             for a in args[1:]
         ]
 
-    def _elt(self, args: list[Expr], i: NamedId, loc) -> Expr:
+    def _elt(self, args: list[Expr], i: NamedId, loc: Location | None) -> Expr:
         return TupleExpr([ListRef(a, Var(i, loc), loc) for a in args], loc)
 
 
 class _UnfoldEnumerateInstance(_UnfoldIterInstance):
     _node = Enumerate
 
-    def _elt(self, args: list[Expr], i: NamedId, loc) -> Expr:
+    def _elt(self, args: list[Expr], i: NamedId, loc: Location | None) -> Expr:
         return TupleExpr([Var(i, loc), ListRef(args[0], Var(i, loc), loc)], loc)
 
 

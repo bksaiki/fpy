@@ -92,7 +92,7 @@ class TritonCompiler(Backend):
         func: Function,
         *,
         ctx: Context | None = None,
-        arg_types: 'list[Type | None] | None' = None,
+        arg_types: list[Type | None] | None = None,
     ) -> KernelSource:
         """*func* as a Triton kernel.
 

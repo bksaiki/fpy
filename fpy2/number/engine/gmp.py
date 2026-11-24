@@ -39,16 +39,16 @@ class _Constant(enum.Enum):
     SQRT1_2 = 12
 
 
-def _gmp_neg(x):
+def _gmp_neg(x: gmp.mpfr) -> gmp.mpfr:
     return -x
 
-def _gmp_abs(x):
+def _gmp_abs(x: gmp.mpfr) -> gmp.mpfr:
     return abs(x)
 
-def _gmp_pow(x, y):
+def _gmp_pow(x: gmp.mpfr, y: gmp.mpfr) -> gmp.mpfr:
     return x ** y
 
-def _gmp_lgamma(x):
+def _gmp_lgamma(x: gmp.mpfr) -> gmp.mpfr:
     y, _ = gmp.lgamma(x)
     return y
 
@@ -56,7 +56,7 @@ def _mpfr_eval(
     gmp_fn: Callable[..., gmp.mpfr],
     *args: Float,
     prec: int | None = None,
-    n: int | None = None):
+    n: int | None = None) -> Float:
     """
     Evaluates `gmp_fn(*args)` such that the result may be safely re-rounded.
     Either specify:
@@ -87,7 +87,7 @@ _constant_exprs: dict[_Constant, Callable[[], gmp.mpfr]] = {
 }
 
 
-def _mpfr_constant(x: _Constant, *, prec: int | None = None, n: int | None = None):
+def _mpfr_constant(x: _Constant, *, prec: int | None = None, n: int | None = None) -> Float:
     """
     Computes constant `x` such that it may be safely re-rounded
     accurately to `prec` digits of precision.

@@ -2,10 +2,13 @@
 Mathematical functions under rounding contexts.
 """
 
+from collections.abc import Callable, Sequence
 from fractions import Fraction
+from typing import overload
 
 from .number import REAL, RM, Context, Float, Real, RealFloat
-from .number.engine import ENGINES
+from .number.engine import ENGINES, Engine
+from .number.engine.engine import EngineRes
 from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
 __all__ = [
@@ -130,7 +133,7 @@ def _cvt_to_float(x: Real) -> Float:
         case _:
             raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(t)}\' for x={x}')
 
-def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, ...] = ()):
+def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, ...] = ()) -> Float | Fraction:
     if ctx is REAL and isinstance(x, Fraction):
         return x
     else:
@@ -149,29 +152,31 @@ def _check_ctx(ctx: object) -> None:
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
 
-def _dispatch(op: str, ctx: Context, *args: Real) -> tuple[Float | Fraction, tuple[Float | Fraction, ...]]:
+type _Op = Callable[[Engine], Callable[..., EngineRes]]
+
+def _dispatch(op: _Op, ctx: Context, *args: Real) -> tuple[Float | Fraction, tuple[Float | Fraction, ...]]:
     """The first engine's result for *op* over *args*, and *args* as reals."""
     _check_ctx(ctx)
     xs = tuple(_cvt_to_real(x) for x in args)
     for engine in ENGINES:
-        r = getattr(engine, op)(*xs, ctx)
+        r = op(engine)(*xs, ctx)
         if r is not None:
             return r, xs
-    raise NotImplementedError(f'{op}() not implemented for ctx={ctx}')
+    raise NotImplementedError(f'{op(Engine()).__name__}() not implemented for ctx={ctx}')
 
-def _eval(op: str, ctx: Context, *args: Real) -> Float | Fraction:
+def _eval(op: _Op, ctx: Context, *args: Real) -> Float | Fraction:
     """*op* over *args*, rounded under *ctx*."""
     r, xs = _dispatch(op, ctx, *args)
     return _normalize(r, ctx, xs)
 
-def _const(op: str, ctx: Context) -> Float:
+def _const(op: _Op, ctx: Context) -> Float:
     """The constant *op* rounded under *ctx*; no engine computes one exactly."""
     r = _eval(op, ctx)
     assert isinstance(r, Float)
     return r
 
 
-def _round_integer(op: str, ctx: Context, x: Real) -> Float | Fraction:
+def _round_integer(op: _Op, ctx: Context, x: Real) -> Float | Fraction:
     """The integer *op* rounds *x* to under *ctx*, inexact where it differs from *x*."""
     r, _ = _dispatch(op, ctx, x)
     y = _normalize(r, ctx)
@@ -183,13 +188,13 @@ def _rational(x: Float | Fraction) -> Fraction:
     return x if isinstance(x, Fraction) else x.as_rational()
 
 
-def _zero_sum(r: Real, ctx: Context, terms: tuple[Float | Fraction, ...],
-              zero_signs: tuple[bool, ...]) -> Real:
+def _zero_sum(r: Float | Fraction, ctx: Context, terms: tuple[Float | Fraction, ...],
+              zero_signs: tuple[bool, ...]) -> Float | Fraction:
     """*r*, the sum of *terms*, with IEEE 754's sign when that sum is exactly
     zero (Sec. 6.3): its terms' sign when all are zeros of that one sign
     (*zero_signs*, a zero term's sign), else -0 rounding toward negative and
     +0 otherwise.  Only the toward-negative case differs from the engines'."""
-    if (getattr(ctx, 'rm', None) is not RM.RTN or not isinstance(r, Float)
+    if (ctx.rounding_mode() is not RM.RTN or not isinstance(r, Float)
             or not r.is_zero() or r.s):
         return r
     if len(zero_signs) == len(terms) and len(set(zero_signs)) == 1:
@@ -227,98 +232,98 @@ def _flatten(x: list) -> list:
 ################################################################################
 # General operations
 
-def acos(x: Real, ctx: Context = REAL):
+def acos(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse cosine of `x` rounded under `ctx`."""
-    return _eval('acos', ctx, x)
+    return _eval(lambda e: e.acos, ctx, x)
 
-def acosh(x: Real, ctx: Context = REAL):
+def acosh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse hyperbolic cosine of `x` rounded under `ctx`."""
-    return _eval('acosh', ctx, x)
+    return _eval(lambda e: e.acosh, ctx, x)
 
-def add(x: Real, y: Real, ctx: Context = REAL):
+def add(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Adds `x` and `y` rounded under `ctx`."""
-    r, (xr, yr) = _dispatch('add', ctx, x, y)
+    r, (xr, yr) = _dispatch(lambda e: e.add, ctx, x, y)
     return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, yr),
                      _zero_sign(xr) + _zero_sign(yr))
 
-def asin(x: Real, ctx: Context = REAL):
+def asin(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse sine of `x` rounded under `ctx`."""
-    return _eval('asin', ctx, x)
+    return _eval(lambda e: e.asin, ctx, x)
 
-def asinh(x: Real, ctx: Context = REAL):
+def asinh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse hyperbolic sine of `x` rounded under `ctx`."""
-    return _eval('asinh', ctx, x)
+    return _eval(lambda e: e.asinh, ctx, x)
 
-def atan(x: Real, ctx: Context = REAL):
+def atan(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse tangent of `x` rounded under `ctx`."""
-    return _eval('atan', ctx, x)
+    return _eval(lambda e: e.atan, ctx, x)
 
-def atan2(y: Real, x: Real, ctx: Context = REAL):
+def atan2(y: Real, x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes `atan(y / x)` taking into account the correct quadrant
     that the point `(x, y)` resides in. The result is rounded under `ctx`.
     """
-    return _eval('atan2', ctx, y, x)
+    return _eval(lambda e: e.atan2, ctx, y, x)
 
-def atanh(x: Real, ctx: Context = REAL):
+def atanh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse hyperbolic tangent of `x` under `ctx`."""
-    return _eval('atanh', ctx, x)
+    return _eval(lambda e: e.atanh, ctx, x)
 
-def cbrt(x: Real, ctx: Context = REAL):
+def cbrt(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the cube root of `x` rounded under `ctx`."""
-    return _eval('cbrt', ctx, x)
+    return _eval(lambda e: e.cbrt, ctx, x)
 
-def copysign(x: Real, y: Real, ctx: Context = REAL):
+def copysign(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Returns `|x| * sign(y)` rounded under `ctx`."""
-    return _eval('copysign', ctx, x, y)
+    return _eval(lambda e: e.copysign, ctx, x, y)
 
-def cos(x: Real, ctx: Context = REAL):
+def cos(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the cosine of `x` rounded under `ctx`."""
-    return _eval('cos', ctx, x)
+    return _eval(lambda e: e.cos, ctx, x)
 
-def cosh(x: Real, ctx: Context = REAL):
+def cosh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the hyperbolic cosine `x` rounded under `ctx`."""
-    return _eval('cosh', ctx, x)
+    return _eval(lambda e: e.cosh, ctx, x)
 
-def div(x: Real, y: Real, ctx: Context = REAL):
+def div(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `x / y` rounded under `ctx`."""
-    return _eval('div', ctx, x, y)
+    return _eval(lambda e: e.div, ctx, x, y)
 
-def erf(x: Real, ctx: Context = REAL):
+def erf(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the error function of `x` rounded under `ctx`."""
-    return _eval('erf', ctx, x)
+    return _eval(lambda e: e.erf, ctx, x)
 
-def erfc(x: Real, ctx: Context = REAL):
+def erfc(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `1 - erf(x)` rounded under `ctx`."""
-    return _eval('erfc', ctx, x)
+    return _eval(lambda e: e.erfc, ctx, x)
 
-def exp(x: Real, ctx: Context = REAL):
+def exp(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `e ** x` rounded under `ctx`."""
-    return _eval('exp', ctx, x)
+    return _eval(lambda e: e.exp, ctx, x)
 
-def exp2(x: Real, ctx: Context = REAL):
+def exp2(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `2 ** x` rounded under `ctx`."""
-    return _eval('exp2', ctx, x)
+    return _eval(lambda e: e.exp2, ctx, x)
 
-def exp10(x: Real, ctx: Context = REAL):
+def exp10(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `10 *** x` rounded under `ctx`."""
-    return _eval('exp10', ctx, x)
+    return _eval(lambda e: e.exp10, ctx, x)
 
-def expm1(x: Real, ctx: Context = REAL):
+def expm1(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `exp(x) - 1` rounded under `ctx`."""
-    return _eval('expm1', ctx, x)
+    return _eval(lambda e: e.expm1, ctx, x)
 
-def fabs(x: Real, ctx: Context = REAL):
+def fabs(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `|x|` rounded under `ctx`."""
-    return _eval('fabs', ctx, x)
+    return _eval(lambda e: e.fabs, ctx, x)
 
-def fdim(x: Real, y: Real, ctx: Context = REAL):
+def fdim(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `max(x - y, 0)` rounded under `ctx`."""
-    return _eval('fdim', ctx, x, y)
+    return _eval(lambda e: e.fdim, ctx, x, y)
 
-def fma(x: Real, y: Real, z: Real, ctx: Context = REAL):
+def fma(x: Real, y: Real, z: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `x * y + z` rounded under `ctx`."""
-    r, (xr, yr, zr) = _dispatch('fma', ctx, x, y, z)
+    r, (xr, yr, zr) = _dispatch(lambda e: e.fma, ctx, x, y, z)
     out = _normalize(r, ctx, (xr, yr, zr))
     if any(isinstance(t, Float) and t.is_nar() for t in (xr, yr)):
         return out
@@ -327,48 +332,48 @@ def fma(x: Real, y: Real, z: Real, ctx: Context = REAL):
     ps = (_signbit_of(xr) != _signbit_of(yr),) if p == 0 else ()
     return _zero_sum(out, ctx, (p, zr), ps + _zero_sign(zr))
 
-def fmax(x: Real, y: Real, ctx: Context = REAL):
+def fmax(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `max(x, y)` rounded under `ctx`."""
-    return _eval('fmax', ctx, x, y)
+    return _eval(lambda e: e.fmax, ctx, x, y)
 
-def fmin(x: Real, y: Real, ctx: Context = REAL):
+def fmin(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `min(x, y)` rounded under `ctx`."""
-    return _eval('fmin', ctx, x, y)
+    return _eval(lambda e: e.fmin, ctx, x, y)
 
-def fmod(x: Real, y: Real, ctx: Context = REAL):
+def fmod(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the remainder of `x / y` rounded under this context.
 
     The remainder has the same sign as `x`; it is exactly `x - iquot * y`,
     where `iquot` is the `x / y` with its fractional part truncated.
     """
-    return _eval('fmod', ctx, x, y)
+    return _eval(lambda e: e.fmod, ctx, x, y)
 
-def hypot(x: Real, y: Real, ctx: Context = REAL):
+def hypot(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `sqrt(x * x + y * y)` rounded under `ctx`."""
-    return _eval('hypot', ctx, x, y)
+    return _eval(lambda e: e.hypot, ctx, x, y)
 
-def lgamma(x: Real, ctx: Context = REAL):
+def lgamma(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the log-gamma of `x` rounded under `ctx`."""
-    return _eval('lgamma', ctx, x)
+    return _eval(lambda e: e.lgamma, ctx, x)
 
-def log(x: Real, ctx: Context = REAL):
+def log(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log(x)` rounded under `ctx`."""
-    return _eval('log', ctx, x)
+    return _eval(lambda e: e.log, ctx, x)
 
-def log10(x: Real, ctx: Context = REAL):
+def log10(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log10(x)` rounded under `ctx`."""
-    return _eval('log10', ctx, x)
+    return _eval(lambda e: e.log10, ctx, x)
 
-def log1p(x: Real, ctx: Context = REAL):
+def log1p(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log1p(x)` rounded under `ctx`."""
-    return _eval('log1p', ctx, x)
+    return _eval(lambda e: e.log1p, ctx, x)
 
-def log2(x: Real, ctx: Context = REAL):
+def log2(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log2(x)` rounded under `ctx`."""
-    return _eval('log2', ctx, x)
+    return _eval(lambda e: e.log2, ctx, x)
 
-def mod(x: Real, y: Real, ctx: Context = REAL):
+def mod(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes `x % y` rounded under `ctx`.
 
@@ -376,13 +381,13 @@ def mod(x: Real, y: Real, ctx: Context = REAL):
 
         x % y = x - floor(x / y) * y
     """
-    return _eval('mod', ctx, x, y)
+    return _eval(lambda e: e.mod, ctx, x, y)
 
-def mul(x: Real, y: Real, ctx: Context = REAL):
+def mul(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Multiplies `x` and `y` rounded under `ctx`."""
-    return _eval('mul', ctx, x, y)
+    return _eval(lambda e: e.mul, ctx, x, y)
 
-def neg(x: Real, ctx: Context = REAL):
+def neg(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `-x` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
@@ -395,54 +400,54 @@ def neg(x: Real, ctx: Context = REAL):
 
     raise NotImplementedError(f'neg() not implemented for ctx={ctx}')
 
-def pow(x: Real, y: Real, ctx: Context = REAL):
+def pow(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `x**y` rounded under `ctx`."""
-    return _eval('pow', ctx, x, y)
+    return _eval(lambda e: e.pow, ctx, x, y)
 
-def remainder(x: Real, y: Real, ctx: Context = REAL):
+def remainder(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the remainder of `x / y` rounded under `ctx`.
 
     The remainder is exactly `x - quo * y`, where `quo` is the
     integral value nearest the exact value of `x / y`.
     """
-    return _eval('remainder', ctx, x, y)
+    return _eval(lambda e: e.remainder, ctx, x, y)
 
-def sin(x: Real, ctx: Context = REAL):
+def sin(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the sine of `x` rounded under `ctx`."""
-    return _eval('sin', ctx, x)
+    return _eval(lambda e: e.sin, ctx, x)
 
-def sinh(x: Real, ctx: Context = REAL):
+def sinh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the hyperbolic sine of `x` rounded under `ctx`."""
-    return _eval('sinh', ctx, x)
+    return _eval(lambda e: e.sinh, ctx, x)
 
-def sqrt(x: Real, ctx: Context = REAL):
+def sqrt(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes square-root of `x` rounded under `ctx`."""
-    return _eval('sqrt', ctx, x)
+    return _eval(lambda e: e.sqrt, ctx, x)
 
-def sub(x: Real, y: Real, ctx: Context = REAL):
+def sub(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Subtracts `y` from `x` rounded under `ctx`."""
-    r, (xr, yr) = _dispatch('sub', ctx, x, y)
+    r, (xr, yr) = _dispatch(lambda e: e.sub, ctx, x, y)
     ny = -_rational(yr) if not (isinstance(yr, Float) and yr.is_nar()) else yr
     return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, ny),
                      _zero_sign(xr) + tuple(not s for s in _zero_sign(yr)))
 
-def tan(x: Real, ctx: Context = REAL):
+def tan(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the tangent of `x` rounded under `ctx`."""
-    return _eval('tan', ctx, x)
+    return _eval(lambda e: e.tan, ctx, x)
 
-def tanh(x: Real, ctx: Context = REAL):
+def tanh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the hyperbolic tangent of `x` rounded under `ctx`."""
-    return _eval('tanh', ctx, x)
+    return _eval(lambda e: e.tanh, ctx, x)
 
-def tgamma(x: Real, ctx: Context = REAL):
+def tgamma(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes gamma of `x` rounded under `ctx`."""
-    return _eval('tgamma', ctx, x)
+    return _eval(lambda e: e.tgamma, ctx, x)
 
 #############################################################################
 # Rounding operations
 
-def _round(x: Real, ctx: Context | None, exact: bool):
+def _round(x: Real, ctx: Context | None, exact: bool) -> Float | Fraction:
     _check_ctx(ctx)
     if ctx is None or ctx is REAL:
         # real computation; no rounding
@@ -453,7 +458,11 @@ def _round(x: Real, ctx: Context | None, exact: bool):
     else:
         return ctx.round(x, exact=exact)
 
-def round(x: Real, ctx: Context = REAL):
+@overload
+def round(x: float | Float, ctx: Context = REAL) -> Float: ...
+@overload
+def round(x: Real, ctx: Context = REAL) -> Float | Fraction: ...
+def round(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Rounds `x` under the given context `ctx`.
 
@@ -461,7 +470,7 @@ def round(x: Real, ctx: Context = REAL):
     """
     return _round(x, ctx, exact=False)
 
-def round_exact(x: Real, ctx: Context = REAL):
+def round_exact(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Rounds `x` under the given context `ctx`.
 
@@ -484,7 +493,7 @@ def round_at(x: Real, n: Real, ctx: Context = REAL) -> Float:
     else:
         return ctx.round_at(x, int(n))
 
-def cast(x: Real, ctx: Context = REAL):
+def cast(x: Real, ctx: Context = REAL) -> Real:
     """
     Identity operation that checks if `x` is representable in the context `ctx`.
     
@@ -502,25 +511,25 @@ def cast(x: Real, ctx: Context = REAL):
 #############################################################################
 # Round-to-integer operations
 
-def ceil(x: Real, ctx: Context = REAL):
+def ceil(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the smallest integer greater than or equal to `x`
     that is representable under `ctx`.
 
     If the context supports overflow, the result may be infinite.
     """
-    return _round_integer('ceil', ctx, x)
+    return _round_integer(lambda e: e.ceil, ctx, x)
 
-def floor(x: Real, ctx: Context = REAL):
+def floor(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the largest integer less than or equal to `x`
     that is representable under `ctx`.
 
     If the context supports overflow, the result may be infinite.
     """
-    return _round_integer('floor', ctx, x)
+    return _round_integer(lambda e: e.floor, ctx, x)
 
-def trunc(x: Real, ctx: Context = REAL):
+def trunc(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the integer with the largest magnitude whose
     magnitude is less than or equal to the magnitude of `x`
@@ -528,9 +537,9 @@ def trunc(x: Real, ctx: Context = REAL):
 
     If the context supports overflow, the result may be infinite.
     """
-    return _round_integer('trunc', ctx, x)
+    return _round_integer(lambda e: e.trunc, ctx, x)
 
-def nearbyint(x: Real, ctx: Context = REAL):
+def nearbyint(x: Real, ctx: Context = REAL) -> Float:
     """
     Rounds `x` to a representable integer according to
     the rounding mode of this context.
@@ -543,14 +552,14 @@ def nearbyint(x: Real, ctx: Context = REAL):
     else:
         return ctx.round_integer(x)
 
-def roundint(x: Real, ctx: Context = REAL):
+def roundint(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Rounds `x` to the nearest representable integer,
     rounding ties away from zero in halfway cases.
 
     If the context supports overflow, the result may be infinite.
     """
-    return _round_integer('roundint', ctx, x)
+    return _round_integer(lambda e: e.roundint, ctx, x)
 
 #############################################################################
 # Classification
@@ -641,7 +650,7 @@ def empty(*dims: Real, ctx: Context = REAL) -> list:
 
     return _empty(int_dims)
 
-def dim(x: list, ctx: Context = REAL):
+def dim(x: list, ctx: Context = REAL) -> Float:
     """
     Returns the number of dimensions of the tensor `x`.
 
@@ -667,7 +676,7 @@ def dim(x: list, ctx: Context = REAL):
 
     return Float.from_int(dim, checked=False)
 
-def size(x: list, dim: Real, ctx: Context = REAL):
+def size(x: list, dim: Real, ctx: Context = REAL) -> Float:
     """
     Returns the size of the dimension `dim` of the tensor `x`.
 
@@ -685,7 +694,7 @@ def size(x: list, dim: Real, ctx: Context = REAL):
 #############################################################################
 # Tuple
 
-def fst(x, ctx: Context = REAL):
+def fst[T](x: Sequence[T], ctx: Context = REAL) -> T:
     """
     Returns the first element `x` of a pair `(x, y)`.
     """
@@ -693,7 +702,7 @@ def fst(x, ctx: Context = REAL):
         raise ValueError(f'fst requires a pair, got `{x}`')
     return x[0]
 
-def snd(x, ctx: Context = REAL):
+def snd[T](x: Sequence[T], ctx: Context = REAL) -> T:
     """
     Returns the second element `y` of a pair `(x, y)`.
     """
@@ -781,81 +790,81 @@ def const_pi(ctx: Context = REAL) -> Float:
     Creates a `Float` representing π (pi).
     The result is rounded under the given context.
     """
-    return _const('const_pi', ctx)
+    return _const(lambda e: e.const_pi, ctx)
 
 def const_e(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing e (Euler's number).
     The result is rounded under the given context.
     """
-    return _const('const_e', ctx)
+    return _const(lambda e: e.const_e, ctx)
 
 def const_log2e(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing log2(e) (the logarithm of e base 2).
     The result is rounded under the given context.
     """
-    return _const('const_log2e', ctx)
+    return _const(lambda e: e.const_log2e, ctx)
 
 def const_log10e(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing log10(e) (the logarithm of e base 10).
     The result is rounded under the given context.
     """
-    return _const('const_log10e', ctx)
+    return _const(lambda e: e.const_log10e, ctx)
 
 def const_ln2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing ln(2) (the natural logarithm of 2).
     The result is rounded under the given context.
     """
-    return _const('const_ln2', ctx)
+    return _const(lambda e: e.const_ln2, ctx)
 
 def const_pi_2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing π/2 (pi divided by 2).
     The result is rounded under the given context.
     """
-    return _const('const_pi_2', ctx)
+    return _const(lambda e: e.const_pi_2, ctx)
 
 def const_pi_4(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing π/4 (pi divided by 4).
     The result is rounded under the given context.
     """
-    return _const('const_pi_4', ctx)
+    return _const(lambda e: e.const_pi_4, ctx)
 
 def const_1_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing 1/π (one divided by pi).
     The result is rounded under the given context.
     """
-    return _const('const_1_pi', ctx)
+    return _const(lambda e: e.const_1_pi, ctx)
 
 def const_2_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing 2/π (two divided by pi).
     The result is rounded under the given context.
     """
-    return _const('const_2_pi', ctx)
+    return _const(lambda e: e.const_2_pi, ctx)
 
 def const_2_sqrt_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing 2/sqrt(π) (two divided by the square root of pi).
     The result is rounded under the given context.
     """
-    return _const('const_2_sqrt_pi', ctx)
+    return _const(lambda e: e.const_2_sqrt_pi, ctx)
 
 def const_sqrt2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing sqrt(2) (the square root of 2).
     The result is rounded under the given context.
     """
-    return _const('const_sqrt2', ctx)
+    return _const(lambda e: e.const_sqrt2, ctx)
 
 def const_sqrt1_2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing sqrt(1/2) (the square root of 1/2).
     The result is rounded under the given context.
     """
-    return _const('const_sqrt1_2', ctx)
+    return _const(lambda e: e.const_sqrt1_2, ctx)

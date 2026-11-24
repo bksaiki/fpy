@@ -61,6 +61,8 @@ class _NotNormal(DefaultVisitor):
                 moved = self.def_use.mutated_in(stmt.body)
                 if any(v in moved for v in names_in(stmt.cond)):
                     self.reasons.append('a `while` condition varies')
+            case _:
+                pass
         return super()._visit_statement(stmt, ctx)
 
     def _visit_call(self, e: Call, ctx: None) -> None:

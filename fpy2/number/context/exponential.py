@@ -6,6 +6,7 @@ TODO: stochastic rounding
 """
 
 from fractions import Fraction
+from typing import Any
 
 from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import Float, RealFloat
@@ -50,7 +51,7 @@ class ExpFormat(EncodableFormat):
     _emax: int
     _mp_fmt: MPFloatFormat
 
-    def __init__(self, nbits: int, eoffset: int = 0):
+    def __init__(self, nbits: int, eoffset: int = 0) -> None:
         if not isinstance(nbits, int):
             raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
         if nbits <= 0:
@@ -62,14 +63,14 @@ class ExpFormat(EncodableFormat):
         self._emin, self._emax = _exponent_bounds(nbits, eoffset)
         self._mp_fmt = MPFloatFormat(1)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, ExpFormat)
             and self.nbits == other.nbits
             and self.eoffset == other.eoffset
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.nbits, self.eoffset))
 
     @property
@@ -264,7 +265,7 @@ class ExpContext(EncodableContext):
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         *,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\', got \'{type(rm)}\' for rm={rm}')
         if not isinstance(overflow, OverflowMode):
@@ -301,7 +302,7 @@ class ExpContext(EncodableContext):
             and self.inf_value == other.inf_value
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.nbits, self.eoffset, self.rm, self.overflow, self.inf_value))
 
     @property
@@ -327,7 +328,7 @@ class ExpContext(EncodableContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'ExpContext':
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExpContext')
@@ -362,7 +363,7 @@ class ExpContext(EncodableContext):
             overflow = OverflowMode.OVERFLOW
         return cls(fmt.nbits, fmt.eoffset, rm, overflow, inf_value=inf_value)
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
     def round_params(self) -> tuple[int | None, int | None]:

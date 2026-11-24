@@ -4,6 +4,9 @@ but with subnormalization and a maximum value, that is multi-precision
 and bounded. Hence, "MP-B."
 """
 
+from fractions import Fraction
+from typing import Any
+
 from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
@@ -63,7 +66,7 @@ class MPBFloatFormat(SizedFormat):
         enable_nan: bool = True,
         enable_inf: bool = True,
         enable_neg_zero: bool = True,
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -100,7 +103,7 @@ class MPBFloatFormat(SizedFormat):
         self._pos_maxval_ord = self._mps_fmt._to_ordinal(pos_maxval)
         self._neg_maxval_ord = self._mps_fmt._to_ordinal(neg_maxval)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPBFloatFormat)
             and self.pmax == other.pmax
@@ -112,7 +115,7 @@ class MPBFloatFormat(SizedFormat):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__, self.pmax, self.emin, self.pos_maxval, self.neg_maxval,
             self.enable_nan, self.enable_inf, self.enable_neg_zero,
@@ -187,7 +190,7 @@ class MPBFloatFormat(SizedFormat):
         else:
             return self._mps_fmt.to_ordinal(x)
 
-    def to_fractional_ordinal(self, x: Float):
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return self._mps_fmt.to_fractional_ordinal(x)
@@ -346,7 +349,7 @@ class MPBFloatContext(SizedContext):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if not isinstance(overflow, OverflowMode):
@@ -395,7 +398,7 @@ class MPBFloatContext(SizedContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPBFloatContext)
             and self.pmax == other.pmax
@@ -412,7 +415,7 @@ class MPBFloatContext(SizedContext):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.pmax,
             self.emin,
@@ -428,22 +431,22 @@ class MPBFloatContext(SizedContext):
         ))
 
     @property
-    def emax(self):
+    def emax(self) -> int:
         """Maximum normalized exponent."""
         return self._fmt.emax
 
     @property
-    def expmax(self):
+    def expmax(self) -> int:
         """Maximum unnormalized exponent."""
         return self._fmt.expmax
 
     @property
-    def expmin(self):
+    def expmin(self) -> int:
         """Minimum unnormalized exponent."""
         return self._fmt.expmin
 
     @property
-    def nmin(self):
+    def nmin(self) -> int:
         """First unrepresentable digit for every value in the representation."""
         return self._fmt.nmin
 
@@ -462,7 +465,7 @@ class MPBFloatContext(SizedContext):
         enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPBFloatContext':
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
@@ -496,7 +499,7 @@ class MPBFloatContext(SizedContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPBFloatContext':
@@ -516,10 +519,10 @@ class MPBFloatContext(SizedContext):
             inf_value=inf_value
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         return self.pmax + self.num_randbits, self.nmin - self.num_randbits

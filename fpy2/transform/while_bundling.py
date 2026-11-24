@@ -16,7 +16,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
@@ -24,7 +24,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
 
-    def _visit_var(self, e: Var, ctx: _Ctx):
+    def _visit_var(self, e: Var, ctx: _Ctx) -> Expr:
         if e.name in ctx:
             return ctx[e.name]
         else:
@@ -101,7 +101,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
             return StmtBlock([s])
 
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx) -> tuple[StmtBlock, _Ctx]:
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, WhileStmt):

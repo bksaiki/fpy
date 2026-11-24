@@ -14,7 +14,7 @@ class Default(Enum):
     """
     DEFAULT = "DEFAULT"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "DEFAULT"
 
 DEFAULT = Default.DEFAULT

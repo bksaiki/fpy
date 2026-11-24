@@ -27,7 +27,7 @@ from .rename_target import RenameTarget
 from .utils import SiteRewriter, check_where
 
 
-def _replace_ret(block: StmtBlock, new_var: NamedId):
+def _replace_ret(block: StmtBlock, new_var: NamedId) -> None:
     last_stmt = block.stmts[-1]
     match last_stmt:
         case ReturnStmt():
@@ -45,7 +45,7 @@ class _Ctx:
     is_ctx_expr: bool
 
     @staticmethod
-    def default():
+    def default() -> '_Ctx':
         return _Ctx(stmts=[], is_ctx_expr=False)
 
 
@@ -102,7 +102,7 @@ class _FuncInline(SiteRewriter):
         inlined: dict[FuncDef, FuncDef] | None = None,
         recursive: bool = True,
         where: int | Cursor | None = None
-    ):
+    ) -> None:
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
@@ -120,7 +120,7 @@ class _FuncInline(SiteRewriter):
         self.free_vars = set(func.free_vars)
         self.env = func.env.copy()
 
-    def _visit_call(self, e: Call, ctx: _Ctx):
+    def _visit_call(self, e: Call, ctx: _Ctx) -> Expr:
         if not isinstance(e.fn, Function):
             # not calling a function so no inlining
             return super()._visit_call(e, ctx)
@@ -195,13 +195,13 @@ class _FuncInline(SiteRewriter):
         # return the bound value
         return Var(t, e.loc)
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx) -> tuple[Stmt, None]:
         ctx_e = self._visit_expr(stmt.ctx, _Ctx(ctx.stmts, True))
         body, _ = self._visit_block(stmt.body, None)
         s = ContextStmt(stmt.target, ctx_e, body, stmt.loc)
         return s, None
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx | None) -> tuple[StmtBlock, None]:
         block_ctx = _Ctx.default()
         for pos, stmt in enumerate(block.stmts):
             self._site = (block, pos)
@@ -217,7 +217,7 @@ class _FuncInline(SiteRewriter):
         b = StmtBlock(block_ctx.stmts)
         return b, None
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
         self._begin(func)
         self._strict = Hoistability.analyze(func).strict
         body, _ = self._visit_block(func.body, None)
@@ -228,7 +228,7 @@ class _FuncInline(SiteRewriter):
         return self._visit_function(self.func, None)
 
 
-def _lister(func: FuncDef, funcs: 'Iterable[Function] | None') -> '_FuncInline':
+def _lister(func: FuncDef, funcs: Iterable[Function] | None) -> _FuncInline:
     """The pass instance a listing walks `func` with."""
     return _FuncInline(
         func,

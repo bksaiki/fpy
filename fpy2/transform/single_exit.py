@@ -44,7 +44,8 @@ def _placeholder_of(ty: Type) -> _Placeholder | None:
             if any(e is None for e in elts):
                 return None
             return lambda loc: TupleExpr([e(loc) for e in elts if e is not None], loc)
-    return None
+        case _:
+            return None
 
 
 def _sink(
@@ -165,6 +166,8 @@ def _sink(
                                     done=done, flag=flag, placeholder=placeholder)),
                     stmt.loc,
                 )]
+            case _:
+                pass
     if not cont:
         # nothing left to thread.  A function body always ends in a `return`,
         # so this only comes up for a loop body, which falls through.

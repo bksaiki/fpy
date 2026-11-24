@@ -112,7 +112,7 @@ class _Apart:
     """An index set enumerated by a binder nested with the one enumerating it
     first: the *n*-th such, apart from the rest."""
 
-    of: '_Range | _Elts'
+    of: _Range | _Elts
     n: int
 
 
@@ -576,8 +576,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         A list that only names another -- a use, a parameter, a row -- has
         no binders of its own: its class takes them from what it names.  Every
         definition of a built list has the `empty`'s."""
-        if isinstance(of, Definition) and (r := self._built_of(of)) is not None:
-            of = self._builders[r][1]
+        if isinstance(of, Definition):
+            r = self._built_of(of)
+            if r is not None:
+                of = self._builders[r][1]
         key = Elements(self._walk, id(of), depth=depth)
         if key not in self._list_keys:
             self._list_keys.add(key)
@@ -693,12 +695,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
         on the same variable or nothing cancels.
         """
         terms = self.out.by_def.get(d)
-        if terms is None and (r := self._built_region(d)) is not None:
-            terms = self.out.by_def[d] = self._built_terms(r)
+        if terms is None:
+            r = self._built_region(d)
+            if r is not None:
+                terms = self.out.by_def[d] = self._built_terms(r)
         if terms is None:
             terms = self.out.by_def[d] = Terms()
             # minted where it is first read, but varying as its definition does
-            with self._scoped(_binders=self._def_binders(d)):
+            with self._scoped():
+                self._binders = self._def_binders(d)
                 self._fresh_interval(terms, d, f'd{len(self.out.by_def)}')
         return terms
 
@@ -721,7 +726,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         lst = e if isinstance(e, Var) else e.value
         assert isinstance(lst, Var)
         r = self._built_of(self.def_use.find_def_from_use(lst))
-        if r is None or (loop := self._builders[r][0]) not in self._loops:
+        if r is None:
+            return False
+        loop = self._builders[r][0]
+        if loop not in self._loops:
             return False
         return not (isinstance(e, ListRef) and self._index_of(e.index) == self._binder(loop))
 
@@ -733,7 +741,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if terms is None:
             _, alloc, done = self._builders[r]
             terms = self._built[r] = Terms()
-            with self._scoped(_binders=self._def_binders(alloc)):
+            with self._scoped():
+                self._binders = self._def_binders(alloc)
                 self._fresh_interval(terms, done, f'B{len(self._built)}')
         return terms
 
@@ -777,7 +786,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """Bound *terms*, *d*'s, by every one of *srcs*."""
         srcs = self._aligned(d, srcs)
         msbs = [s.msb for s in srcs if s.msb is not None]
-        lsbs = [t for s in srcs if (t := self._elt_lsb(d, s)) is not None]
+        lsbs = [t for t in (self._elt_lsb(d, s) for s in srcs) if t is not None]
         if terms.msb is not None and len(msbs) == len(srcs):
             guard = self.store.high(terms.msb) if finite else ()
             self.store.le_max(terms.msb, msbs, guard=guard)
@@ -868,6 +877,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case ListExpr() | ListComp() if self._depth(e) > 1:
                 for el in (e.elts if isinstance(e, ListExpr) else (e.elt,)):
                     self._unify_elements(el, e, 1)
+            case _:
+                pass
         src: Terms | None
         match e:
             case Var() | ListRef(value=Var()) if self._mid_build(e):
@@ -886,14 +897,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 idx, self._len_of(lst)
             ):
                 src = self._element(self.def_use.find_def_from_use(lst), self._index_of(idx))
-            case ListRef(value=Var() as lst, index=idx) if (
-                inst := self._at_index(lst, idx)
-            ) is not None:
-                # an element of a *part* of the list: the value comes too,
-                # since what a gathered exponent goes on to build cancels
-                # against it
-                terms.msb, terms.lsb, terms.value = inst.msb, inst.lsb, inst.value
-                return
+            case ListRef(value=Var() as lst, index=idx):
+                src = None
+                inst = self._at_index(lst, idx)
+                if inst is not None:
+                    # an element of a *part* of the list: the value comes too,
+                    # since what a gathered exponent goes on to build cancels
+                    # against it
+                    terms.msb, terms.lsb, terms.value = inst.msb, inst.lsb, inst.value
+                    return
             case ListComp() if len(e.targets) == 1 and self.store.spaces.correspond(
                 self._elements(e), self._binder(e),
             ):
@@ -918,16 +930,19 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if isinstance(e, ListComp):
             # several clauses, or one whose index is not the list's: element
             # `k` is built at a point of them, which is no clause's index
-            if (src := self.out.by_expr.get(e.elt)) is not None:
+            src = self.out.by_expr.get(e.elt)
+            if src is not None:
                 over = [self._binder(e, k) for k in range(len(e.targets))]
                 w = self._copy(src, over, _Witness(id(e)), (*self._binders, *self._all_elements(e)))
                 self._bracket(terms, e, [w])
             return
         exact, exact_grid = self._active(e, logb, grid)
-        if exact is logb and (guard := self._finite_guard(e, logb)):
-            # an exact rule bounds the result only where it is finite
-            exact = self._var(f'X{len(self.out.by_expr)}')
-            self.store.le(logb, exact, guard=guard)
+        if exact is logb:
+            guard = self._finite_guard(e, logb)
+            if guard:
+                # an exact rule bounds the result only where it is finite
+                exact = self._var(f'X{len(self.out.by_expr)}')
+                self.store.le(logb, exact, guard=guard)
         self._emit_logb(e, exact)
         self._emit_grid(e, exact_grid)
         self._emit_finite(e, logb)
@@ -1016,7 +1031,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             rm = None if ctx.is_stochastic() else ctx.rm
             if not _round_will_carry(rm):
                 return logb, grid
-            expmin = getattr(ctx, 'expmin', None)
+            expmin = None if isinstance(ctx, MPFloatContext) else ctx.expmin
             exact = self._var(f'X{tag}')
             if n is None:
                 # a tiny result rounds up to the least subnormal, unless to
@@ -1096,11 +1111,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
                   | Min() | Max()
                   | Mod() | Fmod() | Remainder()):
-                if (ts := self._msbs(*self._operands(e))) is not None:
+                ts = self._msbs(*self._operands(e))
+                if ts is not None:
                     store.le_max(t, ts)
             case AMin() | AMax():
                 # one element, and not every element: the worst one
-                if (w := self._witness(e)) is not None:
+                w = self._witness(e)
+                if w is not None:
                     store.le(t, w)
             case Mul():
                 lhs, rhs = self._msb_of(e.first), self._msb_of(e.second)
@@ -1114,17 +1131,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case Add() | Sub() | Hypot() | Fdim():
                 # `|a + b| <= 2 * max(|a|, |b|)`.  No alignment needed: in
                 # exponent space addition loses only the *lower* bound.
-                if (ts := self._msbs(e.first, e.second)) is not None:
+                ts = self._msbs(e.first, e.second)
+                if ts is not None:
                     store.le_max(t, [v + 1 for v in ts])
             case Trunc():
                 # toward zero, so the binade cannot grow; a magnitude below
                 # one lands at one
-                if (ts := self._msbs(e.arg)) is not None:
+                ts = self._msbs(e.arg)
+                if ts is not None:
                     store.le_max(t, [*ts, 0])
             case Floor() | Ceil() | RoundInt() | NearbyInt():
                 # the others round *away* from zero on one sign or both, and
                 # that carries out of the binade: `ceil(1.75) == 2`
-                if (ts := self._msbs(e.arg)) is not None:
+                ts = self._msbs(e.arg)
+                if ts is not None:
                     store.le_max(t, [v + 1 for v in ts] + [0])
             case Sum():
                 # `n` terms below `2 ** (L + 1)` sum below `2 ** (L + 1 + ceil(log2 n))`,
@@ -1143,19 +1163,24 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         store.le_max(t, [src + 1, pos + 1])
                     else:
                         store.le(t, src)
-                elif src is not None and isinstance(ctx := self._active_ctx(e), _FLOAT_CTXS):
-                    # a float format keeps the binade, or carries out of it --
-                    # a tiny value as far as the least subnormal; an overflow
-                    # is an infinity, or the bound, which is smaller
-                    rm = None if ctx.is_stochastic() else ctx.rm
-                    if not _round_will_carry(rm):
-                        store.le(t, src)
-                    elif rm not in _NEAREST and (expmin := getattr(ctx, 'expmin', None)) is not None:
-                        store.le_max(t, [src + 1, expmin])
-                    else:
-                        store.le(t, src + 1)
-            case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
-                store.le(t, k)
+                elif src is not None:
+                    ctx = self._active_ctx(e)
+                    if isinstance(ctx, _FLOAT_CTXS):
+                        # a float format keeps the binade, or carries out of it --
+                        # a tiny value as far as the least subnormal; an overflow
+                        # is an infinity, or the bound, which is smaller
+                        rm = None if ctx.is_stochastic() else ctx.rm
+                        expmin = None if isinstance(ctx, MPFloatContext) else ctx.expmin
+                        if not _round_will_carry(rm):
+                            store.le(t, src)
+                        elif rm not in _NEAREST and expmin is not None:
+                            store.le_max(t, [src + 1, expmin])
+                        else:
+                            store.le(t, src + 1)
+            case Exp2() | Pow():
+                k = self._exp2_arg(e)
+                if k is not None:
+                    store.le(t, k)
             case _:
                 pass    # no rule: the term keeps whatever its seed gave it
 
@@ -1164,23 +1189,32 @@ class _DigitBoundInferInstance(DefaultVisitor):
         strict operand is; under a context that never overflows, finite total
         operands imply *e* is."""
         match e:
-            case Sum() | AMin() | AMax() if (every := self._every_finite(e.arg)) is not None:
-                for h in self.store.high(logb):
-                    if isinstance(e, Sum):
-                        self.store.imply(h, every)
+            case Sum() | AMin() | AMax():
+                every = self._every_finite(e.arg)
+                if every is not None:
+                    for h in self.store.high(logb):
+                        if isinstance(e, Sum):
+                            self.store.imply(h, every)
+                        if self._never_overflows(e):
+                            self.store.imply(every, h)
+            case Exp2() | Pow():
+                k = self._exp2_arg(e)
+                if k is not None:
+                    # `2 ** inf` is `inf`, and `2 ** k` finite for finite `k`
+                    self._implied_high(k, [logb])
                     if self._never_overflows(e):
-                        self.store.imply(every, h)
-            case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
-                # `2 ** inf` is `inf`, and `2 ** k` finite for finite `k`
-                self._implied_high(k, [logb])
-                if self._never_overflows(e):
-                    self._implied_high(logb, [k])
+                        self._implied_high(logb, [k])
+            case _:
+                pass
         for op in self._strict_operands(e):
-            if (t := self._msb_of(op)) is not None:
+            t = self._msb_of(op)
+            if t is not None:
                 self._implied_high(t, [logb])
         total = self._total_operands(e)
-        if total and self._never_overflows(e) and (msbs := self._msbs(*total)) is not None:
-            self._implied_high(logb, msbs)
+        if total and self._never_overflows(e):
+            msbs = self._msbs(*total)
+            if msbs is not None:
+                self._implied_high(logb, msbs)
 
     @staticmethod
     def _strict_operands(e: Expr) -> tuple[Expr, ...]:
@@ -1190,7 +1224,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         match e:
             case Div() | Copysign():
                 return (e.first,)
-        return ()
+            case _:
+                return ()
 
     def _total_operands(self, e: Expr) -> tuple[Expr, ...] | None:
         """The operands that, finite, make *e* finite but for an overflow;
@@ -1205,7 +1240,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return tuple(self._live_arms(e))
             case ListExpr():
                 return tuple(e.elts)
-        return None
+            case _:
+                return None
 
     def _finite_guard(self, e: Expr, logb: Term) -> tuple[int, ...]:
         """What *e*'s exact rules hold under: nothing, where the result is
@@ -1238,7 +1274,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case Var():
                 d = self.def_use.find_def_from_use(lst)
                 elt, keys = self._def(d), self._list_binders(d, lst)
-            case ListComp() if (found := self.out.by_expr.get(lst)) is not None:
+            case ListComp():
+                found = self.out.by_expr.get(lst)
+                if found is None:
+                    return None
                 elt, keys = found, self._binders_of.get(lst, self._binders)
             case _:
                 return None
@@ -1252,7 +1291,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # `Add`/`Sub` take the finer of the two, which aligned summands share
             case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
                   | Add() | Sub() | Sum()):
-                if (gs := self._lsbs(*self._operands(e))) is not None:
+                gs = self._lsbs(*self._operands(e))
+                if gs is not None:
                     self._grid_ge(g, *gs)
             case Mul():
                 lhs, rhs = self._lsb_of(e.first), self._lsb_of(e.second)
@@ -1266,8 +1306,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if found is not None:
                     self._grid_ge(g, found[0] + 1)
                     self._seed(g, e.arg, self.view.logb_range(e.arg)[0], None)
-            case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
-                self._grid_ge(g, k)   # one digit, at position `k`
+            case Exp2() | Pow():
+                k = self._exp2_arg(e)
+                if k is not None:
+                    self._grid_ge(g, k)   # one digit, at position `k`
             case _:
                 pass    # no rule: the grid keeps whatever its seed gave it
 
@@ -1287,7 +1329,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if terms.value is None:
             # under *e*'s own binders, not the asker's: a value is memoized,
             # and one built outside a loop is shared by uses inside it
-            with self._scoped(_binders=self._binders_of.get(e, self._binders)):
+            with self._scoped():
+                self._binders = self._binders_of.get(e, self._binders)
                 terms.value = self._value_uncached(e)
         return terms.value
 
@@ -1695,13 +1738,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         reads an element over the whole of a list nothing changes, "every
         element is finite", at whatever index and in whatever iteration."""
         out = [self._lit(d)]
-        if isinstance(d, AssignDef) and isinstance(d.site, Assign) and (
-            isinstance(ref := d.site.expr, ListRef)
-            and isinstance(lst := ref.value, Var)
+        ref = d.site.expr if isinstance(d, AssignDef) and isinstance(d.site, Assign) else None
+        if (
+            isinstance(ref, ListRef)
+            and isinstance(ref.value, Var)
             and isinstance(self._type_of(ref), RealType)
-            and self._covers(ref.index, self._len_of(lst))
+            and self._covers(ref.index, self._len_of(ref.value))
         ):
-            d_lst = self.def_use.find_def_from_use(lst)
+            d_lst = self.def_use.find_def_from_use(ref.value)
             region = self._classes.alias.region_of(d_lst)
             if region is not None and not self._classes.alias.may_change(d_lst):
                 lit = self._elt_guards.get(region)
@@ -1778,6 +1822,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         for s in _stmts(stmt.body)
                     ):
                         out.add(r)
+                case _:
+                    pass
         out |= self._not_index_functions(placed)
         calls = (e for stmt in placed for e in _exprs(stmt) if isinstance(e, Call))
         writes: dict[FuncDef, frozenset[int]] = {}
@@ -1848,7 +1894,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         of that loop, the innermost around it, for every `k`, and the region
         holds no other object."""
         loops = {placed[stmt][-1] if placed[stmt] else None for stmt in stores}
-        if len(loops) != 1 or not isinstance(loop := loops.pop(), ForStmt):
+        if len(loops) != 1:
+            return None
+        loop = loops.pop()
+        if not isinstance(loop, ForStmt):
             return None
         for stmt in stores:
             if len(stmt.indices) != 1:
@@ -1861,7 +1910,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return None
         alias = self._classes.alias
         phis = [p for p in self.def_use.phis.get(loop, ()) if alias.region_of(p) == r]
-        if len(phis) != 1 or not _is_empty_alloc(alloc := self.def_use.defs[phis[0].lhs]):
+        if len(phis) != 1:
+            return None
+        alloc = self.def_use.defs[phis[0].lhs]
+        if not _is_empty_alloc(alloc):
             return None
         n = _size(self.array_size.by_def.get(alloc))
         if n is None or self._len_of(loop.iterable) != n:
@@ -1889,7 +1941,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         entries, made = self._region_entries()
         spaces = self.store.spaces
         for terms, of, r in self._summary_reads:
-            if r is None or not (srcs := entries.get(r)) or terms.msb is None:
+            if r is None:
+                continue
+            srcs = entries.get(r)
+            if not srcs or terms.msb is None:
                 continue
             # what a read is one of is at its own iteration of every loop the
             # region's objects are all made in, and at some point of the rest
@@ -1916,7 +1971,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         made: dict[Region, set[Key]] = {}
         carried: dict[Region, set[Key]] = {}
         for d in self.def_use.defs:
-            if not self._depth(d) or (r := self._inner_region(d)) is None:
+            if not self._depth(d):
+                continue
+            r = self._inner_region(d)
+            if r is None:
                 continue
             match d.site:
                 case Argument():
@@ -1941,7 +1999,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 unknown.add(r)
             else:
                 out.setdefault(r, []).append(t)
-        unknown.update(r for a in self._written_args if (r := self._inner_region(a)) is not None)
+        unknown.update(r for r in (self._inner_region(a) for a in self._written_args) if r is not None)
         fixed = {r: tuple(made.get(r, set()) - carried.get(r, set())) for r in out}
         return {r: ts for r, ts in out.items() if r not in unknown}, fixed
 
@@ -2031,7 +2089,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # it a phi has terms of its own (digit-bound.md, "Control").
         w = self._binder(stmt)
         self.store.spaces.open(w, self._binders)
-        with self._scoped(_loops=(*self._loops, stmt), _binders=(*self._binders, w)):
+        with self._scoped():
+            self._loops, self._binders = (*self._loops, stmt), (*self._binders, w)
             super()._visit_while(stmt, ctx)
         for phi in self.def_use.phis[stmt]:
             if isinstance(self._type_of(phi), RealType | ListType):
@@ -2053,20 +2112,18 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _visit_arm(self, block: StmtBlock, ctx: Any) -> None:
         """*block* under a literal "this arm runs", which guards what holds
         only there and every expression in it assumes."""
-        with self._scoped(_arms=(*self._arms, self.store.literal(self._binders))):
+        with self._scoped():
+            self._arms = (*self._arms, self.store.literal(self._binders))
             self._visit_block(block, ctx)
 
     @contextmanager
-    def _scoped(self, **fields: Any) -> Iterator[None]:
-        """Set each of *fields* for the body, restoring it after."""
-        saved = {name: getattr(self, name) for name in fields}
-        for name, value in fields.items():
-            setattr(self, name, value)
+    def _scoped(self) -> Iterator[None]:
+        """Undo the body's changes to the walk's scoped fields."""
+        saved = self._binders, self._loops, self._arms, self._gather, self._trip
         try:
             yield
         finally:
-            for name, value in saved.items():
-                setattr(self, name, value)
+            self._binders, self._loops, self._arms, self._gather, self._trip = saved
 
     def _fresh_value(self, e: Expr) -> Term:
         """A value variable for *e*, bounded by the range its format gives."""
@@ -2194,10 +2251,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if not isinstance(e, Add):
             return None
         for start, step in ((e.first, e.second), (e.second, e.first)):
-            if isinstance(step, Var) and isinstance(d := self.def_use.find_def_from_use(step), AssignDef) \
-                    and isinstance(d.site, Assign) and isinstance(d.site.expr, Mul):
-                # `s * k` bound to a name, as statement form binds it
-                step = d.site.expr
+            if isinstance(step, Var):
+                d = self.def_use.find_def_from_use(step)
+                if isinstance(d, AssignDef) and isinstance(d.site, Assign) and isinstance(d.site.expr, Mul):
+                    # `s * k` bound to a name, as statement form binds it
+                    step = d.site.expr
             pairs = [(step.first, step.second), (step.second, step.first)] \
                 if isinstance(step, Mul) else [(None, step)]
             a = self._part_key(start)
@@ -2376,22 +2434,26 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # every index from zero, and covering is the claim that it
                 # does ...
                 self._index_binder[d] = binder
-                if (n := self._len_of(iterable)) is not None:
+                n = self._len_of(iterable)
+                if n is not None:
                     self._loop_index[d] = n
                 # ... and a trip count, whose `a + s * k` the body may index by
-                if (trip := self._part_key(iterable.arg)) is not None:
+                trip = self._part_key(iterable.arg)
+                if trip is not None:
                     self._trip = (d, trip)
             case Range2() | Range3():
                 # ... it visits a *part*, which `_at_index_set` gives
                 # variables of its own.
                 self._index_binder[d] = binder
-                if (key := self._range_key(iterable)) is not None:
+                key = self._range_key(iterable)
+                if key is not None:
                     self._gather = (key, d)
             case _:
                 pass    # anything else binds the target to nothing
 
     def _visit_list_comp(self, e: ListComp, ctx: Any) -> None:
-        with self._scoped(_gather=self._gather, _trip=None):
+        with self._scoped():
+            self._trip = None
             clauses = tuple(self._binder(e, k) for k in range(len(e.targets)))
             for k, c in enumerate(clauses):
                 self.store.spaces.open(c, (*self._binders, *clauses[:k]))
@@ -2404,19 +2466,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
                             self._bind_elt(sub, e, part, binder)
                 else:
                     self._bind_iter(target, iterable, e, binder)
-            with self._scoped(_binders=(*self._binders, *clauses)):
+            with self._scoped():
+                self._binders = (*self._binders, *clauses)
                 self._visit_expr(e.elt, ctx)
 
     def _visit_for(self, stmt: ForStmt, ctx: Any) -> None:
         self._visit_expr(stmt.iterable, ctx)
-        with self._scoped(_gather=self._gather, _trip=None):
+        with self._scoped():
+            self._trip = None
             b = self._binder(stmt)
             self.store.spaces.open(b, self._binders)
             self._bind_iter(stmt.target, stmt.iterable, stmt, b)
             # a built list's element is the iteration that wrote it
             built = {r: self.store.spaces.correspond(b, self._elements(alloc))
                      for r, (loop, alloc, _) in self._builders.items() if loop is stmt}
-            with self._scoped(_loops=(*self._loops, stmt), _binders=(*self._binders, b)):
+            with self._scoped():
+                self._loops, self._binders = (*self._loops, stmt), (*self._binders, b)
                 self._visit_block(stmt.body, ctx)
         for r, paired in built.items():
             self._build(r, stmt, paired)
@@ -2528,12 +2593,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return None
         # a field is its operand's element only where the two are one index
         own = self.store.spaces.find(self._elements(d))
-        return tuple(
-            self._def(d_a) if isinstance(a, Var) and not self._is_unvalued(
-                d_a := self.def_use.find_def_from_use(a))
-            and self.store.spaces.find(self._elements(d_a)) == own else None
-            for a in d.site.expr.args
-        )
+        fields: list[Terms | None] = []
+        for a in d.site.expr.args:
+            field = None
+            if isinstance(a, Var):
+                d_a = self.def_use.find_def_from_use(a)
+                if not self._is_unvalued(d_a) and self.store.spaces.find(self._elements(d_a)) == own:
+                    field = self._def(d_a)
+            fields.append(field)
+        return tuple(fields)
 
     def _unpack_elt(self, stmt: Assign, target: TupleBinding) -> None:
         match stmt.expr:
@@ -2568,7 +2636,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         d = self.def_use.find_def_from_site(stmt.var, stmt)
         self._unify_elements(stmt.expr, d, 1)    # a row stored whole
         # at the builder's index, the list is the value stored
-        if (src := self.out.by_expr.get(stmt.expr)) is not None:
+        src = self.out.by_expr.get(stmt.expr)
+        if src is not None:
             self._share(d, Terms(src.msb, src.lsb, self.value_of(stmt.expr)))
         self._built_stores.setdefault(r, []).append(stmt)
 
@@ -2603,8 +2672,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # several lists, at one index only where they are one
             terms = self._aligned(self.func, terms, self._merged_elements())
         merged = Terms()
-        msbs, lsbs, values = (
-            _all(getattr(t, f) for t in terms) for f in ('msb', 'lsb', 'value'))
+        msbs = _all(t.msb for t in terms)
+        lsbs = _all(t.lsb for t in terms)
+        values = _all(t.value for t in terms)
         # where a return left out ran, the result is not finite
         if msbs:
             merged.msb = self._var(f'msbR{tag}')
@@ -2666,8 +2736,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _one_of(self, dst: Terms, srcs: list[Terms], guard: tuple[int, ...]) -> None:
         """*dst* is one of *srcs* wherever *guard* holds."""
-        msbs, lsbs, values = (
-            _all(getattr(t, f) for t in srcs) for f in ('msb', 'lsb', 'value'))
+        msbs = _all(t.msb for t in srcs)
+        lsbs = _all(t.lsb for t in srcs)
+        values = _all(t.value for t in srcs)
         if dst.msb is not None and msbs is not None:
             self.store.le_max(dst.msb, msbs, guard=guard)
         if dst.lsb is not None and lsbs is not None:

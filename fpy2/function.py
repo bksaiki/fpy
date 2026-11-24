@@ -1,7 +1,7 @@
 """FPy functions are the result of `@fpy` decorators."""
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from titanfp.fpbench.fpcast import FPCore
 
@@ -46,35 +46,35 @@ class Function[**P, R]:
         runtime: Optional['Interpreter'] = None,
         parent: Optional['Function'] = None,
         edits: Optional['EditLog'] = None,
-    ):
+    ) -> None:
         self.ast = ast
         self.runtime = runtime
         self.parent = parent
         self.edits = edits
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'{self.__class__.__name__}(ast={self.ast}, ...)'
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.ast.format()
 
-    def __call__(self, *args, ctx: Context | None = None) -> R:
+    def __call__(self, *args: Any, ctx: Context | None = None) -> R:
         fn = get_default_function_call()
         return fn(self, *args, ctx=ctx)
 
-    def format(self):
+    def format(self) -> str:
         return self.ast.format()
 
     @property
-    def args(self):
+    def args(self) -> tuple[fpyast.Argument, ...]:
         return self.ast.args
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self.ast.name
 
     @property
-    def env(self):
+    def env(self) -> ForeignEnv:
         return self.ast.env
 
     @staticmethod
@@ -84,7 +84,7 @@ class Function[**P, R]:
         env: ForeignEnv | None = None,
         default_name: str = 'f',
         ignore_unknown: bool = False
-    ):
+    ) -> 'Function':
         """
         Converts an `FPCore` (from `titanfp`) to an `FPy` function.
 
@@ -100,28 +100,28 @@ class Function[**P, R]:
         ir = fpcore_to_fpy(core, env=env, default_name=default_name, ignore_unknown=ignore_unknown)
         return Function(ir)
 
-    def with_rt(self, rt: 'Interpreter'):
+    def with_rt(self, rt: 'Interpreter') -> 'Function':
         from .interpret import Interpreter
         if not isinstance(rt, Interpreter):
             raise TypeError(f'expected \'Interpreter\', got {rt}')
         # the same program, so it keeps the same place in the chain
         return Function(self.ast, runtime=rt, parent=self.parent, edits=self.edits)
 
-    def with_ast(self, ast: fpyast.FuncDef):
+    def with_ast(self, ast: fpyast.FuncDef) -> 'Function':
         """The result of a pass that does not report its rewrites, so cursors do
         not forward across it; :meth:`with_edits` is the one that carries them."""
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
         return Function(ast, runtime=self.runtime, parent=self)
 
-    def with_edits(self, log: 'EditLog'):
+    def with_edits(self, log: 'EditLog') -> 'Function':
         """The result of a pass that reported its rewrites, so a cursor of
         this program forwards across the step."""
         if log.source is not self.ast:
             raise ValueError('edit log was not produced from this program')
         return Function(log.result, runtime=self.runtime, parent=self, edits=log)
 
-    def rebase(self, where):
+    def rebase[T](self, where: 'T | Cursor') -> 'T | Cursor':
         """A `where` aimed at this program: a cursor from an ancestor is
         forwarded, anything else passes through."""
         from .transform import Cursor
@@ -171,7 +171,7 @@ def get_default_function_call() -> Callable:
         raise RuntimeError('no default function call available')
     return _default_function_call
 
-def set_default_function_call(func: Callable):
+def set_default_function_call(func: Callable) -> None:
     """Sets the default function call"""
     global _default_function_call
     if not callable(func):

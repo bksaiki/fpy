@@ -29,7 +29,7 @@ class Z3Solver(_ComponentSolver[z3.Solver]):
     _lits: dict[int, z3.BoolRef]
     """Each guard literal's z3 form."""
 
-    def __init__(self, timeout_ms: int = 10_000, keep_trace: bool = False):
+    def __init__(self, timeout_ms: int = 10_000, keep_trace: bool = False) -> None:
         super().__init__(timeout_ms, keep_trace)
         self._env = {}
         self._encoded = {}
@@ -69,6 +69,8 @@ class Z3Solver(_ComponentSolver[z3.Solver]):
                 rel = lhs <= rhs[0]
             case Rel.LE_MAX:
                 rel = z3.Or([lhs <= r for r in rhs])
+            case _:
+                raise RuntimeError(f'unreachable: {constraint.op}')
         if constraint.guard:
             rel = z3.Implies(z3.And([self._lit(g) for g in constraint.guard]), rel)
         into.add(rel)

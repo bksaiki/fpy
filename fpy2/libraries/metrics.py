@@ -20,7 +20,7 @@ __all__ = [
 
 
 @fp.fpy
-def absolute_error(x: fp.Real, y: fp.Real):
+def absolute_error(x: fp.Real, y: fp.Real) -> fp.Real:
     """
     Computes the absolute error between `x` and `y`, i.e., `|x - y|`,
     rounding under the current context.
@@ -30,7 +30,7 @@ def absolute_error(x: fp.Real, y: fp.Real):
     return fp.round(t)
 
 @fp.fpy
-def scaled_error(x: fp.Real, y: fp.Real, s: fp.Real):
+def scaled_error(x: fp.Real, y: fp.Real, s: fp.Real) -> fp.Real:
     """
     Computes the scaled error between `x` and `y`, scaled by `s`,
     i.e, `|x - y| / |s|`, rounding under the current context.
@@ -43,7 +43,7 @@ def scaled_error(x: fp.Real, y: fp.Real, s: fp.Real):
     return n / d
 
 @fp.fpy
-def relative_error(x: fp.Real, y: fp.Real):
+def relative_error(x: fp.Real, y: fp.Real) -> fp.Real:
     """
     Computes the relative error between `x` and `y`, i.e., `|x - y| / |y|`,
     rounding under the current context.
@@ -54,7 +54,7 @@ def relative_error(x: fp.Real, y: fp.Real):
     return n / d
 
 @fp.fpy_primitive
-def ordinal_error(x: fp.Float, y: fp.Float, ctx: fp.Context) -> Fraction:
+def ordinal_error(x: fp.Float, y: fp.Float, ctx: fp.Context) -> fp.Float:
     """
     Computes the ordinal error between `x` and `y`, i.e., the number of
     floating-point numbers between `x` and `y`.
@@ -78,7 +78,7 @@ def ordinal_error(x: fp.Float, y: fp.Float, ctx: fp.Context) -> Fraction:
     return fp.Float.from_rational(err)
 
 @fp.fpy
-def sum_condition(xs: list[fp.Real]):
+def sum_condition(xs: list[fp.Real]) -> fp.Real:
     """
     Computes the condition number of summation over `xs`, i.e.,
     `|sum(|x_i|)| / |sum(x_i)|`, rounding under the current context.

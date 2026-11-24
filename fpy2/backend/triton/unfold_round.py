@@ -46,10 +46,12 @@ def _within(e: Expr, bound: Fraction, nmin: int, info: FormatAnalysis) -> bool:
 
 
 class _Unbound(DefaultTransformVisitor):
-    def __init__(self, drop: dict[ContextStmt, MPFixedContext]):
+    drop: dict[ContextStmt, MPFixedContext]
+
+    def __init__(self, drop: dict[ContextStmt, MPFixedContext]) -> None:
         self.drop = drop
 
-    def _visit_context(self, stmt: ContextStmt, ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> tuple[ContextStmt, None]:
         s, ctx = super()._visit_context(stmt, ctx)
         if stmt in self.drop:
             s = ContextStmt(s.target, ForeignVal(self.drop[stmt], stmt.loc), s.body, s.loc)

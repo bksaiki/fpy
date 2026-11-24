@@ -21,7 +21,7 @@ def get_current_float_converter() -> _FloatCvt:
         raise RuntimeError('float converter not set')
     return _current_float_converter
 
-def set_current_float_converter(cvt: _FloatCvt):
+def set_current_float_converter(cvt: _FloatCvt) -> None:
     """Sets the current `__float__` implementation for `Float`."""
     global _current_float_converter
     _current_float_converter = cvt
@@ -33,7 +33,7 @@ def get_current_str_converter() -> _StrCvt:
         raise RuntimeError('str converter not set')
     return _current_str_converter
 
-def set_current_str_converter(cvt: _StrCvt):
+def set_current_str_converter(cvt: _StrCvt) -> None:
     """Sets the current `__str__` implementation for `Float`."""
     global _current_str_converter
     _current_str_converter = cvt

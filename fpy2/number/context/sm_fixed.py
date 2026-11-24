@@ -2,6 +2,8 @@
 This module defines fixed-width, sign-magnitude, fixed-point numbers.
 """
 
+from typing import Any
+
 from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import RNG, Float, RealFloat
 from ..round import OverflowMode, RoundingMode
@@ -25,7 +27,7 @@ class SMFixedFormat(MPBFixedFormat, EncodableFormat):
     nbits: int
     """the total number of bits in the representation"""
 
-    def __init__(self, scale: int, nbits: int):
+    def __init__(self, scale: int, nbits: int) -> None:
         if not isinstance(scale, int):
             raise TypeError(f'Expected \'int\' for scale={scale}, got {type(scale)}')
         if not isinstance(nbits, int):
@@ -40,17 +42,17 @@ class SMFixedFormat(MPBFixedFormat, EncodableFormat):
         self.scale = scale
         self.nbits = nbits
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, SMFixedFormat)
             and self.scale == other.scale
             and self.nbits == other.nbits
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.scale, self.nbits))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + f'(scale={self.scale!r}, nbits={self.nbits!r})'
 
     def total_bits(self) -> int:
@@ -122,7 +124,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         fmt = SMFixedFormat(scale, nbits)
         super().__init__(
             nmin=fmt.nmin,
@@ -151,8 +153,8 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
-    ):
+        **kwargs: Any
+    ) -> 'SMFixedContext':
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return SMFixedContext(
@@ -177,7 +179,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None,
     ) -> 'SMFixedContext':

@@ -320,11 +320,14 @@ class EngineList:
     Engine registry and dispatcher.
     """
 
-    def __init__(self):
-        self._items: list[tuple[int, Engine]] = []
-        self._cached_engines: list[Engine] = []
+    _items: list[tuple[int, Engine]]
+    _cached_engines: list[Engine]
 
-    def register(self, engine: Engine, priority: int = 0):
+    def __init__(self) -> None:
+        self._items = []
+        self._cached_engines = []
+
+    def register(self, engine: Engine, priority: int = 0) -> None:
         """
         Adds a new engine to the list with the given priority.
         Engines with higher priority are considered first during dispatch.

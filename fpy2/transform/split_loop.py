@@ -100,7 +100,7 @@ class _SplitLoop(SiteRewriter):
         inner_id: NamedId,
         array_size: ArraySizeAnalysis | None,
         use_fmod: bool = True
-    ):
+    ) -> None:
         super().__init__()
         self.func = func
         self.factor = factor
@@ -378,13 +378,13 @@ class _SplitLoop(SiteRewriter):
         ctx.extend(emitted[:-1])
         return emitted[-1], None
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 
 def _lister(
-    func: FuncDef, factor: 'Expr | None', strategy: SplitLoopStrategy
-) -> '_SplitLoop':
+    func: FuncDef, factor: Expr | None, strategy: SplitLoopStrategy
+) -> _SplitLoop:
     """The pass instance a listing walks `func` with.
 
     `use_fmod` is absent on purpose: it changes which node a remainder is

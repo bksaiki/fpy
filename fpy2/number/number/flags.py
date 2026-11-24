@@ -56,7 +56,7 @@ class Flags:
         tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None
-    ):
+    ) -> None:
         self._flags = 0 if x is None else x._flags
         values = (invalid, divzero, overflow, tiny_pre, tiny_post, inexact, carry)
         for (_, mask), value in zip(_NAMES, values, strict=True):

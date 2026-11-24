@@ -3,6 +3,7 @@ Defines the abstract base class for FPy interpreters.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Any
 
 from ..ast.fpyast import Expr, FuncDef, NamedId
@@ -17,14 +18,14 @@ class Interpreter(ABC):
     ctx: Context | None = None
     """optionaly overriding context"""
 
-    def __init__(self, ctx: Context | None = None):
+    def __init__(self, ctx: Context | None = None) -> None:
         self.ctx = ctx
 
     @abstractmethod
     def eval(
-        self, func: Function, args, ctx: Context | None = None,
+        self, func: Function, args: Sequence[Any], ctx: Context | None = None,
         *, convert: bool = True,
-    ):
+    ) -> Any:
         """
         Evaluates a function `func` on arguments `args` under
         a rounding context `ctx`. If `ctx` is None, the rounding
@@ -38,7 +39,7 @@ class Interpreter(ABC):
         ...
 
     @abstractmethod
-    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context) -> Any:
         """
         Evaluates an expression `expr` under an environment `env` and
         rounding context `ctx`. Unlike `eval`, this method requires and
@@ -74,7 +75,7 @@ def get_default_interpreter() -> Interpreter:
         raise RuntimeError('no default interpreter available')
     return _default_interpreter
 
-def set_default_interpreter(rt: Interpreter):
+def set_default_interpreter(rt: Interpreter) -> None:
     """Sets the default FPy interpreter"""
     global _default_interpreter
     if not isinstance(rt, Interpreter):
@@ -84,7 +85,7 @@ def set_default_interpreter(rt: Interpreter):
 ###########################################################
 # Default function call
 
-def _default_function_call(fn: Function, *args, ctx: Context | None = None):
+def _default_function_call(fn: Function, *args: Any, ctx: Context | None = None) -> Any:
     """Default function call."""
     if fn.runtime is None:
         rt = get_default_interpreter()

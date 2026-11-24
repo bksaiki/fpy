@@ -38,7 +38,7 @@ class _WhileUnroll(SiteRewriter):
         self.where = where
         self.times = times
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> tuple[Stmt, None]:
         if self._claim(stmt):
             # original loop
             cond = self._visit_expr(stmt.cond, ctx)
@@ -58,7 +58,7 @@ class _WhileUnroll(SiteRewriter):
         else:
             return super()._visit_while(stmt, ctx)
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 

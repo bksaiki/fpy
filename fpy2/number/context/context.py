@@ -4,11 +4,11 @@ This module defines the rounding context type.
 
 from abc import ABC, abstractmethod
 from fractions import Fraction
-from typing import Self
+from typing import Any, Self
 
 from ...utils import is_dyadic
 from ..gmputils import mpfr_value
-from ..number import Float, RealFloat
+from ..number import Float, Real, RealFloat
 from ..round import RoundingMode
 from .format import EncodableFormat, Format, OrdinalFormat, SizedFormat
 
@@ -53,11 +53,11 @@ class Context(ABC):
     def __enter__(self) -> Self:
         raise RuntimeError('do not call directly')
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *args: object) -> None:
         raise RuntimeError('do not call directly')
 
     @abstractmethod
-    def with_params(self, **kwargs) -> Self:
+    def with_params(self, **kwargs: Any) -> Self:
         """Returns `self` but with updated parameters."""
         ...
 
@@ -163,7 +163,7 @@ class Context(ABC):
         """
         ...
 
-    def round(self, x, *, exact: bool = False) -> Float:
+    def round(self, x: Real | RealFloat | str, *, exact: bool = False) -> Float:
         """
         Rounds any number according to this context.
 
@@ -172,7 +172,7 @@ class Context(ABC):
         """
         return self._round_at(self._round_prepare(x), None, exact)
 
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+    def round_at(self, x: Real | RealFloat | str, n: int, *, exact: bool = False) -> Float:
         """
         Rounding any number of a representable value with
         an unnormalized exponent of at minimum `n + 1`.
@@ -198,7 +198,7 @@ class Context(ABC):
         (`None`: precision alone decides)."""
         raise NotImplementedError
 
-    def round_integer(self, x) -> Float:
+    def round_integer(self, x: Real | RealFloat | str) -> Float:
         """
         Rounds any number to an integer according to this context.
 
@@ -213,7 +213,7 @@ class Context(ABC):
         """
         return self.round_at(x, -1)
 
-    def _round_prepare(self, x) -> RealFloat | Float:
+    def _round_prepare(self, x: Real | RealFloat | str) -> RealFloat | Float:
         """
         Initial step during rounding.
 
@@ -240,6 +240,8 @@ class Context(ABC):
                     return RealFloat.from_int(int(x))
                 elif is_dyadic(x):
                     return RealFloat.from_rational(x)
+            case _:
+                pass
 
         # not a special case so we use MPFR as a fallback
         # round the value using RTO such that we can re-round

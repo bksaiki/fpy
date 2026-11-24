@@ -20,6 +20,7 @@ Sibling of :func:`fpy2.analysis.format_infer.round_is_identity`, which decides t
 """
 
 from enum import Enum
+from typing import assert_never
 
 from ...number import (
     Context,
@@ -162,8 +163,6 @@ def double_round_op_ok(
     if op in _SAME_FAMILY_ONLY and _flx(e1) != _flx(e2):
         return False
 
-    # no `case _`: a member added later must be a mypy error here, not a silent
-    # refusal
     match op:
         case DoubleRoundOp.ADD:
             return p2 >= 2 * p1 + 1 and e2 <= e1
@@ -173,6 +172,8 @@ def double_round_op_ok(
             return p2 >= 2 * p1 + 2 and (_flx(e1) or (
                 e1 <= 0 and (e2 <= e1 - p1 - 2 or 2 * e2 <= e1 - 4 * p1 - 2)
             ))
+        case _:
+            assert_never(op)
 
 
 _OP_WIDTH: dict[DoubleRoundOp, tuple[int, bool]] = {

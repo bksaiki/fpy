@@ -3,6 +3,8 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
+from typing import Any
+
 from ...utils import DEFAULT, DefaultOr, default_or
 from ..number import RNG, Float
 from ..round import OverflowMode, RoundingMode
@@ -18,16 +20,16 @@ class IEEEFormat(EFloatFormat):
     It describes the set of representable values for `IEEEContext`.
     """
 
-    def __init__(self, es: int, nbits: int):
+    def __init__(self, es: int, nbits: int) -> None:
         super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits})'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, IEEEFormat) and self.es == other.es and self.nbits == other.nbits
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.es, self.nbits))
 
 
@@ -52,10 +54,10 @@ class IEEEContext(EFloatContext):
         num_randbits: int | None = 0,
         *,
         rng: RNG | None = None
-    ):
+    ) -> None:
         super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits, rng=rng)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r}, num_randbits={self.num_randbits!r})'
 
     def with_params(
@@ -66,7 +68,7 @@ class IEEEContext(EFloatContext):
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
         rng: DefaultOr[RNG | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'IEEEContext':
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
@@ -90,7 +92,7 @@ class IEEEContext(EFloatContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None,
     ) -> 'IEEEContext':

@@ -14,7 +14,7 @@ class Location:
     end_line: int
     end_column: int
 
-    def __key(self):
+    def __key(self) -> tuple[str, int, int, int, int]:
         return (
             self.source,
             self.start_line,
@@ -23,13 +23,13 @@ class Location:
             self.end_column
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.__key())
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, Location):
             return False
         return self.__key() == other.__key()
 
-    def format(self):
+    def format(self) -> str:
         return f'`{self.source}:{self.start_line}:{self.start_column}`'

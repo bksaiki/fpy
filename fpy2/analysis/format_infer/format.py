@@ -96,7 +96,7 @@ class AbstractFormat:
         has_neg_inf: bool = False,
         has_nan: bool = False,
         has_neg_zero: bool = False,
-    ):
+    ) -> None:
         if prec <= 0:
             raise ValueError("`prec` must be positive.")
 
@@ -138,10 +138,10 @@ class AbstractFormat:
             has_neg_zero=default_or(has_neg_zero, self.has_neg_zero),
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self._key())
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, AbstractFormat) and self._key() == other._key()
 
     def __str__(self) -> str:
@@ -350,12 +350,12 @@ class AbstractFormat:
             has_neg_zero=self.has_neg_zero or other.has_neg_zero,
         )
 
-    def __le__(self, other) -> bool:
+    def __le__(self, other: object) -> bool:
         if not isinstance(other, AbstractFormat):
             return NotImplemented
         return self.contained_in(other)
 
-    def __ge__(self, other) -> bool:
+    def __ge__(self, other: object) -> bool:
         if not isinstance(other, AbstractFormat):
             return NotImplemented
         return other.contained_in(self)
@@ -597,7 +597,7 @@ class AbstractFormat:
         )
         return self.prec < needed
 
-    def effective_prec(self):
+    def effective_prec(self) -> int | float:
         """Effective maximum precision: at least one digit, as a precision is
         positive, though a format of zero alone needs none."""
         if isinstance(self.prec, float) and not isinstance(self.bound, float):

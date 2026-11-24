@@ -10,10 +10,10 @@ from collections.abc import Callable
 from .loader import get_module_source
 
 
-def source_indent(lines: list[str]):
+def source_indent(lines: list[str]) -> int:
     return min(len(line) - len(line.lstrip()) for line in lines if line.strip() != '')
 
-def getfunclines(func: Callable):
+def getfunclines(func: Callable) -> tuple[list[str], str, int, int]:
     """Get the source lines for a function `func`."""
     src_name = inspect.getabsfile(func)
     mod = inspect.getmodule(func)

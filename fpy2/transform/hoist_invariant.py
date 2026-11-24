@@ -2,7 +2,7 @@
 
 import functools
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from ..analysis import (
     Alias,
@@ -33,14 +33,14 @@ class _Nodes(DefaultVisitor):
 
     found: set[int]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.found = set()
 
-    def _visit_statement(self, stmt: Stmt, ctx: None):
+    def _visit_statement(self, stmt: Stmt, ctx: None) -> None:
         self.found.add(id(stmt))
         super()._visit_statement(stmt, ctx)
 
-    def _visit_expr(self, e: Expr, ctx: None):
+    def _visit_expr(self, e: Expr, ctx: None) -> None:
         self.found.add(id(e))
         super()._visit_expr(e, ctx)
 
@@ -137,8 +137,8 @@ def _may_be_mutated(
     if alias is None:
         return True
     return any(
-        (d := reaching.get(name)) is not None and alias.region_of(d) is not None
-        for name in LiveVars.analyze(e)
+        d is not None and alias.region_of(d) is not None
+        for d in map(reaching.get, LiveVars.analyze(e))
     )
 
 
@@ -182,11 +182,11 @@ class _MayFail(DefaultVisitor):
     ctx_use: ContextUseAnalysis
     found: bool
 
-    def __init__(self, ctx_use: ContextUseAnalysis):
+    def __init__(self, ctx_use: ContextUseAnalysis) -> None:
         self.ctx_use = ctx_use
         self.found = False
 
-    def _visit_expr(self, e: Expr, ctx: None):
+    def _visit_expr(self, e: Expr, ctx: None) -> None:
         if isinstance(e, ListRef | Call):
             self.found = True
             return None
@@ -215,7 +215,7 @@ def _why_not(
     loop: ForStmt | WhileStmt,
     body: set[int],
     taken: set[int],
-    ctx: '_Context',
+    ctx: _Context,
 ) -> str | None:
     """Why *stmt* may not move above *loop*, or `None` where it may."""
     if not isinstance(stmt, Assign) or not isinstance(stmt.target, NamedId):
@@ -271,25 +271,28 @@ class _Maximal(DefaultVisitor):
     the same reason.
     """
 
-    def __init__(self, ok: Callable[[Expr], bool]):
-        self.ok = ok
-        self.found: list[Expr] = []
+    ok: Callable[[Expr], bool]
+    found: list[Expr]
 
-    def _visit_expr(self, e: Expr, ctx: None):
+    def __init__(self, ok: Callable[[Expr], bool]) -> None:
+        self.ok = ok
+        self.found = []
+
+    def _visit_expr(self, e: Expr, ctx: None) -> None:
         if self.ok(e):
             self.found.append(e)
             return None
         return super()._visit_expr(e, ctx)
 
-    def _visit_naryop(self, e: NaryOp, ctx: None):
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> None:
         if isinstance(e, And | Or):
             return self._visit_expr(e.args[0], ctx)
         return super()._visit_naryop(e, ctx)
 
-    def _visit_if_expr(self, e: IfExpr, ctx: None):
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> None:
         return self._visit_expr(e.cond, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx: None):
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> None:
         # the element runs once per element, and a later iterable sees the
         # targets of an earlier one
         return None
@@ -413,7 +416,7 @@ class _HoistInvariant(SiteRewriter):
         func: FuncDef,
         def_use: DefineUseAnalysis,
         where: int | Cursor | None,
-    ):
+    ) -> None:
         super().__init__()
         self.func = func
         self.ctx = _Context.of(func, def_use)
@@ -422,7 +425,7 @@ class _HoistInvariant(SiteRewriter):
         self._hoisting = set()
         self._subst = {}
 
-    def _hoist(self, stmt: ForStmt | WhileStmt, ctx) -> None:
+    def _hoist(self, stmt: ForStmt | WhileStmt, ctx: list[Stmt]) -> None:
         """Emit the invariant work before the loop, and mark what that leaves
         out of, or changes in, the body.
 
@@ -445,13 +448,13 @@ class _HoistInvariant(SiteRewriter):
         self._replaced = True
         ctx.extend(plan.emit)
 
-    def _visit_expr(self, e: Expr, ctx):
+    def _visit_expr(self, e: Expr, ctx: list[Stmt]) -> Expr:
         name = self._subst.get(id(e))
         if name is not None:
             return Var(name, e.loc)
         return super()._visit_expr(e, ctx)
 
-    def _visit_assign(self, stmt: Assign, ctx):
+    def _visit_assign(self, stmt: Assign, ctx: list[Stmt]) -> tuple[Stmt, list[Stmt]]:
         if id(stmt) in self._hoisting:
             # already emitted above the loop; `_visit_block` leaves it out and
             # records the removal
@@ -460,15 +463,15 @@ class _HoistInvariant(SiteRewriter):
             return stmt, ctx
         return super()._visit_assign(stmt, ctx)
 
-    def _visit_for(self, stmt: ForStmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, list[Stmt]]:
         self._hoist(stmt, ctx)
         return super()._visit_for(stmt, ctx)
 
-    def _visit_while(self, stmt: WhileStmt, ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: list[Stmt]) -> tuple[Stmt, list[Stmt]]:
         self._hoist(stmt, ctx)
         return super()._visit_while(stmt, ctx)
 
-    def _visit_function(self, func: FuncDef, ctx):
+    def _visit_function(self, func: FuncDef, ctx: Any) -> FuncDef:
         self._hoisting = set()
         self._subst = {}
         return super()._visit_function(func, ctx)
@@ -508,7 +511,7 @@ class HoistInvariant:
     @staticmethod
     def _instance(
         func: FuncDef,
-        where: 'int | Cursor | None',
+        where: int | Cursor | None,
         def_use: DefineUseAnalysis | None = None,
     ) -> _HoistInvariant:
         if def_use is None:
@@ -516,14 +519,14 @@ class HoistInvariant:
         return _HoistInvariant(func, def_use, where)
 
     @staticmethod
-    def sites(func: FuncDef, within: 'Cursor | None' = None) -> list[Cursor]:
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[Cursor]:
         """The loops this pass would hoist out of, in visit order -- what a
         `where` index counts, and what `within` narrows."""
         return HoistInvariant._instance(func, None).list_sites(within)
 
     @staticmethod
     def refusals(
-        func: FuncDef, within: 'Cursor | None' = None
+        func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
         """Why each loop this pass could have hoisted out of is not a site."""
         return HoistInvariant._instance(func, None).list_refusals(within)
@@ -531,7 +534,7 @@ class HoistInvariant:
     @staticmethod
     def apply(
         func: FuncDef,
-        where: 'int | Cursor | None' = None,
+        where: int | Cursor | None = None,
         *,
         def_use: DefineUseAnalysis | None = None,
     ) -> FuncDef:
@@ -546,7 +549,7 @@ class HoistInvariant:
     @staticmethod
     def apply_with_edits(
         func: FuncDef,
-        where: 'int | Cursor | None' = None,
+        where: int | Cursor | None = None,
         *,
         def_use: DefineUseAnalysis | None = None,
     ) -> EditLog:

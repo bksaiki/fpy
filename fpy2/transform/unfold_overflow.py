@@ -246,7 +246,7 @@ class _Prober:
     ctx: _BoundedCtx
     unbounded: _Unbounded
 
-    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded):
+    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded) -> None:
         self.ctx = ctx
         self.unbounded = unbounded
 
@@ -446,7 +446,7 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis,
         where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.class_info = class_info

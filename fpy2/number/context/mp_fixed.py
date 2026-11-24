@@ -5,6 +5,7 @@ Hence, "MP-F".
 """
 
 from fractions import Fraction
+from typing import Any
 
 from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
@@ -36,7 +37,7 @@ class MPFixedFormat(OrdinalFormat):
     """is `-0.0` representable?"""
 
     def __init__(self, nmin: int, enable_nan: bool = False, enable_inf: bool = False,
-                 enable_neg_zero: bool = True):
+                 enable_neg_zero: bool = True) -> None:
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(enable_nan, bool):
@@ -50,7 +51,7 @@ class MPFixedFormat(OrdinalFormat):
         self.enable_inf = enable_inf
         self.enable_neg_zero = enable_neg_zero
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPFixedFormat)
             and self.nmin == other.nmin
@@ -59,7 +60,7 @@ class MPFixedFormat(OrdinalFormat):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.nmin, self.enable_nan, self.enable_inf,
                      self.enable_neg_zero))
 
@@ -249,7 +250,7 @@ class MPFixedContext(OrdinalContext):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(rm, RoundingMode):
@@ -295,7 +296,7 @@ class MPFixedContext(OrdinalContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPFixedContext)
             and self.nmin == other.nmin
@@ -308,7 +309,7 @@ class MPFixedContext(OrdinalContext):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.nmin,
             self.rm,
@@ -339,7 +340,7 @@ class MPFixedContext(OrdinalContext):
         inf_value: DefaultOr[Float | None] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
         rng: DefaultOr[RNG | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPFixedContext':
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')
@@ -370,7 +371,7 @@ class MPFixedContext(OrdinalContext):
         *,
         rm: RoundingMode = RoundingMode.RNE,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPFixedContext':
@@ -389,10 +390,10 @@ class MPFixedContext(OrdinalContext):
             inf_value=inf_value,
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         else:

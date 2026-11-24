@@ -42,7 +42,7 @@ def fpy[**P, R](
     pre: Any = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
-):
+) -> Function[P, R] | Callable[[Callable[P, R]], Function[P, R]]:
     """
     Decorator to parse a Python function into FPy.
 
@@ -67,7 +67,7 @@ def fpy[**P, R](
 ###########################################################
 # @pattern decorator
 
-def pattern[**P, R](func: Callable[P, R]):
+def pattern[**P, R](func: Callable[P, R]) -> ExprPattern | StmtPattern:
     """
     Decorator to parse a Python function into an FPy pattern.
     Constructs an FPy `Pattern` from a Python function.
@@ -112,7 +112,7 @@ def fpy_primitive[**P, R](
     spec: Any = None,
     meta: dict[str, Any] | None = None,
     pure: bool = True,
-):
+) -> Primitive[P, R] | Callable[[Callable[P, R]], Primitive[P, R]]:
     """
     Decorator to parse a Python function into an FPy primitive.
     Constructs an FPy `Primitive` from a Python function.
@@ -133,7 +133,7 @@ def fpy_primitive[**P, R](
 ###########################################################
 # Utilities
 
-def _trim_source(lines: list[str], col_offset: int):
+def _trim_source(lines: list[str], col_offset: int) -> None:
     if col_offset > 0:
         for i in range(len(lines)):
             lines[i] = lines[i][col_offset:]
@@ -177,7 +177,7 @@ def _apply_fpy_decorator[**P, R](
     spec: Any = None,
     meta: dict[str, Any] | None = None,
     is_pattern: bool = False,
-):
+) -> Function[P, R]:
     # fetch the source for the function
     lines, src_name, start_line, col_offset = getfunclines(func)
     _trim_source(lines, col_offset)
@@ -242,7 +242,7 @@ def _check_prim_contexts(
     ctx: str | None,
     arg_ctxs: list[str | tuple] | None,
     ret_ctx: Context | str | tuple | None,
-):
+) -> None:
     input_vars: set[str] = set()
 
     # check contexts are well-formed and that ret_ctx has
@@ -280,7 +280,7 @@ def _apply_fpy_prim_decorator[**P, R](
     spec: Any = None,
     meta: dict[str, Any] | None = None,
     pure: bool = True,
-):
+) -> Primitive[P, R]:
     """
     Applies the `@fpy_prim` decorator to a function.
     """

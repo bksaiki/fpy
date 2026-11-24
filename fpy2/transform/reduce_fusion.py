@@ -99,7 +99,7 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
     sizes: ArraySizeAnalysis | None
     """Where set, a comprehension of proven length is left alone."""
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, sized: bool):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, sized: bool) -> None:
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
         self.strict = Hoistability.analyze(func).strict
@@ -141,7 +141,7 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
         fresh = lambda: self.gensym.fresh('t')
         return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
-    def _fuse(self, e: 'AnyOf | AllOf', comp: ListComp, ctx: _Ctx) -> Expr:
+    def _fuse(self, e: AnyOf | AllOf, comp: ListComp, ctx: _Ctx) -> Expr:
         """Emit the seed + loop into *ctx* and return ``Var(acc)``."""
         is_any = isinstance(e, AnyOf)
         acc = self.gensym.fresh('acc')

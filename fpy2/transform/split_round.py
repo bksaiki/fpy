@@ -108,6 +108,7 @@ from ..ast.fpyast import (
     Fst,
     FuncDef,
     Len,
+    Location,
     Max,
     Min,
     Mul,
@@ -322,7 +323,7 @@ class _SplitRoundInstance(RoundingRewriter):
             return False        # unbounded result: nothing to prove
         return pos <= f2.pos_bound and neg >= f2.neg_bound
 
-    def _wrap(self, t: NamedId, loc) -> Expr:
+    def _wrap(self, t: NamedId, loc: Location | None) -> Expr:
         # an assignment rounds nothing in FPy, so the second rounding is
         # explicit -- and sits in the enclosing block, which applies `rm1`
         return Round(None, Var(t, loc), loc)

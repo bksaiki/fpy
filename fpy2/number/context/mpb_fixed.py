@@ -3,6 +3,9 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
+from fractions import Fraction
+from typing import Any
+
 from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
@@ -37,6 +40,9 @@ class MPBFixedFormat(SizedFormat):
     enable_inf: bool
     """is infinity representable?"""
 
+    enable_neg_zero: bool
+    """is -0 representable?"""
+
     _mp_fmt: MPFixedFormat
     """underlying unbounded format"""
 
@@ -54,7 +60,7 @@ class MPBFixedFormat(SizedFormat):
         enable_nan: bool = False,
         enable_inf: bool = False,
         enable_neg_zero: bool = True,
-    ):
+    ) -> None:
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(pos_maxval, RealFloat):
@@ -89,7 +95,7 @@ class MPBFixedFormat(SizedFormat):
         self._pos_maxval_ord = self._mp_fmt._to_ordinal(pos_maxval)
         self._neg_maxval_ord = self._mp_fmt._to_ordinal(neg_maxval)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPBFixedFormat)
             and self.nmin == other.nmin
@@ -100,7 +106,7 @@ class MPBFixedFormat(SizedFormat):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__,
             self.nmin,
@@ -158,7 +164,7 @@ class MPBFixedFormat(SizedFormat):
         else:
             return self._mp_fmt.to_ordinal(x)
 
-    def to_fractional_ordinal(self, x: Float):
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return self._mp_fmt.to_fractional_ordinal(x)
@@ -266,6 +272,9 @@ class MPBFixedContext(SizedContext):
     enable_inf: bool
     """is infinity representable?"""
 
+    enable_neg_zero: bool
+    """is -0 representable?"""
+
     nan_value: Float | None
     """
     if NaN is not enabled, what value should NaN round to?
@@ -296,7 +305,7 @@ class MPBFixedContext(SizedContext):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if not isinstance(overflow, OverflowMode):
@@ -344,7 +353,7 @@ class MPBFixedContext(SizedContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPBFixedContext)
             and self.nmin == other.nmin
@@ -360,7 +369,7 @@ class MPBFixedContext(SizedContext):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.nmin,
             self.pos_maxval,
@@ -389,7 +398,7 @@ class MPBFixedContext(SizedContext):
         enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPBFixedContext':
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
@@ -430,7 +439,7 @@ class MPBFixedContext(SizedContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPBFixedContext':
@@ -450,10 +459,10 @@ class MPBFixedContext(SizedContext):
             inf_value=inf_value,
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         return None, self.nmin - self.num_randbits

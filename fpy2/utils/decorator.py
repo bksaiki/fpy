@@ -2,12 +2,14 @@
 Decorators implementing some default behavior.
 """
 
+from collections.abc import Callable
 from enum import Enum
+from typing import Any
 
 ###########################################################
 # Default __repr__ decorator
 
-def _get_slots(cls):
+def _get_slots(cls: type) -> list[str]:
     """
     Get all slots from the class and its base classes, most-derived first.
 
@@ -20,7 +22,7 @@ def _get_slots(cls):
             slots.setdefault(slot, None)
     return list(slots)
 
-def __default_repr__(x: object):
+def __default_repr__(x: object) -> str:
     # get attributes from __dict__ if available
     items: list[str] = []
     if hasattr(x, '__dict__'):
@@ -35,7 +37,7 @@ def __default_repr__(x: object):
 
     return f'{x.__class__.__name__}({", ".join(items)})'
 
-def default_repr(cls):
+def default_repr(cls: Any) -> Any:
     """Default __repr__ implementation for a class."""
     cls.__repr__ = __default_repr__
     return cls
@@ -43,7 +45,7 @@ def default_repr(cls):
 ###########################################################
 # Comparison reversal
 
-def rcomparable(cls):
+def rcomparable(cls: Any) -> Callable[[type], type]:
     """
     Implement `__eq__`, `__lt__`, `__le__`, `__gt__`, and `__ge__`
     between this class and an object of type `cls`
@@ -53,14 +55,14 @@ def rcomparable(cls):
     but this class may be compared against `cls`, extend
     comparison functionality by reversing the comparison.
     """
-    def wrap(this_cls):
+    def wrap(this_cls: type) -> type:
         __eq__ = cls.__eq__
         __lt__ = cls.__lt__
         __le__ = cls.__le__
         __gt__ = cls.__gt__
         __ge__ = cls.__ge__
 
-        def __req__(self, other):
+        def __req__(self: Any, other: Any) -> bool:
             if isinstance(other, this_cls):
                 # reverse the comparison
                 return other == self
@@ -68,7 +70,7 @@ def rcomparable(cls):
                 # normal order
                 return __eq__(self, other)
 
-        def __rlt__(self, other):
+        def __rlt__(self: Any, other: Any) -> bool:
             if isinstance(other, this_cls):
                 # reverse the comparison
                 return other > self
@@ -76,7 +78,7 @@ def rcomparable(cls):
                 # normal order
                 return __lt__(self, other)
 
-        def __rle__(self, other):
+        def __rle__(self: Any, other: Any) -> bool:
             if isinstance(other, this_cls):
                 # reverse the comparison
                 return other >= self
@@ -84,7 +86,7 @@ def rcomparable(cls):
                 # normal order
                 return __le__(self, other)
 
-        def __rgt__(self, other):
+        def __rgt__(self: Any, other: Any) -> bool:
             if isinstance(other, this_cls):
                 # reverse the comparison
                 return other < self
@@ -92,7 +94,7 @@ def rcomparable(cls):
                 # normal order
                 return __gt__(self, other)
 
-        def __rge__(self, other):
+        def __rge__(self: Any, other: Any) -> bool:
             if isinstance(other, this_cls):
                 # reverse the comparison
                 return other <= self
@@ -113,13 +115,13 @@ def rcomparable(cls):
 ############################################################
 # Default __repr__ for enum values
 
-def __default_enum_repr__(x: Enum):
+def __default_enum_repr__(x: Enum) -> str:
     """
     Default __repr__ implementation for enum values.
     """
     return f'{x.__class__.__name__}.{x.name}'
 
-def enum_repr(cls):
+def enum_repr(cls: Any) -> Any:
     """
     Default __repr__ implementation for enum values.
     """

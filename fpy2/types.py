@@ -101,21 +101,21 @@ class VarType(Type):
     name: NamedId
     """identifier"""
 
-    def __init__(self, name: NamedId):
+    def __init__(self, name: NamedId) -> None:
         self.name = name
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, VarType) and self.name == other.name
 
-    def __lt__(self, other: 'VarType'):
+    def __lt__(self, other: 'VarType') -> bool:
         if not isinstance(other, VarType):
             raise TypeError(f"'<' not supported between instances '{type(self)}' and '{type(other)}'")
         return self.name < other.name
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.name)
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return True
 
     def format(self) -> str:
@@ -131,13 +131,13 @@ class VarType(Type):
 class BoolType(Type):
     """Type of boolean values"""
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, BoolType)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(type(self))
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return True
 
     def format(self) -> str:
@@ -154,20 +154,20 @@ class RealType(Type):
 
     fmt: Format | None
 
-    def __init__(self, fmt: Format | Context | None = None):
+    def __init__(self, fmt: Format | Context | None = None) -> None:
         if isinstance(fmt, Context):
             fmt = fmt.format()
         elif not isinstance(fmt, Format | None):
             raise TypeError(f'expected a `Format` or `Context`, got {fmt!r}')
         self.fmt = fmt
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, RealType)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(type(self))
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return self.fmt is not None
 
     def format(self) -> str:
@@ -180,13 +180,13 @@ class RealType(Type):
 class ContextType(Type):
     """Rounding context type."""
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, ContextType)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(type(self))
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return True
 
     def format(self) -> str:
@@ -199,16 +199,16 @@ class TupleType(Type):
     elts: tuple[Type, ...]
     """type of elements"""
 
-    def __init__(self, *elts: Type):
+    def __init__(self, *elts: Type) -> None:
         self.elts = elts
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, TupleType) and self.elts == other.elts
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.elts)
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return all(elt.is_context_type() for elt in self.elts)
 
     def format(self) -> str:
@@ -246,18 +246,18 @@ class ListType(Type):
     is read only by array-size inference, monomorphization, and the FPCore
     backend."""
 
-    def __init__(self, elt: Type, length: int | NamedId | None = None):
+    def __init__(self, elt: Type, length: int | NamedId | None = None) -> None:
         self.elt = elt
         self.length = length
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         # ``length`` is metadata and deliberately excluded from equality.
         return isinstance(other, ListType) and self.elt == other.elt
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.elt)
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return self.elt.is_context_type()
 
     def format(self) -> str:
@@ -290,12 +290,12 @@ class FunctionType(Type):
     return_type: Type
     """return type"""
 
-    def __init__(self, ctx: ContextParam | None, arg_types: Iterable[Type], return_type: Type):
+    def __init__(self, ctx: ContextParam | None, arg_types: Iterable[Type], return_type: Type) -> None:
         self.ctx = ctx
         self.arg_types = tuple(arg_types)
         self.return_type = return_type
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, FunctionType)
             and self.ctx == other.ctx
@@ -303,10 +303,10 @@ class FunctionType(Type):
             and self.return_type == other.return_type
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.ctx, self.arg_types, self.return_type))
 
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         return (
             self.ctx is not None
             and all(arg.is_context_type() for arg in self.arg_types)

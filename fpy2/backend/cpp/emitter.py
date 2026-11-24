@@ -15,7 +15,7 @@ uncompilable program.
 
 import dataclasses
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from fractions import Fraction
 from typing import ClassVar, NoReturn
@@ -28,6 +28,7 @@ from ...analysis import (
     ContextUseSite,
     DefineUseAnalysis,
     Definition,
+    DefSite,
     FormatAnalysis,
     PartialContext,
     ValueClass,
@@ -42,6 +43,7 @@ from ...analysis.format_infer import (
     round_is_identity,
 )
 from ...analysis.storage_infer import without_absent
+from ...ast.accessors import subexprs
 from ...ast.fpyast import (
     Abs,
     Add,
@@ -54,6 +56,7 @@ from ...ast.fpyast import (
     AssertStmt,
     Assign,
     Ast,
+    Attribute,
     BinaryOp,
     BoolVal,
     Call,
@@ -81,6 +84,7 @@ from ...ast.fpyast import (
     Empty,
     Enumerate,
     Expr,
+    ForeignVal,
     ForStmt,
     Fst,
     FuncDef,
@@ -108,6 +112,7 @@ from ...ast.fpyast import (
     Not,
     NullaryOp,
     Or,
+    PassStmt,
     Pow,
     Range1,
     Range2,
@@ -116,6 +121,7 @@ from ...ast.fpyast import (
     RationalVal,
     ReturnStmt,
     Round,
+    RoundAt,
     Signbit,
     Size,
     Snd,
@@ -145,7 +151,7 @@ from ...number import (
     RealFloat,
 )
 from ...number.context.context import Context
-from .ops import CppOp, ScalarOpTable
+from .ops import CppOp, OpTable, ScalarOpTable
 from .storage import (
     CppStorage,
     StorageSelectionError,
@@ -199,13 +205,13 @@ _NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstSqrt1_2: fpy_ops.const_sqrt1_2,
 }
 
-_FLOAT_CTXS: 'dict[CppScalar, Context]' = {
+_FLOAT_CTXS: dict[CppScalar, Context] = {
     CppScalar.F32: FP32,
     CppScalar.F64: FP64,
 }
 
 
-def _inward(v: Fraction, ty: 'CppScalar | None', *, upper: bool) -> Fraction:
+def _inward(v: Fraction, ty: CppScalar | None, *, upper: bool) -> Fraction:
     """*v* moved to the nearest value *ty* represents, never outward.
 
     A bound is compared in the *operand's* type, so one that type cannot hold
@@ -223,7 +229,7 @@ def _inward(v: Fraction, ty: 'CppScalar | None', *, upper: bool) -> Fraction:
     return ctx.with_params(rm=RM.RTN if upper else RM.RTP).round(v).as_rational()
 
 
-def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
+def _value_cpp_type(v: Fraction) -> CppScalar | None:
     """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
 
     Not its *storage*, which comes from the value: ``1.5`` is stored as a
@@ -312,20 +318,23 @@ class _TupleAccess:
 class _IndentedWriter:
     """Tiny line-oriented C++ source builder."""
 
-    def __init__(self):
-        self._lines: list[str] = []
+    _lines: list[str]
+    _depth: int
+
+    def __init__(self) -> None:
+        self._lines = []
         self._depth = 0
 
-    def add_line(self, line: str = ''):
+    def add_line(self, line: str = '') -> None:
         if line:
             self._lines.append('    ' * self._depth + line)
         else:
             self._lines.append('')
 
-    def indent(self):
+    def indent(self) -> None:
         self._depth += 1
 
-    def dedent(self):
+    def dedent(self) -> None:
         self._depth -= 1
 
     def __len__(self) -> int:
@@ -346,9 +355,13 @@ class CppEmitError(Exception):
     which `compile_module` reads: under the flag it is not a second opinion.
     """
 
+    msg: str
+    at: Ast | None
+    unfold_answers: bool
+
     def __init__(
-        self, msg: str, *, at: 'Ast | None' = None, unfold_answers: bool = False,
-    ):
+        self, msg: str, *, at: Ast | None = None, unfold_answers: bool = False,
+    ) -> None:
         self.msg = msg
         self.at = at
         self.unfold_answers = unfold_answers
@@ -368,7 +381,7 @@ class CppInternalError(CppEmitError):
     how ``test_corpus_profile.py`` tells the two apart.
     """
 
-    def __init__(self, msg: str, *, at: 'Ast | None' = None):
+    def __init__(self, msg: str, *, at: Ast | None = None) -> None:
         super().__init__(f'internal error (please report): {msg}', at=at)
 
 
@@ -440,7 +453,7 @@ class CppEmitter(Visitor):
         enable_fenv: bool = True,
         unbox: UnboxAnalysis | None = None,
         callee_params: dict[FuncDef, CalleeAbi] | None = None,
-    ):
+    ) -> None:
         self.ast = ast
         self.storage = storage
         self.variables = variables
@@ -751,7 +764,7 @@ class CppEmitter(Visitor):
         d = self.def_use.find_def_from_site(arg.name, arg)
         return self._binding_decl(d, storage, arg.name)
 
-    def _binding_decl(self, d: Definition, storage: CppType, name) -> str:
+    def _binding_decl(self, d: Definition, storage: CppType, name: NamedId | str) -> str:
         """``T name``, ``const T& name`` or ``T& name`` for the def *d*.
 
         A name never rebound binds by reference, sharing the object and skipping the
@@ -780,7 +793,7 @@ class CppEmitter(Visitor):
         )
 
     def _foreach_decl(
-        self, target_def, name: str,
+        self, target_def: Definition | None, name: str,
         *, elt: CppType | None = None, at: Expr | None = None,
     ) -> str:
         """Loop-variable declaration for a range-for.
@@ -796,7 +809,7 @@ class CppEmitter(Visitor):
             self._require_bridgeable(elt, storage, at)
         return self._binding_decl(target_def, storage, name)
 
-    def _emitted_storage_of(self, d) -> CppType:
+    def _emitted_storage_of(self, d: Definition) -> CppType:
         """The type *d*'s C++ name actually has.
 
         ``storage_of`` is the type the analysis *chose*; when the emitter binds
@@ -813,7 +826,7 @@ class CppEmitter(Visitor):
         return self.storage.storage_of(d)
 
     def _require_reference_agrees(
-        self, d, deduced: CppType, src: 'Expr',
+        self, d: Definition, deduced: CppType, src: Expr,
     ) -> None:
         """Refuse a reference binding whose deduced type is not the one chosen.
 
@@ -836,7 +849,7 @@ class CppEmitter(Visitor):
             at=src,
         )
 
-    def _reference_source(self, d) -> 'Expr | None':
+    def _reference_source(self, d: Definition) -> Expr | None:
         """The initializer *d*'s C++ name deduces its type from, if any.
 
         Asked of the storage class, not of *d*: a use resolves to the latest def, and
@@ -849,7 +862,7 @@ class CppEmitter(Visitor):
                 return m.site.expr
         return None
 
-    def _binds_reference(self, d) -> bool:
+    def _binds_reference(self, d: Definition) -> bool:
         """Whether the emitter binds *d*'s name as a reference.
 
         The single answer for the question, because two callers need the *same*
@@ -865,7 +878,7 @@ class CppEmitter(Visitor):
             ),
         )
 
-    def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
+    def _emit_bind(self, name: NamedId, site: DefSite, rhs: str) -> None:
         """``T name = rhs;`` or ``name = rhs;``, per :class:`CppStorage`.
         """
         target_def = self.def_use.find_def_from_site(name, site)
@@ -880,7 +893,7 @@ class CppEmitter(Visitor):
         self,
         binding: TupleBinding,
         src: str,
-        site,
+        site: DefSite,
         src_ty: CppType | None = None,
         at: Expr | None = None,
     ) -> None:
@@ -958,7 +971,7 @@ class CppEmitter(Visitor):
     # ------------------------------------------------------------------
     # Function emission
 
-    def _visit_function(self, func: FuncDef, ctx):
+    def _visit_function(self, func: FuncDef, ctx: None) -> None:
         if self._strict and contains_boxed(self.ret_ty):
             raise self._strict_tripwire()
 
@@ -1005,7 +1018,7 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _emit_hoist_for_class(self, c):
+    def _emit_hoist_for_class(self, c: Definition) -> None:
         """
         Emit a zero-initialised C++ variable declaration for a single
         storage class (used to anchor declarations just before the
@@ -1028,7 +1041,7 @@ class CppEmitter(Visitor):
     # ------------------------------------------------------------------
     # Statement visitors
 
-    def _visit_block(self, block: StmtBlock, ctx):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> None:
         for stmt in block.stmts:
             # Storage classes anchored to this stmt (currently only
             # ``IfStmt``s with is_intro phi merges) declare just before
@@ -1037,7 +1050,7 @@ class CppEmitter(Visitor):
                 self._emit_hoist_for_class(c)
             self._visit_statement(stmt, ctx)
 
-    def _visit_assign(self, stmt: Assign, ctx):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> None:
         match stmt.target:
             case NamedId():
                 # ``VariableAlloc`` names this Assign's SSA def and says
@@ -1084,7 +1097,7 @@ class CppEmitter(Visitor):
                 )
 
     def _emit_at(
-        self, e: Expr, want: CppType | None, ctx, *,
+        self, e: Expr, want: CppType | None, ctx: None, *,
         cannot_convert: bool = False,
     ) -> str:
         """Emit *e* as a value of storage *want*.
@@ -1144,15 +1157,16 @@ class CppEmitter(Visitor):
                     lambda: self._emit_at(e.iff, want, ctx),
                     'a ternary arm', e.iff)
                 return f'({cond} ? {ift} : {iff})'
-        emitted = self._visit_expr(e, ctx)
-        src = self._storage_or_none(e)
-        if src is None:
-            return emitted
-        if cannot_convert:
-            self._require_bridgeable(src, want, e)
-        return self._convert_storage(emitted, src, want, at=e)
+            case _:
+                emitted = self._visit_expr(e, ctx)
+                src = self._storage_or_none(e)
+                if src is None:
+                    return emitted
+                if cannot_convert:
+                    self._require_bridgeable(src, want, e)
+                return self._convert_storage(emitted, src, want, at=e)
 
-    def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
+    def _emit_deduced(self, e: Expr, want: CppType, ctx: None) -> str:
         """:meth:`_emit_at` where C++ takes the type *from* the argument.
 
         A braced initializer rejects a narrowing conversion outright, and
@@ -1335,7 +1349,7 @@ class CppEmitter(Visitor):
             what = f'`{at.name}`'
             fix = f'define {what} at the wider format'
             site = self.def_use.find_def_from_use(at).site
-            loc = getattr(site, 'loc', None)
+            loc = site.loc
             if loc is not None:
                 # Line only: the file is already in the location prefix, and
                 # ``Location.format`` opens a backtick it never closes.
@@ -1343,7 +1357,7 @@ class CppEmitter(Visitor):
         elif isinstance(at, Call):
             # The remaining reachable case: a callee's return representation is
             # fixed by its own body, so nothing on this side can raise it.
-            callee = getattr(at.func, 'name', at.func)
+            callee = at.func.name if isinstance(at.func, Var) else at.func
             what = f'the list `{callee}` returns'
             fix = f'have `{callee}` return the wider format'
         if src.elt == want.elt:
@@ -1416,7 +1430,7 @@ class CppEmitter(Visitor):
             return None
         return self._storage_for_expr(e)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> None:
         # A function has one return type, so every `return` produces it: built
         # at that storage where the value is constructed here, converted where
         # it comes from somewhere with storage of its own.
@@ -1655,7 +1669,7 @@ class CppEmitter(Visitor):
             )
 
     @contextmanager
-    def _fenv_scope(self, target_rm: RM):
+    def _fenv_scope(self, target_rm: RM) -> Iterator[None]:
         """Wrap the contained emission in a ``fesetround`` save/set/restore, unless the
         active mode is already *target_rm*.
 
@@ -1682,7 +1696,7 @@ class CppEmitter(Visitor):
             self._current_rm = prev_rm
         self.writer.add_line(f'std::fesetround({fenv});')
 
-    def _visit_context(self, stmt: ContextStmt, ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> None:
         # The context comes from the ContextUse scope at this site, already
         # resolved.  Validation fires only if something inside uses it.
         if not isinstance(stmt.target, UnderscoreId):
@@ -1717,29 +1731,29 @@ class CppEmitter(Visitor):
     # ------------------------------------------------------------------
     # Expression visitors — return a C++ source fragment
 
-    def _visit_var(self, e: Var, ctx) -> str:
+    def _visit_var(self, e: Var, ctx: None) -> str:
         # Resolve the use to its SSA def, then look up the C++ identifier
         # ``VariableAlloc`` gave that def's class.
         return self._name_for_var_use(e)
 
-    def _visit_decnum(self, e: Decnum, ctx) -> str:
+    def _visit_decnum(self, e: Decnum, ctx: None) -> str:
         return self._emit_real_literal(e.as_real(), at=e)
 
-    def _visit_hexnum(self, e: Hexnum, ctx) -> str:
+    def _visit_hexnum(self, e: Hexnum, ctx: None) -> str:
         return self._emit_real_literal(e.as_real(), at=e)
 
-    def _visit_integer(self, e: Integer, ctx) -> str:
+    def _visit_integer(self, e: Integer, ctx: None) -> str:
         # Through the shared path, which range-checks: `str(e.val)` here was a
         # second way to emit an integer too large for a C++ integer literal.
         return self._emit_numeric_literal(e.as_rational(), at=e)
 
-    def _visit_rational(self, e: Rational, ctx) -> str:
+    def _visit_rational(self, e: Rational, ctx: None) -> str:
         return self._emit_numeric_literal(e.as_rational(), at=e)
 
-    def _visit_digits(self, e: Digits, ctx) -> str:
+    def _visit_digits(self, e: Digits, ctx: None) -> str:
         return self._emit_numeric_literal(e.as_rational(), at=e)
 
-    def _emit_real_literal(self, v: 'Fraction | Float', *, at: Expr) -> str:
+    def _emit_real_literal(self, v: Fraction | Float, *, at: Expr) -> str:
         """Emit an exact-real literal, preserving the sign of a negative zero
         (which has no `Fraction` form; see `RationalVal.as_real`)."""
         if isinstance(v, Float):
@@ -1905,7 +1919,7 @@ class CppEmitter(Visitor):
     def _dispatch(
         self,
         e: UnaryOp | BinaryOp | TernaryOp,
-        table,
+        table: OpTable,
         operands: Sequence[tuple[str, Expr]],
     ) -> str:
         """Emit *e* via the op table, choosing a signature in three phases.
@@ -1929,7 +1943,7 @@ class CppEmitter(Visitor):
         storages = [self._scalar_storage_for_expr(src) for src in srcs]
         active = self._active_ctx_for(e)
 
-        def spell(args: list[str], slots) -> list[str]:
+        def spell(args: list[str], slots: tuple[CppScalar, ...]) -> list[str]:
             return [
                 self._call_arg(a, src, slot)
                 for a, src, slot in zip(args, srcs, slots)
@@ -2011,7 +2025,7 @@ class CppEmitter(Visitor):
         self,
         e: Expr,
         sigs: Sequence[CppOp],
-        operands: "Sequence[tuple[str, CppScalar, Expr | None]]",
+        operands: Sequence[tuple[str, CppScalar, Expr | None]],
     ) -> str | None:
         """Pick a signature whose output context contains the exact unrounded
         result of *e* -- so the op under that signature is the identity -- and
@@ -2046,7 +2060,7 @@ class CppEmitter(Visitor):
                 # off the ladder, so it ranks widest; `_try` declines it anyway
                 return ladder_rank(CppScalar.BOOL)
 
-        def _try(sig, *, exact_out: bool, by_value: bool) -> str | None:
+        def _try(sig: CppOp, *, exact_out: bool, by_value: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
@@ -2087,7 +2101,7 @@ class CppEmitter(Visitor):
                         return emitted
         return None
 
-    def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> str:
         if isinstance(e, (Fst, Snd)):
             # Tuple accessors fold as a chain (e.g. ``fst(snd(e))``) into a
             # single ``std::get``, so they bypass the eager operand visit
@@ -2175,7 +2189,7 @@ class CppEmitter(Visitor):
         assert isinstance(want, CppScalar), f'`abs` of a scalar gave {want}'
         return self._maybe_cast(arg, src, want, at=e)
 
-    def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> str:
+    def _emit_tuple_accessor(self, e: UnaryOp, ctx: None) -> str:
         """Emit a (possibly nested) ``fst``/``snd`` chain.
 
         Folded to a single ``std::get`` whenever it reads one element, so
@@ -2194,7 +2208,7 @@ class CppEmitter(Visitor):
         )
         return f'std::make_tuple({gets})'
 
-    def _tuple_access(self, e: Expr, ctx) -> _TupleAccess:
+    def _tuple_access(self, e: Expr, ctx: None) -> _TupleAccess:
         """Resolve a ``fst``/``snd`` chain over a tuple into a
         :class:`_TupleAccess`, peeling the nesting and tracking the net
         offset into the underlying base tuple."""
@@ -2224,7 +2238,7 @@ class CppEmitter(Visitor):
             )
         return acc.s, acc.ty
 
-    def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> str:
         match e:
             case Size():
                 return self._emit_size(e, ctx)
@@ -2289,7 +2303,7 @@ class CppEmitter(Visitor):
             or self._is_finite(e)
         )
 
-    def _emit_scale_by_pow2(self, e: Mul, ctx) -> str | None:
+    def _emit_scale_by_pow2(self, e: Mul, ctx: None) -> str | None:
         """``2 ** n * v`` as ``std::ldexp(v, n)``, or `None` to emit a product.
 
         ``ldexp`` is IEEE 754's ``scaleB``: multiplication by an integral power
@@ -2355,7 +2369,7 @@ class CppEmitter(Visitor):
             exact_exp2(self.format_info.by_expr.get(exp)), ctx,
         )
 
-    def _emit_pow2(self, e: Pow, ctx) -> str | None:
+    def _emit_pow2(self, e: Pow, ctx: None) -> str | None:
         """``2 ** n`` as ``std::ldexp(1, n)``, or `None` to emit a ``pow``.
 
         The same accuracy argument as :meth:`_emit_scale_by_pow2`, for a power
@@ -2378,7 +2392,7 @@ class CppEmitter(Visitor):
         return self._ldexp_call('1', e.second, ctx, finite=finite)
 
     def _ldexp_call(
-        self, value: str, exp: Expr, ctx, *, finite: bool,
+        self, value: str, exp: Expr, ctx: None, *, finite: bool,
     ) -> str:
         """``std::ldexp(value, exp)``, falling back to a product where the
         exponent may not be finite.
@@ -2428,7 +2442,7 @@ class CppEmitter(Visitor):
         """*code*, in a form the caller may emit more than once."""
         return code if code.isdigit() else self._bind_operand(code)
 
-    def _emit_range_len(self, e: Len, rng: 'Range1 | Range2', ctx) -> str:
+    def _emit_range_len(self, e: Len, rng: Range1 | Range2, ctx: None) -> str:
         """``len(range(...))`` as a count, without building the range.
 
         A range's *elements* need an integer type and a real bound has none,
@@ -2450,7 +2464,7 @@ class CppEmitter(Visitor):
             count = f'{stop} > {start} ? {stop} - {start} : 0'
         return f'static_cast<{result_ty.format()}>({count})'
 
-    def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx) -> str:
+    def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx: None) -> str:
         """A ``range`` bound, cast into the element type.
 
         Unconditional, where :meth:`_maybe_cast` would refuse a real bound as
@@ -2463,7 +2477,7 @@ class CppEmitter(Visitor):
             return arg
         return self._explicit_cast(arg, elt_ty)
 
-    def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
+    def _emit_range(self, e: Range1 | Range2 | Range3, ctx: None) -> str:
         """``range(...)`` as an expression — a vector via ``std::iota`` for a
         unit step, a fill loop for ``Range3``'s explicit one.
 
@@ -2521,7 +2535,7 @@ class CppEmitter(Visitor):
                     f'unsupported range op: {type(e).__name__}', at=e,
                 )
 
-    def _emit_size(self, e: Size, ctx) -> str:
+    def _emit_size(self, e: Size, ctx: None) -> str:
         """``size(xs, d)`` -- follow *d* ``[0]`` indices into the shape format
         inference knows, then ``.size()``.
 
@@ -2566,10 +2580,10 @@ class CppEmitter(Visitor):
             f'cpp emitter does not handle {kind}', at=at,
         )
 
-    def _visit_bool(self, e: BoolVal, ctx) -> str:
+    def _visit_bool(self, e: BoolVal, ctx: None) -> str:
         return 'true' if e.val else 'false'
 
-    def _visit_compare(self, e: Compare, ctx) -> str:
+    def _visit_compare(self, e: Compare, ctx: None) -> str:
         # `a < b < c` expands to pairwise `&&`, sound because the operands are
         # pure.  Each pair is cast to its scalar supremum so the comparison
         # happens in a defined common type.
@@ -2613,13 +2627,13 @@ class CppEmitter(Visitor):
             return clauses[0]
         return '(' + ' && '.join(clauses) + ')'
 
-    def _visit_foreign(self, e, ctx):
+    def _visit_foreign(self, e: ForeignVal, ctx: None) -> NoReturn:
         self._unsupported('ForeignVal', at=e)
 
-    def _visit_attribute(self, e, ctx):
+    def _visit_attribute(self, e: Attribute, ctx: None) -> NoReturn:
         self._unsupported('Attribute', at=e)
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx) -> str:
+    def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> str:
         ty = self._scalar_storage_for_expr(e)
         if isinstance(e, ConstInf | ConstNan):
             # No literal spells these, and no integer type holds them.
@@ -2647,7 +2661,7 @@ class CppEmitter(Visitor):
             ) from err
         return self._emit_numeric_literal(val.as_rational(), at=e)
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> str:
         match e:
             case Range3():
                 return self._emit_range(e, ctx)
@@ -2664,7 +2678,7 @@ class CppEmitter(Visitor):
 
 
 
-    def _visit_naryop(self, e: NaryOp, ctx) -> str:
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> str:
         match e:
             case Zip():
                 raise CppInternalError(
@@ -2683,7 +2697,7 @@ class CppEmitter(Visitor):
                     f'unsupported nary op: {type(e).__name__}', at=e,
                 )
 
-    def _emit_bool_chain(self, e: 'And | Or', ctx) -> str:
+    def _emit_bool_chain(self, e: And | Or, ctx: None) -> str:
         """Reduce ``And``/``Or`` to a parenthesised ``&&``/``||`` chain.
 
         C++'s short-circuit matches FPy's for pure expressions, and the operands are
@@ -2707,7 +2721,7 @@ class CppEmitter(Visitor):
         op = '&&' if isinstance(e, And) else '||'
         return '(' + f' {op} '.join(args) + ')'
 
-    def _emit_min_max(self, e: 'Min | Max', ctx) -> str:
+    def _emit_min_max(self, e: Min | Max, ctx: None) -> str:
         """Reduce an ``n``-ary ``min`` / ``max`` to nested pairwise steps.
 
         Each operand is cast losslessly into one storage type, so the integer
@@ -2880,7 +2894,7 @@ class CppEmitter(Visitor):
             f' : {fold})'
         )
 
-    def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
+    def _emit_any_all(self, e: AnyOf | AllOf, arg_str: str) -> str:
         """``any(bs)`` / ``all(bs)`` -> ``std::any_of`` / ``std::all_of`` with an
         identity predicate.  The empty range agrees with FPy (``all_of`` is
         ``true``, ``any_of`` is ``false``), so unlike ``min``/``max`` there is
@@ -2908,7 +2922,7 @@ class CppEmitter(Visitor):
             f'[](bool {pred}) {{ return {pred}; }})'
         )
 
-    def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
+    def _emit_amin_amax(self, e: AMin | AMax, arg_str: str) -> str:
         """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
 
         Combiner as in :meth:`_emit_min_max`.  The result *is* an element, so
@@ -2962,7 +2976,7 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return self._narrow_result(acc, elt_ty, want, e)
 
-    def _emit_empty(self, e: Empty, result_ty: CppType, ctx) -> str:
+    def _emit_empty(self, e: Empty, result_ty: CppType, ctx: None) -> str:
         """``empty(d1, ..., dN)``: a zero-initialised list of storage
         *result_ty*, allocated over the dimensions given.
 
@@ -3179,7 +3193,7 @@ class CppEmitter(Visitor):
                 "cast is not exact: value is outside the context's bound")
         return operand
 
-    def _fold_rounded_literal(self, e) -> str | None:
+    def _fold_rounded_literal(self, e: Round) -> str | None:
         """``Round(<literal>)`` as a C++ literal, or ``None`` to emit a cast.
 
         The only way an inexact constant reaches C++ at all, since the argument
@@ -3360,7 +3374,7 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return out
 
-    def _visit_round(self, e, ctx) -> str:
+    def _visit_round(self, e: Round, ctx: None) -> str:
         # A `static_cast`, whose rounding mode is the one the surrounding
         # `with` set.  The user asked for it, so it is emitted even when lossy;
         # a literal argument is folded instead.
@@ -3646,7 +3660,7 @@ class CppEmitter(Visitor):
     def _emit_cast_round(
         self, ctx: MPFixedContext | MPBFixedContext,
         bounds: tuple[Fraction, Fraction], arg: str,
-        target_ty: CppScalar, e,
+        target_ty: CppScalar, e: NamedUnaryOp,
     ) -> str:
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
@@ -3736,10 +3750,10 @@ class CppEmitter(Visitor):
         # -128 but only to 127 -- and `fabs` cannot say that
         return f'{self._emit_numeric_literal(lo, at=at)} <= {operand} && {upper}'
 
-    def _visit_round_at(self, e, ctx):
+    def _visit_round_at(self, e: RoundAt, ctx: None) -> NoReturn:
         self._unsupported('RoundAt', at=e)
 
-    def _visit_call(self, e, ctx) -> str:
+    def _visit_call(self, e: Call, ctx: None) -> str:
         # The emitted name comes from the compiler's per-instantiation
         # mangling in :attr:`_call_names`: one name per (callee, outer_ctx), so
         # call sites at the same context share a specialization.
@@ -3835,25 +3849,25 @@ class CppEmitter(Visitor):
         self._is_boxed(have)  # strict tripwire: a handle is handed over
         return f'*{self._bind_operand(emitted)}'
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> str:
         # Through `_emit_at`: `std::make_tuple` deduces from its arguments, so
         # a narrower field must be converted or deduction yields a tuple type
         # nothing accepts.
         return self._emit_at(e, self._storage_for_expr(e), ctx)
 
-    def _visit_list_expr(self, e: ListExpr, ctx) -> str:
+    def _visit_list_expr(self, e: ListExpr, ctx: None) -> str:
         # Through `_emit_at`: one vector means one element type, so each
         # element is emitted at the list's `T`, not at its own bound.
         return self._emit_at(e, self._storage_for_expr(e), ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx) -> str:
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> str:
         raise CppInternalError(
             'a comprehension reached the emitter; `CompToLoop` lowers every '
             'one before codegen',
             at=e,
         )
 
-    def _visit_list_ref(self, e: ListRef, ctx) -> str:
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> str:
         # ``xs[i]`` — C++ ``operator[]`` takes ``size_t``, so we route
         # the index through an explicit ``static_cast<size_t>`` rather
         # than relying on implicit conversion.  Bounds-checking is
@@ -3863,7 +3877,7 @@ class CppEmitter(Visitor):
         index = self._visit_expr(e.index, ctx)
         return self._list_at(self._storage_for_expr(e.value), value, index)
 
-    def _visit_list_slice(self, e: ListSlice, ctx) -> str:
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> str:
         # `auto&& _tmpN = <xs>` binds an lvalue without copying and
         # lifetime-extends a prvalue, so `<xs>` is evaluated exactly once, as
         # the interpreter does.  Bounds-checking is a TODO; see backend-cpp.md.
@@ -3888,7 +3902,7 @@ class CppEmitter(Visitor):
                 f'{begin} + {stop}',
             )
         )
-    def _visit_if_expr(self, e, ctx) -> str:
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> str:
         # ``cond ? ift : iff`` — both branches must share a C++ type,
         # so when their storages differ we cast each to the IfExpr's
         # unified storage (chosen by format inference + storage
@@ -3910,7 +3924,7 @@ class CppEmitter(Visitor):
         iff = self._maybe_cast(iff, iff_ty, out_ty, at=e, bound_of=e.iff)
         return f'({cond} ? {ift} : {iff})'
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
         # post-mutation SSA def of ``xs`` shares a storage class with
         # its ``prev`` (see ``same_object_defs`` in
@@ -3934,7 +3948,7 @@ class CppEmitter(Visitor):
         rhs = self._emit_at(stmt.expr, level, ctx, cannot_convert=True)
         self.writer.add_line(f'{chain} = {rhs};')
 
-    def _emit_guarded_block(self, keyword: str, cond: str, body, ctx) -> None:
+    def _emit_guarded_block(self, keyword: str, cond: str, body: StmtBlock, ctx: None) -> None:
         """``<keyword> (<cond>) { <body> }``, *cond* already emitted.
 
         The caller emits it, because where its statements may go differs: an
@@ -3948,7 +3962,7 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _visit_if1(self, stmt: If1Stmt, ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None) -> None:
         # evaluated once, before the branch: statements may precede the `if`
         cond = self._visit_expr(stmt.cond, ctx)
         self._emit_guarded_block('if', cond, stmt.body, ctx)
@@ -3973,14 +3987,9 @@ class CppEmitter(Visitor):
         """
         if not isinstance(e, self._PURE_COND_OPS):
             return False
-        subs: list[Expr] = [
-            v for name in ('arg', 'first', 'second')
-            if isinstance(v := getattr(e, name, None), Expr)
-        ]
-        subs += [v for v in getattr(e, 'args', ()) if isinstance(v, Expr)]
-        return all(self._is_pure_cond(s) for s in subs)
+        return all(self._is_pure_cond(s) for _, _, s in subexprs(e))
 
-    def _flattenable(self, block: StmtBlock) -> 'IfStmt | None':
+    def _flattenable(self, block: StmtBlock) -> IfStmt | None:
         """The ``if`` this ``else`` block can collapse onto, or ``None``.
 
         An ``else`` holding one ``if`` and nothing else is what ``else if`` is
@@ -3998,7 +4007,7 @@ class CppEmitter(Visitor):
             return None
         return only if self._is_pure_cond(only.cond) else None
 
-    def _visit_if(self, stmt: IfStmt, ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
         self.writer.add_line(f'if ({cond}) {{')
         self.writer.indent()
@@ -4007,13 +4016,15 @@ class CppEmitter(Visitor):
 
         # Flatten ``else { if ... }`` into ``else if``, which is what the
         # nesting means and keeps a long chain readable.
-        while (nested := self._flattenable(stmt.iff)) is not None:
+        nested = self._flattenable(stmt.iff)
+        while nested is not None:
             nested_cond = self._visit_expr(nested.cond, ctx)
             self.writer.add_line(f'}} else if ({nested_cond}) {{')
             self.writer.indent()
             self._visit_block(nested.ift, ctx)
             self.writer.dedent()
             stmt = nested
+            nested = self._flattenable(stmt.iff)
 
         self.writer.add_line('} else {')
         self.writer.indent()
@@ -4021,7 +4032,7 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _visit_while(self, stmt: WhileStmt, ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> None:
         cond = self._emit_inline(
             lambda: self._visit_expr(stmt.cond, ctx),
             'a `while` condition', stmt.cond,
@@ -4039,7 +4050,7 @@ class CppEmitter(Visitor):
                 return v.numerator
         return None
 
-    def _range_counter_scalar(self, iterable: Expr) -> 'CppScalar | None':
+    def _range_counter_scalar(self, iterable: Expr) -> CppScalar | None:
         """Counter type for a ``range`` loop, or ``None`` when the bounds are not
         statically concrete.
 
@@ -4072,7 +4083,7 @@ class CppEmitter(Visitor):
         assert isinstance(scalar, CppScalar)
         return scalar
 
-    def _visit_for(self, stmt: ForStmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> None:
         match stmt.target:
             case NamedId():
                 self._emit_for_named_target(stmt, ctx)
@@ -4087,7 +4098,7 @@ class CppEmitter(Visitor):
                 )
 
     def _for_header(self, iterable: Expr, target: str, decl: str,
-                    target_def, ctx) -> str:
+                    target_def: Definition | None, ctx: None) -> str:
         """The ``for (...)`` header for *iterable*, without the brace.
 
         A ``Range*`` is a counter loop using *decl* as given; anything else is a
@@ -4147,8 +4158,8 @@ class CppEmitter(Visitor):
             case _:
                 return 'auto'
 
-    def _emit_for_loop(self, stmt: ForStmt, ctx, target: str, decl: str,
-                       target_def) -> None:
+    def _emit_for_loop(self, stmt: ForStmt, ctx: None, target: str, decl: str,
+                       target_def: Definition | None) -> None:
         """``for (<header>) { body }``."""
         header = self._for_header(stmt.iterable, target, decl, target_def, ctx)
         self.writer.add_line(f'{header} {{')
@@ -4158,14 +4169,14 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
 
 
-    def _emit_for_underscore_target(self, stmt: ForStmt, ctx):
+    def _emit_for_underscore_target(self, stmt: ForStmt, ctx: None) -> None:
         """``for _ in iter:`` -- the body never reads the counter, so emit a
         synthetic name."""
         target = self._fresh_temp()
         ty = self._underscore_counter_ty(stmt.iterable)
         self._emit_for_loop(stmt, ctx, target, f'{ty} {target}', None)
 
-    def _emit_for_named_target(self, stmt: ForStmt, ctx):
+    def _emit_for_named_target(self, stmt: ForStmt, ctx: None) -> None:
         assert isinstance(stmt.target, NamedId)
         target_def = self.def_use.find_def_from_site(stmt.target, stmt)
         target = self.variables.def_to_name[target_def]
@@ -4183,7 +4194,7 @@ class CppEmitter(Visitor):
             decl = target
         self._emit_for_loop(stmt, ctx, target, decl, target_def)
 
-    def _emit_for_tuple_target(self, stmt: ForStmt, ctx):
+    def _emit_for_tuple_target(self, stmt: ForStmt, ctx: None) -> None:
         # ``for (a, b) in xs:`` — a tuple-binding target only makes
         # sense for non-``range`` iterables (range produces ints).
         # Iterate via a tuple-typed temp, then destructure into the
@@ -4212,7 +4223,7 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _visit_assert(self, stmt: AssertStmt, ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> None:
         test = self._visit_expr(stmt.test, ctx)
         if stmt.msg is None:
             self.writer.add_line(f'assert({test});')
@@ -4221,9 +4232,9 @@ class CppEmitter(Visitor):
             escaped = msg.replace('\\', '\\\\').replace('"', '\\"')
             self.writer.add_line(f'assert({test} && "fpy assert: {escaped}");')
 
-    def _visit_effect(self, stmt: EffectStmt, ctx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: None) -> None:
         expr = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'{expr};')
 
-    def _visit_pass(self, stmt, ctx):
+    def _visit_pass(self, stmt: PassStmt, ctx: None) -> None:
         pass

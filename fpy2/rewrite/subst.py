@@ -2,6 +2,8 @@
 This module defines a substitution for FPy IR.
 """
 
+from collections.abc import Iterator
+
 from ..ast import Expr, NamedId
 from ..utils import default_repr
 
@@ -13,7 +15,7 @@ class Subst:
     env: dict[NamedId, Expr]
     """mapping from pattern variable to expressions"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.env = {}
 
     def __getitem__(self, key: str | NamedId) -> Expr:
@@ -22,7 +24,7 @@ class Subst:
             key = NamedId(key)
         return self.env[key]
 
-    def __setitem__(self, key: str | NamedId, value: Expr):
+    def __setitem__(self, key: str | NamedId, value: Expr) -> None:
         """Sets the value of the key in the substitution."""
         if isinstance(key, str):
             key = NamedId(key)
@@ -34,17 +36,17 @@ class Subst:
             key = NamedId(key)
         return key in self.env
 
-    def __delitem__(self, key: str | NamedId):
+    def __delitem__(self, key: str | NamedId) -> None:
         """Deletes the key from the substitution."""
         if isinstance(key, str):
             key = NamedId(key)
         del self.env[key]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[NamedId]:
         """Returns an iterator over the keys of the substitution."""
         return iter(self.env)
 
-    def __or__(self, other: 'Subst'):
+    def __or__(self, other: 'Subst') -> 'Subst':
         """Returns the union of two substitutions."""
         if not isinstance(other, Subst):
             raise TypeError(f'Cannot union {type(self)} with {type(other)}')
@@ -56,6 +58,6 @@ class Subst:
             new_subst.env[k] = v
         return new_subst
 
-    def vars(self):
+    def vars(self) -> set[NamedId]:
         """Returns the domain of the substitution."""
         return set(self.env.keys())

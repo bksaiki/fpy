@@ -17,21 +17,21 @@ class _SubstVar(DefaultTransformVisitor):
     changed: bool
     """whether any occurrence was actually replaced"""
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, subst: Mapping[AssignDef, Expr]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, subst: Mapping[AssignDef, Expr]) -> None:
         self.func = func
         self.def_use = def_use
         self.subst = subst
         self.changed = False
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> Expr:
         d = self.def_use.find_def_from_use(e)
-        if d in self.subst:
+        if isinstance(d, AssignDef) and d in self.subst:
             self.changed = True
             return self.subst[d]
         else:
             return Var(e.name, e.loc)
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         """Applies the replacement to the function."""
         return self._visit_function(self.func, None)
 
@@ -46,7 +46,7 @@ class SubstVar:
     """
 
     @staticmethod
-    def apply(func: FuncDef, def_use: DefineUseAnalysis, subst: Mapping[AssignDef, Expr]):
+    def apply(func: FuncDef, def_use: DefineUseAnalysis, subst: Mapping[AssignDef, Expr]) -> FuncDef:
         """
         Given a substitution from variable definitions to expressions, replaces
         all occurences of the variables with the corresponding expressions.

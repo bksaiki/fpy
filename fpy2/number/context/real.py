@@ -2,8 +2,10 @@
 This module defines the rounding context for real numbers.
 """
 
+from typing import Any, NoReturn
+
 from ...utils import default_repr
-from ..number import Float, RealFloat
+from ..number import Float, Real, RealFloat
 from .context import Context
 from .format import Format
 
@@ -65,19 +67,19 @@ class RealContext(Context):
 
     _fmt: RealFormat
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._fmt = RealFormat()
 
     def __str__(self) -> str:
         return 'REAL'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, RealContext)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.__class__)
 
-    def with_params(self, **kwargs) -> 'RealContext':
+    def with_params(self, **kwargs: Any) -> 'RealContext':
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for RealContext')
         return self
@@ -88,17 +90,17 @@ class RealContext(Context):
     def is_stochastic(self) -> bool:
         return False
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> None:
         return None
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         return (None, None)
 
-    def round(self, x, *, exact: bool = False):
+    def round(self, x: Real | RealFloat | str, *, exact: bool = False) -> Float:
         xr = self._round_prepare(x)
         return Float(x=xr, ctx=self)
 
-    def round_at(self, x, n: int, *, exact: bool = False):
+    def round_at(self, x: Real | RealFloat | str, n: int, *, exact: bool = False) -> NoReturn:
         raise RuntimeError('cannot round at a specific position in real context')
 
 

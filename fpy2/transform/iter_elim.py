@@ -82,7 +82,7 @@ class Plan:
     slots: list[Slot]
     tupled: bool
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         assert self.args, 'need a source for the bound'
         assert len(self.slots) == (1 if self.tupled else len(self.args))
 
@@ -198,17 +198,19 @@ class SubstNames(DefaultTransformVisitor):
     the inner uses bind to the shadowing iteration variable.
     """
 
-    def __init__(self, subst: dict[NamedId, Expr]):
+    _subst: dict[NamedId, Expr]
+
+    def __init__(self, subst: dict[NamedId, Expr]) -> None:
         super().__init__()
         self._subst = dict(subst)
 
-    def _visit_var(self, e: Var, ctx: Any):
+    def _visit_var(self, e: Var, ctx: Any) -> Expr:
         replacement = self._subst.get(e.name)
         if replacement is not None:
             return replacement
         return super()._visit_var(e, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx: Any):
+    def _visit_list_comp(self, e: ListComp, ctx: Any) -> Expr:
         # Disable any substitution this comp's targets shadow, then restore.
         bound = TupleBinding(e.targets, None).names()
         shadowed = {n: self._subst.pop(n) for n in bound if n in self._subst}
@@ -225,7 +227,7 @@ class IterElimInstance(DefaultTransformVisitor):
     func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         super().__init__()
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
@@ -248,7 +250,7 @@ class IterElimInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # Block walk with stmt → stmts expansion
 
-    def _visit_block(self, block: StmtBlock, ctx: Any):
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, Any]:
         # A local Ctx per block: preambles belong to the block introducing them.
         block_ctx = Ctx.default()
         for stmt in block.stmts:
@@ -259,7 +261,7 @@ class IterElimInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # For loops
 
-    def _visit_for(self, stmt: ForStmt, ctx: Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: Ctx) -> tuple[Stmt, Ctx]:
         matched = self._match(stmt.target, stmt.iterable)
         if matched is None:
             return super()._visit_for(stmt, ctx)
@@ -304,7 +306,7 @@ class IterElimInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # List comprehensions
 
-    def _visit_list_comp(self, e: ListComp, ctx: Any):
+    def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
         new_targets: list[Id | TupleBinding] = []
         new_iterables: list[Expr] = []
         subst: dict[NamedId, Expr] = {}

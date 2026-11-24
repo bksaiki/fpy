@@ -48,6 +48,7 @@ from ..ast.fpyast import (
     Cast,
     Expr,
     FuncDef,
+    Location,
     Mul,
     NamedId,
     Neg,
@@ -114,7 +115,7 @@ class _RoundInsertInstance(RoundingRewriter):
             )
         return None
 
-    def _wrap(self, t: NamedId, loc) -> Expr:
+    def _wrap(self, t: NamedId, loc: Location | None) -> Expr:
         # the block's own rounding is the whole rewrite; the site just reads it
         return Var(t, loc)
 

@@ -413,7 +413,7 @@ that abstracts one list, else the definition naming it, which is one list
 wherever it is read.  Either lasts until a store into the region."""
 
 
-def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None':
+def _trackable(alias: AliasAnalysis, region: Region | None) -> Region | None:
     """*region*, unless no fact about its elements may be recorded.
 
     ``None`` where a call may store through it after this analysis has
@@ -511,7 +511,7 @@ class ValueClassAnalysis:
         """What every element of *key*'s list is wherever *e* is evaluated."""
         return self.elements_seen.get(e, {}).get(key, _TOP)
 
-    def element_region(self, e: Expr) -> 'Region | None':
+    def element_region(self, e: Expr) -> Region | None:
         """The region whose elements a fact about the list *e* belongs to, or
         ``None`` where no fact may be recorded.
 
@@ -563,7 +563,7 @@ class _CalleeCache:
     pre: dict[FuncDef, _CalleePre]
     ret: dict[tuple[FuncDef, tuple[ValueClass | None, ...]], ValueClass]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.pre = {}
         self.ret = {}
 
@@ -624,9 +624,9 @@ class _ValueClassInstance(DefaultVisitor):
     :attr:`_touched` stamp at the exit.  Absent means the loop's accumulator
     says nothing; see :meth:`_implied_universal`."""
 
-    _sizes_cache: 'ArraySizeAnalysis | None'
-    _reach_cache: 'ReachabilityAnalysis | None'
-    _fills_cache: 'dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] | None'
+    _sizes_cache: ArraySizeAnalysis | None
+    _reach_cache: ReachabilityAnalysis | None
+    _fills_cache: dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] | None
 
     _scan_clocks: dict[ForStmt, tuple[int, int]]
     """The :attr:`_clock` each loop began and ended at, for
@@ -670,7 +670,7 @@ class _ValueClassInstance(DefaultVisitor):
         arg_classes: Sequence[ValueClass | None] | None = None,
         cache: _CalleeCache | None = None,
         reach: ReachabilityAnalysis | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.type_info = type_info
         self.ctx_use = ctx_use
@@ -738,7 +738,7 @@ class _ValueClassInstance(DefaultVisitor):
     # ------------------------------------------------------------------
     # Definitions
 
-    def _region_of(self, e: Expr) -> 'Region | None':
+    def _region_of(self, e: Expr) -> Region | None:
         """See :meth:`ValueClassAnalysis.element_region`."""
         return _trackable(self.alias, self.alias.region_of_expr(e))
 
@@ -758,7 +758,7 @@ class _ValueClassInstance(DefaultVisitor):
         return (len(self.alias.sites_at(region)) == 1
                 and not self.alias.inside_at(region))
 
-    def _sole_region(self, e: Expr) -> 'Region | None':
+    def _sole_region(self, e: Expr) -> Region | None:
         """*e*'s region, where it abstracts exactly one list.
 
         Two lists sharing a region means a fact about one says nothing about
@@ -768,7 +768,7 @@ class _ValueClassInstance(DefaultVisitor):
         region = self._region_of(e)
         return region if region is not None and self._one_list(region) else None
 
-    def _list_key(self, e: Expr) -> '_ElementKey | None':
+    def _list_key(self, e: Expr) -> _ElementKey | None:
         """What a fact about every element of the list *e* names is kept
         under; see :data:`_ElementKey`."""
         region = self._region_of(e)
@@ -828,7 +828,7 @@ class _ValueClassInstance(DefaultVisitor):
         cls, stamp = self._refine_elt.get(key, (_TOP, 0))
         return cls if stamp == self._key_stamp(key) else _TOP
 
-    def _store_element(self, region: 'Region | None', cls: ValueClass):
+    def _store_element(self, region: Region | None, cls: ValueClass) -> None:
         """Record a store of *cls* into *region*, which joins: the elements the
         store did not reach are still there."""
         if region is not None:
@@ -838,8 +838,8 @@ class _ValueClassInstance(DefaultVisitor):
 
     @staticmethod
     def _join_elements(
-        a: 'dict[Region, ValueClass]', b: 'dict[Region, ValueClass]',
-    ) -> 'dict[Region, ValueClass]':
+        a: dict[Region, ValueClass], b: dict[Region, ValueClass],
+    ) -> dict[Region, ValueClass]:
         """Two paths' element maps.  Absent means *unknown*, so it joins to the
         top rather than being skipped."""
         return {
@@ -847,7 +847,7 @@ class _ValueClassInstance(DefaultVisitor):
             for r in (*a, *b)
         }
 
-    def _set_def(self, d: Definition, cls: ValueClass | None):
+    def _set_def(self, d: Definition, cls: ValueClass | None) -> None:
         if not isinstance(self.type_info.by_def.get(d), RealType):
             cls = None
         self.by_def[d] = cls
@@ -856,7 +856,7 @@ class _ValueClassInstance(DefaultVisitor):
         cls = self.by_def.get(d)
         return cls if isinstance(cls, ValueClass) else _TOP
 
-    def _bind(self, site: DefSite, binding: Id | TupleBinding, cls: ValueClass | None):
+    def _bind(self, site: DefSite, binding: Id | TupleBinding, cls: ValueClass | None) -> None:
         """Records *cls* for every variable *binding* introduces at *site*."""
         match binding:
             case NamedId():
@@ -870,7 +870,7 @@ class _ValueClassInstance(DefaultVisitor):
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
 
-    def _merge_phis(self, stmt: Stmt):
+    def _merge_phis(self, stmt: Stmt) -> None:
         """Joins each phi's incoming classes.
 
         The masks the two arms were walked under are gone by now, and deliberately
@@ -975,13 +975,13 @@ class _ValueClassInstance(DefaultVisitor):
                 for d in each[0] if d in common]
 
     def _implied_ladder(
-        self, d: 'Definition | None', truth: bool
+        self, d: Definition | None, truth: bool
     ) -> list[tuple[Definition, ValueClass]]:
         """What a *lowered* ``and``/``or`` being *truth* says; see
         :meth:`_ladder_rungs`."""
         return [i for r in self._ladder_rungs(d, truth) for i in self._implied_at(r, truth)]
 
-    def _ladder_rungs(self, d: 'Definition | None', truth: bool) -> list[Definition]:
+    def _ladder_rungs(self, d: Definition | None, truth: bool) -> list[Definition]:
         """The definitions a *lowered* ``and``/``or`` being *truth* makes
         *truth* too.
 
@@ -1039,7 +1039,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_elements(
         self, cond: Expr, truth: bool
-    ) -> 'list[tuple[_ElementKey, ValueClass]]':
+    ) -> list[tuple[_ElementKey, ValueClass]]:
         """What *cond* being *truth* says about the elements of a list."""
         match cond:
             case Not():
@@ -1068,7 +1068,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_elements_at(
         self, d: Definition, truth: bool
-    ) -> 'list[tuple[_ElementKey, ValueClass]]':
+    ) -> list[tuple[_ElementKey, ValueClass]]:
         """:meth:`_implied_at`, for the elements of a list."""
         if isinstance(d, AssignDef) and isinstance(d.site, Assign):
             return self._implied_elements(d.site.expr, truth)
@@ -1076,8 +1076,8 @@ class _ValueClassInstance(DefaultVisitor):
                 for i in self._implied_elements_at(r, truth)]
 
     def _implied_universal(
-        self, d: 'Definition | None', truth: bool
-    ) -> 'list[tuple[_ElementKey, ValueClass]]':
+        self, d: Definition | None, truth: bool
+    ) -> list[tuple[_ElementKey, ValueClass]]:
         """What a *lowered* ``all`` / ``any`` being *truth* says about the list
         it scanned.
 
@@ -1152,7 +1152,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_mask(
         self, mask: Expr, truth: bool
-    ) -> 'list[tuple[_ElementKey, ValueClass]]':
+    ) -> list[tuple[_ElementKey, ValueClass]]:
         """What a *materialised* ``all`` / ``any`` being *truth* says about the
         list the mask was computed from.
 
@@ -1202,11 +1202,11 @@ class _ValueClassInstance(DefaultVisitor):
         store = write.site
         if len(store.indices) != 1 or not self._is_target(store.indices[0], loop):
             return []
-        return [
-            (region, cls)
+        scanned = [
+            (self._scanned_by(td, loop, entry), cls)
             for td, cls in self._implied(store.expr, truth)
-            if (region := self._scanned_by(td, loop, entry)) is not None
         ]
+        return [(region, cls) for region, cls in scanned if region is not None]
 
     def _holds_the_scan(self, mask: Expr, exited: int) -> bool:
         """Whether *mask* still holds what the loop wrote into it, the loop
@@ -1228,7 +1228,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _scanned_by(
         self, d: Definition, loop: ForStmt, entry: int
-    ) -> '_ElementKey | None':
+    ) -> _ElementKey | None:
         """The list *d* reads an element of, where *loop* covers it and
         nothing has stored into it since the clock read *entry*.  ``None``
         where *d* is not such a read, or where any of that is unproven."""
@@ -1315,7 +1315,8 @@ class _ValueClassInstance(DefaultVisitor):
         non-finite, and so does a non-finite numerator -- not denominator,
         since ``x / inf`` is zero.  Through a rounding only where the context
         keeps a non-finite value non-finite."""
-        if (src := self._finite_source(d)) is not d:
+        src = self._finite_source(d)
+        if src is not d:
             return [(src, _ZERO | _FINITE), *self._finite_operands(src)]
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return []
@@ -1359,7 +1360,7 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         return operands
 
-    def _filled_from(self, region: Region) -> 'tuple[list[_ElementKey], list[Definition]]':
+    def _filled_from(self, region: Region) -> tuple[list[_ElementKey], list[Definition]]:
         """`(lists, scalars)` finite wherever *region*'s elements are:
         *region*'s only store is in one loop covering it, storing exact ops,
         however nested, of same-index reads of lists the loop covers and that
@@ -1402,9 +1403,13 @@ class _ValueClassInstance(DefaultVisitor):
         """The definitions :meth:`_through_names` passes from *e*, first
         to last."""
         out: list[Definition] = []
-        while isinstance(e, Var) and (d := self.def_use.use_to_def.get(e)) is not None:
+        while isinstance(e, Var):
+            d = self.def_use.use_to_def.get(e)
+            if d is None:
+                break
             out.append(d)
-            if (src := self._finite_source(d)) is not d:
+            src = self._finite_source(d)
+            if src is not d:
                 out.append(src)
             if not isinstance(src, AssignDef) or not isinstance(src.site, Assign):
                 break
@@ -1433,7 +1438,7 @@ class _ValueClassInstance(DefaultVisitor):
             e = d.site.expr
         return e
 
-    def _covers(self, loop: ForStmt, at: 'Var | IndexedAssign') -> bool:
+    def _covers(self, loop: ForStmt, at: Var | IndexedAssign) -> bool:
         """Whether *loop* runs once per element of the list *at* reads."""
         size = self.sizes.by_def.get(self.def_use.find_def_from_use(at))
         return isinstance(size, ListSize) and size_eq(
@@ -1456,7 +1461,7 @@ class _ValueClassInstance(DefaultVisitor):
         return (isinstance(r, AssignDef) and isinstance(r.site, Assign)
                 and isinstance(r.site.expr, Range1) and self._is_target(ref.index, loop))
 
-    def _fill_sites(self) -> 'dict[Region, list[tuple[IndexedAssign, ForStmt | None]]]':
+    def _fill_sites(self) -> dict[Region, list[tuple[IndexedAssign, ForStmt | None]]]:
         """Every store into each region, with the loop it is directly in the
         body of."""
         if self._fills_cache is None:
@@ -1479,6 +1484,10 @@ class _ValueClassInstance(DefaultVisitor):
                         case IfStmt():
                             walk(stmt.ift, None)
                             walk(stmt.iff, None)
+                        case Assign() | AssertStmt() | EffectStmt() | ReturnStmt() | PassStmt():
+                            pass
+                        case _:
+                            raise RuntimeError(f'unreachable: {stmt}')
 
             walk(self.func.body, None)
             self._fills_cache = out
@@ -1593,8 +1602,9 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._rounded(e, _exact_sub(a, b))
             case Mul():
                 return self._rounded(e, _exact_mul(a, b))
-            case Pow() if (table := _pow_table(e.first)) is not None:
-                return self._rounded(e, _map(table, b))
+            case Pow():
+                table = _pow_table(e.first)
+                return self._rounded(e, _TOP if table is None else _map(table, b))
             case _:
                 return self._rounded(e, _TOP)
 
@@ -1679,7 +1689,7 @@ class _ValueClassInstance(DefaultVisitor):
     # ------------------------------------------------------------------
     # Statements
 
-    def _visit_assign(self, stmt: Assign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> None:
         self._bind(stmt, stmt.target, self._visit_expr(stmt.expr, ctx))
         if isinstance(stmt.expr, Empty):
             # A fresh allocation holds nothing yet, which is what lets the
@@ -1723,7 +1733,7 @@ class _ValueClassInstance(DefaultVisitor):
                     cls |= pinned[(s.node, s.depth)]
                 self._elt[region] = cls
 
-    def _region_of_def(self, target, site, depth: int = 0) -> 'Region | None':
+    def _region_of_def(self, target: Id | TupleBinding, site: DefSite, depth: int = 0) -> Region | None:
         """The region *depth* list levels inside what *target* binds at *site*.
         ``depth`` is what a nested store writes through."""
         if not isinstance(target, NamedId):
@@ -1732,7 +1742,7 @@ class _ValueClassInstance(DefaultVisitor):
             self.def_use.find_def_from_site(target, site), depth,
         ))
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         for s in stmt.indices:
             self._visit_expr(s, ctx)
         stored = self._visit_expr(stmt.expr, ctx)
@@ -1777,6 +1787,8 @@ class _ValueClassInstance(DefaultVisitor):
                 ift, iff = self._falls_through(stmt.ift), self._falls_through(stmt.iff)
                 if ift != iff:
                     return stmt.cond, ift
+            case _:
+                return None
         return None
 
     def _falls_through(self, block: StmtBlock) -> bool:
@@ -1784,7 +1796,7 @@ class _ValueClassInstance(DefaultVisitor):
             self._reach_cache = Reachability.analyze(self.func)
         return self._reach_cache.falls_through(block)
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None) -> None:
         self._visit_expr(stmt.cond, ctx)
         self.arm_facts[stmt] = (
             self._implied(stmt.cond, True), self._implied(stmt.cond, False))
@@ -1796,7 +1808,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._retouch(clock)
         self._merge_phis(stmt)
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> None:
         self._visit_expr(stmt.cond, ctx)
         self.arm_facts[stmt] = (
             self._implied(stmt.cond, True), self._implied(stmt.cond, False))
@@ -1810,8 +1822,8 @@ class _ValueClassInstance(DefaultVisitor):
         self._retouch(clock)
         self._merge_phis(stmt)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
-        def body():
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> None:
+        def body() -> None:
             self._visit_expr(stmt.cond, ctx)
             with self._refined(stmt.cond, True):
                 self._visit_block(stmt.body, ctx)
@@ -1820,12 +1832,12 @@ class _ValueClassInstance(DefaultVisitor):
         self._fixpoint(stmt, body)
         self._retouch(clock)
 
-    def _visit_for(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> None:
         self._visit_expr(stmt.iterable, ctx)
         region = self._region_of(stmt.iterable)
         before = None if region is None else self._stamp(region)
 
-        def body():
+        def body() -> None:
             # the target *is* an element, so it is whatever they are
             self._bind(stmt, stmt.target, self._elements_of(stmt.iterable))
             self._visit_block(stmt.body, ctx)
@@ -1843,7 +1855,7 @@ class _ValueClassInstance(DefaultVisitor):
         if region is not None and self._stamp(region) == before:
             self._scanned[stmt] = before
 
-    def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]):
+    def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]) -> None:
         """Drives a loop's phi classes to convergence.
 
         A phi's class starts at what reached the loop and is re-joined with the
@@ -1877,7 +1889,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._elt = {r: _TOP for r in self._elt}
         run_body()
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> None:
         self._visit_expr(stmt.ctx, ctx)
         self._bind(stmt, stmt.target, None)
         self._visit_block(stmt.body, ctx)
@@ -1888,7 +1900,7 @@ class _ValueClassInstance(DefaultVisitor):
             self._bind(e, target, _TOP)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> None:
         given = self._arg_classes or [None] * len(func.args)
         for arg, at_call in zip(func.args, given, strict=True):
             if isinstance(arg.name, NamedId):

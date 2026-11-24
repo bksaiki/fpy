@@ -3,6 +3,7 @@ This module defines a partial order type.
 """
 
 from enum import IntEnum
+from typing import Any
 
 
 class Ordering(IntEnum):
@@ -15,7 +16,7 @@ class Ordering(IntEnum):
 
 
     @staticmethod
-    def from_compare(x, y):
+    def from_compare(x: Any, y: Any) -> 'Ordering':
         """
         Convert the result of a comparison to an Ordering.
         """
@@ -28,7 +29,7 @@ class Ordering(IntEnum):
         else:
             raise ValueError(f"cannot compare {x} and {y}")
 
-    def reverse(self):
+    def reverse(self) -> 'Ordering':
         """
         Reverse the ordering.
         """

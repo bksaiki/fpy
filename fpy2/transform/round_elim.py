@@ -158,7 +158,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         def_use: DefineUseAnalysis,
         ctx_use: ContextUseAnalysis,
         format_info: FormatAnalysis,
-    ):
+    ) -> None:
         super().__init__()
         self.func = func
         self.ctx_use = ctx_use
