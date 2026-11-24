@@ -6,7 +6,8 @@ FPy reparses function source code to extract the original AST.
 
 import sys
 import types
-from importlib.machinery import PathFinder, SourceFileLoader
+from collections.abc import Sequence
+from importlib.machinery import ModuleSpec, PathFinder, SourceFileLoader
 from importlib.util import source_from_cache
 
 _SOURCE: dict[str, bytes] = {}  # path -> bytes
@@ -15,7 +16,7 @@ _LINES: dict[str, list[str]] = {}  # path -> lines
 class CachingSourceFileLoader(SourceFileLoader):
     """Source file loader that caches the original source code as read."""
 
-    def get_data(self, path):
+    def get_data(self, path: str) -> bytes:
         if path not in _SOURCE:
             # not cached yet, load and cache
             if path.endswith('.py'):
@@ -39,7 +40,12 @@ class CachingSourceFileLoader(SourceFileLoader):
 class CachingPathFinder:
     """Source file finder that uses `CachingSourceFileLoader`."""
 
-    def find_spec(self, fullname, path, target=None):
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None,
+        target: types.ModuleType | None = None
+    ) -> ModuleSpec | None:
         # Ask the normal machinery for a spec (skip ourselves)
         spec = PathFinder.find_spec(fullname, path, target)
         if spec is None or not isinstance(spec.loader, SourceFileLoader):
@@ -51,7 +57,7 @@ class CachingPathFinder:
 _PATH_FINDER = CachingPathFinder()
 """Modified path finder that uses `CachingSourceFileLoader`."""
 
-def install_caching_loader():
+def install_caching_loader() -> None:
     """Install the caching loader into sys.meta_path."""
     sys.meta_path.insert(0, _PATH_FINDER)
 

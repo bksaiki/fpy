@@ -9,8 +9,10 @@ for "is this expression a known constant?"; also used by
 and :class:`fpy2.transform.LiftContext`.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..ast.accessors import operands, rebuild
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..fpc_context import FPCoreContext
@@ -25,7 +27,7 @@ class _TopType:
     a single foldable value".  Stored only in the analysis instance's
     ``by_def``; stripped from the public :class:`PartialEvalInfo`."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return '_TOP'
 
 
@@ -65,7 +67,7 @@ class _PartialEvalInstance(DefaultVisitor):
         self,
         func: FuncDef,
         def_use: DefineUseAnalysis,
-    ):
+    ) -> None:
         self.func = func
         self.def_use = def_use
         self.rt = get_default_interpreter()
@@ -84,7 +86,7 @@ class _PartialEvalInstance(DefaultVisitor):
     def _is_value(self, e: Expr) -> bool:
         return e in self.by_expr
 
-    def _visit_expr(self, e: Expr, ctx: Context | None):
+    def _visit_expr(self, e: Expr, ctx: Context | None) -> None:
         # Pop any stale entry from a previous pass (matters for the
         # loop fixpoint, which revisits the body — without this, a
         # foldable value from an early iteration sticks around after
@@ -92,25 +94,20 @@ class _PartialEvalInstance(DefaultVisitor):
         self.by_expr.pop(e, None)
         super()._visit_expr(e, ctx)
 
-    def _visit_var(self, e: Var, ctx: Context | None):
+    def _visit_var(self, e: Var, ctx: Context | None) -> None:
         d = self.def_use.find_def_from_use(e)
         if d in self.by_def:
             val = self.by_def[d]
             if not isinstance(val, _TopType):
                 self.by_expr[e] = val
 
-    def _meet(self, a, b):
-        """SCCP meet — ``None`` is BOT (unit), :data:`_TOP` is top;
-        anything else is a :data:`Value`."""
-        if a is None:
-            return b
-        if b is None:
-            return a
+    def _meet(self, a: _Lattice, b: _Lattice) -> _Lattice:
+        """SCCP meet: :data:`_TOP` is top; anything else is a :data:`Value`."""
         if a is _TOP or b is _TOP:
             return _TOP
         return a if a == b else _TOP
 
-    def _merge_branch_phis(self, stmt: Stmt):
+    def _merge_branch_phis(self, stmt: Stmt) -> None:
         """Merge phis after an ``if`` / ``if-else``: both branches are
         visited unconditionally, so absence from ``by_def`` means "we
         visited and couldn't fold" (i.e. ``_TOP``-equivalent) rather
@@ -118,38 +115,36 @@ class _PartialEvalInstance(DefaultVisitor):
         for phi in self.def_use.phis[stmt]:
             lhs = self.by_def.get(self.def_use.defs[phi.lhs], _TOP)
             rhs = self.by_def.get(self.def_use.defs[phi.rhs], _TOP)
-            merged = self._meet(lhs, rhs)
-            if merged is not None:
-                self.by_def[phi] = merged
+            self.by_def[phi] = self._meet(lhs, rhs)
 
-    def _visit_bool(self, e: BoolVal, ctx: Context | None):
+    def _visit_bool(self, e: BoolVal, ctx: Context | None) -> None:
         self.by_expr[e] = e.val
 
-    def _visit_foreign(self, e: ForeignVal, ctx: Context | None):
+    def _visit_foreign(self, e: ForeignVal, ctx: Context | None) -> None:
         self.by_expr[e] = to_value(e.val)
 
     def _lit(self, e: Expr) -> ForeignVal:
         """Re-inject the known value of `e` as a synthetic literal."""
         return ForeignVal(self.by_expr[e], None)
 
-    def _visit_decnum(self, e: Decnum, ctx: Context | None):
+    def _visit_decnum(self, e: Decnum, ctx: Context | None) -> None:
         # `as_real` (not `as_rational`) so a `-0.0` literal folds to a signed
         # zero rather than collapsing to `+0.0`.
         self.by_expr[e] = e.as_real()
 
-    def _visit_integer(self, e: Integer, ctx: Context | None):
+    def _visit_integer(self, e: Integer, ctx: Context | None) -> None:
         self.by_expr[e] = e.as_rational()
 
-    def _visit_hexnum(self, e: Hexnum, ctx: Context | None):
+    def _visit_hexnum(self, e: Hexnum, ctx: Context | None) -> None:
         self.by_expr[e] = e.as_real()
 
-    def _visit_rational(self, e: Rational, ctx: Context | None):
+    def _visit_rational(self, e: Rational, ctx: Context | None) -> None:
         self.by_expr[e] = e.as_rational()
 
-    def _visit_digits(self, e: Digits, ctx: Context | None):
+    def _visit_digits(self, e: Digits, ctx: Context | None) -> None:
         self.by_expr[e] = e.as_rational()
 
-    def _try_eval(self, e_eval: Expr, ctx: Context):
+    def _try_eval(self, e_eval: Expr, ctx: Context) -> Value | None:
         """Evaluate via the interpreter; return ``None`` on any
         exception (PE is best-effort)."""
         try:
@@ -157,69 +152,41 @@ class _PartialEvalInstance(DefaultVisitor):
         except Exception:  # noqa: BLE001 -- partial eval is best-effort
             return None
 
-    def _record(self, e: Expr, val):
+    def _record(self, e: Expr, val: Value | None) -> None:
         if val is not None:
             self.by_expr[e] = val
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: Context | None):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: Context | None) -> None:
         if ctx is not None:
             self._record(e, self._try_eval(e, ctx))
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
-        self._visit_expr(e.arg, ctx)
-        if self._is_value(e.arg) and ctx is not None:
-            e_arg = self._lit(e.arg)
-            if isinstance(e, NamedUnaryOp):
-                e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
-            else:
-                e_eval = type(e)(e_arg, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
-
-    def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        if self._is_value(e.first) and self._is_value(e.second) and ctx is not None:
-            e_fst = self._lit(e.first)
-            e_snd = self._lit(e.second)
-            if isinstance(e, NamedBinaryOp):
-                e_eval: BinaryOp = type(e)(e.func, e_fst, e_snd, e.loc)
-            else:
-                e_eval = type(e)(e_fst, e_snd, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
-
-    def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        self._visit_expr(e.third, ctx)
-        if self._is_value(e.first) and self._is_value(e.second) and self._is_value(e.third) and ctx is not None:
-            e_fst = self._lit(e.first)
-            e_snd = self._lit(e.second)
-            e_trd = self._lit(e.third)
-            if isinstance(e, NamedTernaryOp):
-                e_eval: TernaryOp = type(e)(e.func, e_fst, e_snd, e_trd, e.loc)
-            else:
-                e_eval = type(e)(e_fst, e_snd, e_trd, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
-
-    def _visit_naryop(self, e: NaryOp, ctx: Context | None):
-        for arg in e.args:
+    def _fold_op(self, e: UnaryOp | BinaryOp | TernaryOp | NaryOp, ctx: Context | None) -> None:
+        """Visits the operation *e*, folding it where every operand is a value."""
+        args = operands(e)
+        for arg in args:
             self._visit_expr(arg, ctx)
+        if ctx is not None and args and all(self._is_value(arg) for arg in args):
+            lits = [self._lit(arg) for arg in args]
+            self._record(e, self._try_eval(rebuild(e, lits), ctx))
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: Context | None) -> None:
+        self._fold_op(e, ctx)
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: Context | None) -> None:
+        self._fold_op(e, ctx)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None) -> None:
+        self._fold_op(e, ctx)
+
+    def _visit_naryop(self, e: NaryOp, ctx: Context | None) -> None:
         if isinstance(e, Empty):
             # ``empty()`` constructs uninitialized values
-            return
-        if (
-            ctx is not None
-            and len(e.args) > 0
-            and all(self._is_value(arg) for arg in e.args)
-        ):
-            e_args = [self._lit(arg) for arg in e.args]
-            if isinstance(e, NamedNaryOp):
-                e_eval: NaryOp = type(e)(e.func, e_args, e.loc)
-            else:
-                e_eval = type(e)(e_args, e.loc)
-            self._record(e, self._try_eval(e_eval, ctx))
+            for arg in e.args:
+                self._visit_expr(arg, ctx)
+        else:
+            self._fold_op(e, ctx)
 
-    def _visit_compare(self, e: Compare, ctx: Context | None):
+    def _visit_compare(self, e: Compare, ctx: Context | None) -> None:
         for arg in e.args:
             self._visit_expr(arg, ctx)
         if ctx is not None and all(self._is_value(arg) for arg in e.args):
@@ -227,7 +194,7 @@ class _PartialEvalInstance(DefaultVisitor):
             e_eval = Compare(e.ops, e_args, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
-    def _visit_call(self, e: Call, ctx: Context | None):
+    def _visit_call(self, e: Call, ctx: Context | None) -> None:
         super()._visit_call(e, ctx)
         if (
             ctx is not None
@@ -241,19 +208,19 @@ class _PartialEvalInstance(DefaultVisitor):
             e_eval = Call(e.func, e.fn, arg_vals, kwarg_vals, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: Context | None):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: Context | None) -> None:
         for elt in e.elts:
             self._visit_expr(elt, ctx)
         if all(self._is_value(elt) for elt in e.elts):
             self.by_expr[e] = tuple(self.by_expr[elt] for elt in e.elts)
 
-    def _visit_list_expr(self, e: ListExpr, ctx: Context | None):
+    def _visit_list_expr(self, e: ListExpr, ctx: Context | None) -> None:
         for elt in e.elts:
             self._visit_expr(elt, ctx)
         if all(self._is_value(elt) for elt in e.elts):
             self.by_expr[e] = [self.by_expr[elt] for elt in e.elts]
 
-    def _visit_list_ref(self, e: ListRef, ctx: Context | None):
+    def _visit_list_ref(self, e: ListRef, ctx: Context | None) -> None:
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
         if (
@@ -266,7 +233,7 @@ class _PartialEvalInstance(DefaultVisitor):
             e_eval = ListRef(v, i, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
-    def _visit_list_slice(self, e: ListSlice, ctx: Context | None):
+    def _visit_list_slice(self, e: ListSlice, ctx: Context | None) -> None:
         # FPy slicing is stricter than Python's; route through the
         # interpreter rather than slicing natively.
         self._visit_expr(e.value, ctx)
@@ -286,7 +253,7 @@ class _PartialEvalInstance(DefaultVisitor):
             e_eval = ListSlice(v, s, t, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
-    def _visit_if_expr(self, e: IfExpr, ctx: Context | None):
+    def _visit_if_expr(self, e: IfExpr, ctx: Context | None) -> None:
         # When the condition is statically known, copy the chosen
         # branch's value — the unchosen branch need not be foldable.
         self._visit_expr(e.cond, ctx)
@@ -301,7 +268,7 @@ class _PartialEvalInstance(DefaultVisitor):
         if self._is_value(branch):
             self.by_expr[e] = self.by_expr[branch]
 
-    def _visit_attribute(self, e: Attribute, ctx: Context | None):
+    def _visit_attribute(self, e: Attribute, ctx: Context | None) -> None:
         self._visit_expr(e.value, ctx)
         if self._is_value(e.value):
             # a missing attribute is not recorded — PE is best-effort
@@ -312,7 +279,7 @@ class _PartialEvalInstance(DefaultVisitor):
             elif hasattr(val, e.attr):
                 self.by_expr[e] = to_value(getattr(val, e.attr))
 
-    def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, val: Value):
+    def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, val: Value) -> None:
         match binding:
             case Id():
                 if isinstance(binding, NamedId):
@@ -322,8 +289,10 @@ class _PartialEvalInstance(DefaultVisitor):
                 assert isinstance(val, tuple)
                 for elt, v in zip(binding.elts, val):
                     self._visit_binding(site, elt, v)
+            case _:
+                raise RuntimeError(f'unreachable: {binding}')
 
-    def _visit_assign(self, stmt: Assign, ctx: Context | None):
+    def _visit_assign(self, stmt: Assign, ctx: Context | None) -> None:
         self._visit_expr(stmt.expr, ctx)
         if self._is_value(stmt.expr):
             self._visit_binding(stmt, stmt.target, self.by_expr[stmt.expr])
@@ -332,7 +301,7 @@ class _PartialEvalInstance(DefaultVisitor):
             # entry for the target (matters for loop re-iteration).
             self._clear_binding(stmt, stmt.target)
 
-    def _clear_binding(self, site: DefSite, binding: Id | TupleBinding):
+    def _clear_binding(self, site: DefSite, binding: Id | TupleBinding) -> None:
         match binding:
             case NamedId():
                 d = self.def_use.find_def_from_site(binding, site)
@@ -342,19 +311,21 @@ class _PartialEvalInstance(DefaultVisitor):
             case TupleBinding():
                 for elt in binding.elts:
                     self._clear_binding(site, elt)
+            case _:
+                raise RuntimeError(f'unreachable: {binding}')
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: Context | None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Context | None) -> None:
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
         self._merge_branch_phis(stmt)
 
-    def _visit_if(self, stmt: IfStmt, ctx: Context | None):
+    def _visit_if(self, stmt: IfStmt, ctx: Context | None) -> None:
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
         self._merge_branch_phis(stmt)
 
-    def _loop_fixpoint(self, stmt: Stmt, run_body):
+    def _loop_fixpoint(self, stmt: Stmt, run_body: Callable[[], None]) -> None:
         """Drive a loop's header-phis to fixpoint.  Seed each phi from
         its lhs (pre-loop) value, then iterate ``run_body`` until phi
         bounds stop changing.
@@ -379,26 +350,23 @@ class _PartialEvalInstance(DefaultVisitor):
                 new = self._meet(lhs, rhs)
                 old = self.by_def.get(phi)
                 if new != old:
-                    if new is None:
-                        self.by_def.pop(phi, None)
-                    else:
-                        self.by_def[phi] = new
+                    self.by_def[phi] = new
                     changed = True
             if not changed:
                 return
 
-    def _visit_while(self, stmt: WhileStmt, ctx: Context | None):
+    def _visit_while(self, stmt: WhileStmt, ctx: Context | None) -> None:
         self._visit_expr(stmt.cond, ctx)
         self._loop_fixpoint(stmt, lambda: self._visit_block(stmt.body, ctx))
 
-    def _visit_for(self, stmt: ForStmt, ctx: Context | None):
+    def _visit_for(self, stmt: ForStmt, ctx: Context | None) -> None:
         self._visit_expr(stmt.iterable, ctx)
         # The loop variable is fresh-bound per iteration; we don't
         # analyse it specially, just iterate the body so other phis
         # converge.
         self._loop_fixpoint(stmt, lambda: self._visit_block(stmt.body, ctx))
 
-    def _visit_context(self, stmt: ContextStmt, ctx: Context | None):
+    def _visit_context(self, stmt: ContextStmt, ctx: Context | None) -> None:
         self._visit_expr(stmt.ctx, REAL)
 
         new_ctx: Context | None = None
@@ -409,7 +377,7 @@ class _PartialEvalInstance(DefaultVisitor):
 
         self._visit_block(stmt.body, new_ctx)
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> None:
         # extract overriding context
         match func.ctx:
             case None:
@@ -449,7 +417,7 @@ class PartialEval:
     """
 
     @staticmethod
-    def apply(func: FuncDef, *, def_use: DefineUseAnalysis | None = None):
+    def apply(func: FuncDef, *, def_use: DefineUseAnalysis | None = None) -> PartialEvalInfo:
         """Run partial evaluation on *func* and return the
         :class:`PartialEvalInfo`.  Pass an existing ``def_use=`` to
         avoid recomputing the def-use analysis."""

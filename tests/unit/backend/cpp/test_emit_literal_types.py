@@ -19,9 +19,9 @@ risk worth guarding is a *new* path added without routing literals through
 before the emitter sees them.
 """
 
-import fpy2 as fp
 import pytest
 
+import fpy2 as fp
 from fpy2.backend.cpp import CppCompiler
 from fpy2.backend.cpp.target import make_op_table
 from fpy2.types import RealType
@@ -109,7 +109,7 @@ class TestLiteralArgumentsStateTheirType:
     def test_a_literal_already_of_the_target_type_is_left_alone(self):
         """The rule that stops this becoming the uniform-cast alternative.
 
-        Pinned on ``_literal_cpp_type`` rather than on emitted text, because an
+        Pinned on ``_value_cpp_type`` rather than on emitted text, because an
         FP64 program cannot exhibit it: a small dyadic literal's *storage* is
         ``float`` even under FP64 (its value fits binary32), so the pre-existing
         ``_maybe_cast`` inserts a widening cast before ``_call_arg`` is asked.
@@ -119,17 +119,16 @@ class TestLiteralArgumentsStateTheirType:
         double either and is refused outright.
         """
         from fpy2.ast.fpyast import Decnum, Integer
-        from fpy2.backend.cpp.emitter import CppEmitter
+        from fpy2.backend.cpp.emitter import _value_cpp_type
         from fpy2.backend.cpp.types import CppScalar
 
-        lit = CppEmitter._literal_cpp_type
         # a fraction goes out through `repr(float)`, so the token is a double
-        assert lit(Decnum('1.5', None)) == CppScalar.F64
+        assert _value_cpp_type(Decnum('1.5', None).as_rational()) == CppScalar.F64
         # a decimal integer literal is `int` while it fits
-        assert lit(Integer(1, None)) == CppScalar.S32
-        assert lit(Integer(2 ** 40, None)) == CppScalar.S64
+        assert _value_cpp_type(Integer(1, None).as_rational()) == CppScalar.S32
+        assert _value_cpp_type(Integer(2 ** 40, None).as_rational()) == CppScalar.S64
         # ...and past `long long` no integer literal holds it at all
-        assert lit(Integer(2 ** 100, None)) is None
+        assert _value_cpp_type(Integer(2 ** 100, None).as_rational()) is None
 
     def test_the_bound_is_on_magnitude_not_the_signed_range(self):
         """C++ has no negative literal, so the bound is two-sided.
@@ -140,14 +139,13 @@ class TestLiteralArgumentsStateTheirType:
         position for exactly that value.
         """
         from fpy2.ast.fpyast import Integer
-        from fpy2.backend.cpp.emitter import CppEmitter
+        from fpy2.backend.cpp.emitter import _value_cpp_type
         from fpy2.backend.cpp.types import CppScalar
 
-        lit = CppEmitter._literal_cpp_type
-        assert lit(Integer(2 ** 31 - 1, None)) == CppScalar.S32
-        assert lit(Integer(-(2 ** 31 - 1), None)) == CppScalar.S32
-        assert lit(Integer(-(2 ** 31), None)) == CppScalar.S64
-        assert lit(Integer(2 ** 31, None)) == CppScalar.S64
+        assert _value_cpp_type(Integer(2 ** 31 - 1, None).as_rational()) == CppScalar.S32
+        assert _value_cpp_type(Integer(-(2 ** 31 - 1), None).as_rational()) == CppScalar.S32
+        assert _value_cpp_type(Integer(-(2 ** 31), None).as_rational()) == CppScalar.S64
+        assert _value_cpp_type(Integer(2 ** 31, None).as_rational()) == CppScalar.S64
 
     def test_infix_operators_are_left_alone(self):
         """An infix operator deduces nothing, so the promotion is C++'s own.

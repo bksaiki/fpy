@@ -113,6 +113,8 @@ def format_path(path: Path) -> str:
         case ExprPath(parent, field, index):
             at = '' if index is None else f'[{index}]'
             return f'{format_path(parent)}.{field}{at}'
+        case _:
+            raise RuntimeError(f'unreachable: {path}')
 
 
 def bad_path(path: Path, why: str) -> TransformReferenceError:
@@ -131,6 +133,8 @@ def resolve_block(func: FuncDef, path: BlockPath) -> StmtBlock:
                 if name == field:
                     return block
             raise bad_path(path, f'names no `{field}` block of a `{type(stmt).__name__}`')
+        case _:
+            raise RuntimeError(f'unreachable: {path}')
 
 
 def resolve_stmt(func: FuncDef, path: StmtPath) -> Stmt:
@@ -178,6 +182,8 @@ def beneath(path: Path, block: BlockPath, span: range) -> bool:
                 if parent == block and index in span:
                     return True
                 p = parent
+            case _:
+                raise RuntimeError(f'unreachable: {p}')
 
 
 def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:

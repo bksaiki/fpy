@@ -266,7 +266,7 @@ class _ComponentSolver[S]:
     _degraded: bool
     """Whether the query being answered has met an undecided call."""
 
-    def __init__(self, timeout_ms: int = 10_000, keep_trace: bool = False):
+    def __init__(self, timeout_ms: int = 10_000, keep_trace: bool = False) -> None:
         self.timeout_ms = timeout_ms
         self.stats = SolverStats()
         self.keep_trace = keep_trace

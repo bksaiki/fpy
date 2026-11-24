@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from types import CellType, ModuleType
 from typing import Any
@@ -12,13 +12,13 @@ class ForeignEnv:
     builtins: dict[str, Any]
 
     @staticmethod
-    def default():
+    def default() -> 'ForeignEnv':
         return ForeignEnv({}, {}, {})
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return key in self.globals or key in self.nonlocals or key in self.builtins
 
-    def __getitem__(self, key) -> Any:
+    def __getitem__(self, key: str) -> Any:
         if key in self.nonlocals:
             return self.nonlocals[key].cell_contents
         if key in self.globals:
@@ -27,7 +27,7 @@ class ForeignEnv:
             return self.builtins[key]
         raise KeyError(key)
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:
         if key in self.nonlocals:
             self.nonlocals[key].cell_contents = value
         elif key in self.globals:
@@ -38,7 +38,7 @@ class ForeignEnv:
             # default to globals if the key is not found in any environment
             self.globals[key] = value
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         # iterate over all keys in the environment
         return iter(self.nonlocals.keys() | self.globals.keys() | self.builtins.keys())
 
@@ -49,44 +49,25 @@ class ForeignEnv:
             self.builtins.copy()
         )
 
-    def get(self, key, default=None) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:
         """Like `get()` for `dict` instances."""
-        if key in self.nonlocals:
-            return self.nonlocals[key].cell_contents
-        if key in self.globals:
-            return self.globals[key]
-        if key in self.builtins:
-            return self.builtins[key]
-        return default
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
-    def merge(self, other: 'ForeignEnv', keys: Iterable[str] | None = None) -> 'ForeignEnv':
-        """
-        Merge two environments.
+    def merge(self, other: 'ForeignEnv', keys: Iterable[str]) -> 'ForeignEnv':
+        """This environment with *other*'s bindings of *keys* added."""
+        keys = set(keys)
 
-        Optionally, specify `keys` to restrict which keys to merge.
-        """
-        if keys is not None:
-            keys = set(keys)
+        def with_keys[V](mine: dict[str, V], theirs: dict[str, V]) -> dict[str, V]:
+            return mine | {k: v for k, v in theirs.items() if k in keys}
 
-        globals = self.globals.copy()
-        if keys is None:
-            globals.update(other.globals)
-        else:
-            globals.update({k: v for k, v in other.globals.items() if k in keys})
-
-        nonlocals = self.nonlocals.copy()
-        if keys is None:
-            nonlocals.update(other.nonlocals)
-        else:
-            nonlocals.update({k: v for k, v in other.nonlocals.items() if k in keys})
-
-        builtins = self.builtins.copy()
-        if keys is None:
-            builtins.update(other.builtins)
-        else:
-            builtins.update({k: v for k, v in other.builtins.items() if k in keys})
-
-        return ForeignEnv(globals, nonlocals, builtins)
+        return ForeignEnv(
+            with_keys(self.globals, other.globals),
+            with_keys(self.nonlocals, other.nonlocals),
+            with_keys(self.builtins, other.builtins),
+        )
 
 
 def fpy_alias(env: ForeignEnv | None) -> str | None:

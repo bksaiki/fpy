@@ -102,7 +102,7 @@ class TestPremiseDetails:
     def test_a_special_the_intermediate_lacks_refuses(self):
         """The theorems are about finite values; FPy tracks specials, and one
         the target has but the intermediate does not would be lost on the way
-        through.  Containment enforces this itself -- `_is_contained_in` makes
+        through.  Containment enforces this itself -- `contained_in` makes
         `specials_contained_in` its first condition -- so this pins the
         behaviour rather than a guard of its own."""
         f = _fp32()

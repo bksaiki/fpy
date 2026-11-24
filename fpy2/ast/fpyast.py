@@ -3,7 +3,7 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Self
@@ -30,39 +30,30 @@ __all__ = [
     'AMax',
     'AMin',
     'Abs',
-    # Trigonometric functions
     'Acos',
-    # Hyperbolic functions
     'Acosh',
-    # IEEE 754 arithmetic
     'Add',
     'AllOf',
     'And',
     'AnyOf',
-    # Type annotations
     'AnyTypeAnn',
-    # Function definition
     'Argument',
     'Asin',
     'Asinh',
     'AssertStmt',
     'Assign',
-    # Base classes
     'Ast',
     'Atan',
     'Atan2',
     'Atanh',
     'Attribute',
-    # Formatter
     'BaseFormatter',
     'BinaryOp',
     'BoolTypeAnn',
     'BoolVal',
-    # Other expressions
     'Call',
     'Cast',
     'Cbrt',
-    # Rounding and truncation
     'Ceil',
     'Compare',
     'CompareOp',
@@ -74,7 +65,6 @@ __all__ = [
     'ConstLn2',
     'ConstLog2E',
     'ConstLog10E',
-    # Constants
     'ConstNan',
     'ConstPi',
     'ConstPi_2',
@@ -94,15 +84,12 @@ __all__ = [
     'EffectStmt',
     'Empty',
     'Enumerate',
-    # Integral functions
     'Erf',
     'Erfc',
-    # Exponential/logarithmic functions
     'Exp',
     'Exp2',
     'Expm1',
     'Expr',
-    # Composite arithmetic
     'Fdim',
     'Floor',
     'Fma',
@@ -112,23 +99,19 @@ __all__ = [
     'Fst',
     'FuncDef',
     'FuncMeta',
-    # Type aliases
     'FuncSymbol',
     'Hexnum',
     'Hypot',
-    # Re-exports
     'Id',
     'If1Stmt',
     'IfExpr',
     'IfStmt',
     'IndexedAssign',
     'Integer',
-    # Classification
     'IsFinite',
     'IsInf',
     'IsNan',
     'IsNormal',
-    # Tensor operators
     'Len',
     'Lgamma',
     'ListComp',
@@ -142,7 +125,6 @@ __all__ = [
     'Log2',
     'Log10',
     'Logb',
-    # Other arithmetic
     'Max',
     'Min',
     'Mod',
@@ -155,11 +137,8 @@ __all__ = [
     'NaryExpr',
     'NaryOp',
     'NearbyInt',
-    # Sign operations
     'Neg',
-    # Logical operators
     'Not',
-    # N-ary operations
     'NullaryOp',
     'Or',
     'PassStmt',
@@ -173,11 +152,9 @@ __all__ = [
     'RealVal',
     'Remainder',
     'ReturnStmt',
-    # Rounding operator
     'Round',
     'RoundAt',
     'RoundInt',
-    # Numerical data
     'Signbit',
     'Sin',
     'Sinh',
@@ -186,7 +163,6 @@ __all__ = [
     'SourceId',
     'Sqrt',
     'Stmt',
-    # Statements
     'StmtBlock',
     'Sub',
     'Sum',
@@ -202,7 +178,6 @@ __all__ = [
     'UnaryOp',
     'UnderscoreId',
     'ValueExpr',
-    # Value expressions
     'Var',
     'WhileStmt',
     'Zip',
@@ -217,13 +192,13 @@ class Ast(ABC):
     __slots__ = ('_loc',)
     _loc: Location | None
 
-    def __init__(self, loc: Location | None):
+    def __init__(self, loc: Location | None) -> None:
         if loc is not None and not isinstance(loc, Location):
             raise TypeError(f'Expected a `Location` or `None`, got loc={loc}')
         self._loc = loc
 
     @property
-    def loc(self):
+    def loc(self) -> Location | None:
         """Get the location of the AST node."""
         return self._loc
 
@@ -237,11 +212,8 @@ class TypeAnn(Ast):
     """FPy AST: typing annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     @abstractmethod
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         """
         Check if this type annotation is equivalent to another type annotation.
 
@@ -255,10 +227,7 @@ class AnyTypeAnn(TypeAnn):
     """FPy AST: any type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, AnyTypeAnn)
 
 class RealTypeAnn(TypeAnn):
@@ -272,7 +241,7 @@ class RealTypeAnn(TypeAnn):
 
     fmt: Format | None
 
-    def __init__(self, fmt: Format | Context | None, loc: Location | None):
+    def __init__(self, fmt: Format | Context | None, loc: Location | None) -> None:
         super().__init__(loc)
         if isinstance(fmt, Context):
             fmt = fmt.format()
@@ -280,27 +249,21 @@ class RealTypeAnn(TypeAnn):
             raise TypeError(f'expected a `Format` or `Context`, got {fmt!r}')
         self.fmt = fmt
 
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, RealTypeAnn) and self.fmt == other.fmt
 
 class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, BoolTypeAnn)
 
 class ContextTypeAnn(TypeAnn):
     """FPy AST: context type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, ContextTypeAnn)
 
 
@@ -309,11 +272,11 @@ class TupleTypeAnn(TypeAnn):
     __slots__ = ('elts',)
     elts: tuple[TypeAnn, ...]
 
-    def __init__(self, elts: list[TypeAnn], loc: Location | None):
+    def __init__(self, elts: list[TypeAnn], loc: Location | None) -> None:
         super().__init__(loc)
         self.elts = tuple(elts)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, TupleTypeAnn)
             and len(self.elts) == len(other.elts)
@@ -328,12 +291,12 @@ class ListTypeAnn(TypeAnn):
     """optional list size: a known ``int``, a symbolic ``NamedId``, or
     ``None`` (unknown)"""
 
-    def __init__(self, elt: TypeAnn, length: int | NamedId | None, loc: Location | None):
+    def __init__(self, elt: TypeAnn, length: int | NamedId | None, loc: Location | None) -> None:
         super().__init__(loc)
         self.elt = elt
         self.length = length
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         # annotation equivalence is syntactic, so the size is compared
         # (unlike the semantic ``ListType``, where length is metadata)
         return (
@@ -357,13 +320,10 @@ class Expr(Ast):
     """FPy AST: expression"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     @abstractmethod
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         """
-        Check if this expression is structuarlly equivalent to another expression.
+        Check if this expression is structurally equivalent to another expression.
 
         This is essentially a recursive equality check.
         The dunder method `__eq__` is used to check if two expressions
@@ -375,11 +335,8 @@ class Stmt(Ast):
     """FPy AST: statement"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
     @abstractmethod
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         """
         Check if this statement is structurally equivalent to another statement.
 
@@ -394,52 +351,43 @@ class Var(Expr):
     __slots__ = ('name',)
     name: NamedId
 
-    def __init__(self, name: NamedId, loc: Location | None):
+    def __init__(self, name: NamedId, loc: Location | None) -> None:
         super().__init__(loc)
         self.name = name
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, Var) and self.name == other.name
 
 class ValueExpr(Expr):
     """FPy Ast: terminal expression"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""
     __slots__ = ('val',)
     val: bool
 
-    def __init__(self, val: bool, loc: Location | None):
+    def __init__(self, val: bool, loc: Location | None) -> None:
         super().__init__(loc)
         self.val = val
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, BoolVal) and self.val == other.val
 
 class RealVal(ValueExpr):
     """FPy AST: real value"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
 class RationalVal(RealVal):
     """FPy AST: abstract rational value"""
     __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
 
     @abstractmethod
     def as_rational(self) -> Fraction:
         """Returns the represented rational value as a Fraction in simplest form."""
         ...
 
-    def as_real(self) -> 'Fraction | Float':
+    def as_real(self) -> Fraction | Float:
         """Returns the represented value as an exact real number.
 
         Unlike `as_rational`, this preserves the sign of a zero: a negative-zero
@@ -459,17 +407,17 @@ class Decnum(RationalVal):
     __slots__ = ('val',)
     val: str
 
-    def __init__(self, val: str, loc: Location | None):
+    def __init__(self, val: str, loc: Location | None) -> None:
         super().__init__(loc)
         self.val = val
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, Decnum) and self.val == other.val
 
     def as_rational(self) -> Fraction:
         return decnum_to_fraction(self.val)
 
-    def as_real(self) -> 'Fraction | Float':
+    def as_real(self) -> Fraction | Float:
         r = self.as_rational()
         if r == 0 and self.val.lstrip().startswith('-'):
             # negative zero: not representable as a `Fraction`
@@ -482,18 +430,18 @@ class Hexnum(RationalVal):
     func: 'FuncSymbol | None'
     val: str
 
-    def __init__(self, func: 'FuncSymbol | None', val: str, loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', val: str, loc: Location | None) -> None:
         super().__init__(loc)
         self.func = func
         self.val = val
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, Hexnum) and self.val == other.val
 
     def as_rational(self) -> Fraction:
         return hexnum_to_fraction(self.val)
 
-    def as_real(self) -> 'Fraction | Float':
+    def as_real(self) -> Fraction | Float:
         r = self.as_rational()
         if r == 0 and self.val.lstrip().startswith('-'):
             # negative zero: not representable as a `Fraction`
@@ -505,11 +453,11 @@ class Integer(RationalVal):
     __slots__ = ('val',)
     val: int
 
-    def __init__(self, val: int, loc: Location | None):
+    def __init__(self, val: int, loc: Location | None) -> None:
         super().__init__(loc)
         self.val = val
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, Integer) and self.val == other.val
 
     def as_rational(self) -> Fraction:
@@ -522,13 +470,13 @@ class Rational(RationalVal):
     p: int
     q: int
 
-    def __init__(self, func: 'FuncSymbol | None', p: int, q: int, loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', p: int, q: int, loc: Location | None) -> None:
         super().__init__(loc)
         self.func = func
         self.p = p
         self.q = q
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, Rational) and self.p == other.p and self.q == other.q
 
     def as_rational(self) -> Fraction:
@@ -542,14 +490,14 @@ class Digits(RationalVal):
     e: int
     b: int
 
-    def __init__(self, func: 'FuncSymbol | None', m: int, e: int, b: int, loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', m: int, e: int, b: int, loc: Location | None) -> None:
         super().__init__(loc)
         self.func = func
         self.m = m
         self.e = e
         self.b = b
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, Digits)
             and self.m == other.m
@@ -565,11 +513,11 @@ class ForeignVal(ValueExpr):
     __slots__ = ('val',)
     val: Any
 
-    def __init__(self, val: Any, loc: Location | None):
+    def __init__(self, val: Any, loc: Location | None) -> None:
         super().__init__(loc)
         self.val = val
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, ForeignVal) and self.val == other.val
 
 class NaryExpr(Expr):
@@ -584,11 +532,11 @@ class NullaryOp(NaryExpr):
     func: 'FuncSymbol | None'
     args: tuple[Expr, ...] = ()
 
-    def __init__(self, func: 'FuncSymbol | None', loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', loc: Location | None) -> None:
         super().__init__(loc)
         self.func = func
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, NullaryOp) and type(self) is type(other)
 
 class UnaryOp(NaryExpr):
@@ -602,15 +550,15 @@ class UnaryOp(NaryExpr):
         self,
         arg: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.args = (arg,)
 
     @property
-    def arg(self):
+    def arg(self) -> Expr:
         return self.args[0]
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, UnaryOp)
             and type(self) is type(other)
@@ -629,7 +577,7 @@ class NamedUnaryOp(UnaryOp):
         func: 'FuncSymbol | None',
         arg: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(arg, loc)
         self.func = func
 
@@ -645,19 +593,19 @@ class BinaryOp(NaryExpr):
         first: Expr,
         second: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.args = (first, second)
 
     @property
-    def first(self):
+    def first(self) -> Expr:
         return self.args[0]
 
     @property
-    def second(self):
+    def second(self) -> Expr:
         return self.args[1]
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, BinaryOp)
             and type(self) is type(other)
@@ -678,7 +626,7 @@ class NamedBinaryOp(BinaryOp):
         first: Expr,
         second: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(first, second, loc)
         self.func = func
 
@@ -695,23 +643,23 @@ class TernaryOp(NaryExpr):
         second: Expr,
         third: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.args = (first, second, third)
 
     @property
-    def first(self):
+    def first(self) -> Expr:
         return self.args[0]
 
     @property
-    def second(self):
+    def second(self) -> Expr:
         return self.args[1]
 
     @property
-    def third(self):
+    def third(self) -> Expr:
         return self.args[2]
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, TernaryOp)
             and type(self) is type(other)
@@ -732,7 +680,7 @@ class NamedTernaryOp(TernaryOp):
         second: Expr,
         third: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(first, second, third, loc)
         self.func = func
 
@@ -743,11 +691,11 @@ class NaryOp(NaryExpr):
 
     args: tuple[Expr, ...]
 
-    def __init__(self, args: Iterable[Expr], loc: Location | None):
+    def __init__(self, args: Iterable[Expr], loc: Location | None) -> None:
         super().__init__(loc)
         self.args = tuple(args)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, NaryOp)
             and type(self) is type(other)
@@ -764,7 +712,7 @@ class NamedNaryOp(NaryOp):
         func: 'FuncSymbol | None',
         args: Iterable[Expr],
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(args, loc)
         self.func = func
 
@@ -1208,14 +1156,14 @@ class Call(NaryExpr):
         args: Iterable[Expr],
         kwargs: Iterable[tuple[str, Expr]],
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.func = func
         self.fn = fn
         self.args = tuple(args)
         self.kwargs = tuple(kwargs)
 
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         if not isinstance(other, Call):
             return False
 
@@ -1223,7 +1171,7 @@ class Call(NaryExpr):
             case None, None:
                 if self.func != other.func:
                     return False
-            case _, _:
+            case _:
                 if self.fn != other.fn:
                     return False
 
@@ -1242,12 +1190,12 @@ class Attribute(Expr):
     value: Expr
     attr: str
 
-    def __init__(self, value: Expr, attr: str, loc: Location | None):
+    def __init__(self, value: Expr, attr: str, loc: Location | None) -> None:
         super().__init__(loc)
         self.value = value
         self.attr = attr
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, Attribute)
             and self.value.is_equiv(other.value)
@@ -1266,12 +1214,12 @@ class Compare(Expr):
         ops: Iterable[CompareOp],
         args: Iterable[Expr],
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.ops = tuple(ops)
         self.args = tuple(args)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, Compare)
             and len(self.ops) == len(other.ops)
@@ -1289,11 +1237,11 @@ class TupleExpr(Expr):
         self,
         elts: Iterable[Expr],
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.elts = tuple(elts)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, TupleExpr)
             and len(self.elts) == len(other.elts)
@@ -1309,14 +1257,14 @@ class TupleBinding(Ast):
         self,
         elts: Iterable[Id | Self],
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.elts = tuple(elts)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Id | Self]:
         return iter(self.elts)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, TupleBinding)
             and len(self.elts) == len(other.elts)
@@ -1346,11 +1294,11 @@ class ListExpr(Expr):
         self,
         elts: Iterable[Expr],
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.elts = tuple(elts)
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, ListExpr)
             and len(self.elts) == len(other.elts)
@@ -1371,14 +1319,14 @@ class ListComp(Expr):
         iterables: Collection[Expr],
         elt: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         assert len(targets) == len(iterables)
         super().__init__(loc)
         self.targets = tuple(targets)
         self.iterables = tuple(iterables)
         self.elt = elt
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, ListComp)
             and len(self.targets) == len(other.targets)
@@ -1393,12 +1341,12 @@ class ListRef(Expr):
     value: Expr
     index: Expr
 
-    def __init__(self, value: Expr, index: Expr, loc: Location | None):
+    def __init__(self, value: Expr, index: Expr, loc: Location | None) -> None:
         super().__init__(loc)
         self.value = value
         self.index = index
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, ListRef)
             and self.value.is_equiv(other.value)
@@ -1418,13 +1366,13 @@ class ListSlice(Expr):
         start: Expr | None,
         stop: Expr | None,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.value = value
         self.start = start
         self.stop = stop
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         if not isinstance(other, ListSlice):
             return False
         if not self.value.is_equiv(other.value):
@@ -1448,13 +1396,13 @@ class IfExpr(Expr):
         ift: Expr,
         iff: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.cond = cond
         self.ift = ift
         self.iff = iff
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, IfExpr)
             and self.cond.is_equiv(other.cond)
@@ -1466,11 +1414,10 @@ class StmtBlock(Ast):
     """FPy AST: list of statements"""
     __slots__ = ('stmts',)
 
-    # list makes it easier to modify in-place
-    # not ideal since it's ideally immutable, but it simplifies the code
+    # mutable list for in-place edits
     stmts: list[Stmt]
 
-    def __init__(self, stmts: list[Stmt]):
+    def __init__(self, stmts: list[Stmt]) -> None:
         if stmts == []:
             loc = None
         else:
@@ -1490,7 +1437,7 @@ class StmtBlock(Ast):
         super().__init__(loc)
         self.stmts = stmts
 
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, StmtBlock)
             and len(self.stmts) == len(other.stmts)
@@ -1511,13 +1458,13 @@ class Assign(Stmt):
         type: TypeAnn | None,
         expr: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.target = target
         self.type = type
         self.expr = expr
 
-    def is_equiv(self, other):
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, Assign)
             and self.target.is_equiv(other.target)
@@ -1538,13 +1485,13 @@ class IndexedAssign(Stmt):
         indices: Iterable[Expr],
         expr: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.var = var
         self.indices = tuple(indices)
         self.expr = expr
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, IndexedAssign)
             and self.var == other.var
@@ -1564,12 +1511,12 @@ class If1Stmt(Stmt):
         cond: Expr,
         body: StmtBlock,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.cond = cond
         self.body = body
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, If1Stmt)
             and self.cond.is_equiv(other.cond)
@@ -1589,13 +1536,13 @@ class IfStmt(Stmt):
         ift: StmtBlock,
         iff: StmtBlock,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.cond = cond
         self.ift = ift
         self.iff = iff
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, IfStmt)
             and self.cond.is_equiv(other.cond)
@@ -1614,12 +1561,12 @@ class WhileStmt(Stmt):
         cond: Expr,
         body: StmtBlock,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.cond = cond
         self.body = body
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, WhileStmt)
             and self.cond.is_equiv(other.cond)
@@ -1640,13 +1587,13 @@ class ForStmt(Stmt):
         iterable: Expr,
         body: StmtBlock,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.target = target
         self.iterable = iterable
         self.body = body
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, ForStmt)
             and self.target.is_equiv(other.target)
@@ -1668,13 +1615,13 @@ class ContextStmt(Stmt):
         ctx: Expr,
         body: StmtBlock,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.ctx = ctx
         self.target = target
         self.body = body
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, ContextStmt)
             and self.target == other.target
@@ -1694,19 +1641,16 @@ class AssertStmt(Stmt):
         test: Expr,
         msg: Expr | None,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.test = test
         self.msg = msg
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, AssertStmt)
             and self.test.is_equiv(other.test)
-            # ``==`` on an ``Expr`` is identity, so structurally-equal messages
-            # on distinct objects would compare unequal — which every
-            # ``DefaultTransformVisitor`` pass produces, since it rebuilds
-            # every node.
+            # ``==`` on an ``Expr`` is identity
             and _opt_is_equiv(self.msg, other.msg)
         )
 
@@ -1719,11 +1663,11 @@ class EffectStmt(Stmt):
         self,
         expr: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.expr = expr
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, EffectStmt)
             and self.expr.is_equiv(other.expr)
@@ -1738,11 +1682,11 @@ class ReturnStmt(Stmt):
         self,
         expr: Expr,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.expr = expr
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, ReturnStmt)
             and self.expr.is_equiv(other.expr)
@@ -1752,10 +1696,7 @@ class PassStmt(Stmt):
     """FPy AST: pass (skip) statement"""
     __slots__ = ()
 
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return isinstance(other, PassStmt)
 
 
@@ -1770,12 +1711,12 @@ class Argument(Ast):
         name: Id,
         type: TypeAnn,
         loc: Location | None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.name = name
         self.type = type
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, Argument)
             and self.name == other.name
@@ -1818,7 +1759,7 @@ class FuncDef(Ast):
         meta: FuncMeta,
         *,
         loc: Location | None = None
-    ):
+    ) -> None:
         super().__init__(loc)
         self.name = name
         self.args = tuple(args)
@@ -1841,7 +1782,7 @@ class FuncDef(Ast):
     def free_vars(self) -> set[NamedId]:
         return self._meta.free_vars
 
-    def is_equiv(self, other) -> bool:
+    def is_equiv(self, other: object) -> bool:
         return (
             isinstance(other, FuncDef)
             and self.name == other.name
@@ -1970,7 +1911,7 @@ parser resolves against). See :meth:`Formatter._op_name`.
 ###########################################################
 # Formatter base class
 
-class BaseFormatter:
+class BaseFormatter(ABC):
     """Abstract base class for AST formatters."""
 
     @abstractmethod
@@ -1985,7 +1926,7 @@ def get_default_formatter() -> BaseFormatter:
         raise RuntimeError('no default formatter available')
     return _default_formatter
 
-def set_default_formatter(formatter: BaseFormatter):
+def set_default_formatter(formatter: BaseFormatter) -> None:
     """Set the default formatter for FPy AST."""
     global _default_formatter
     if not isinstance(formatter, BaseFormatter):

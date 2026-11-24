@@ -75,7 +75,7 @@ def dot(x: list[fp.Real], y: list[fp.Real]) -> fp.Real:
     return sum([a * b for a, b in zip(x, y)])
 
 @fp.fpy
-def axpy(a: fp.Real, x: list[fp.Real], y: list[fp.Real]):
+def axpy(a: fp.Real, x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
     """
     Compute a*x + y (AXPY operation).
 
@@ -89,7 +89,7 @@ def axpy(a: fp.Real, x: list[fp.Real], y: list[fp.Real]):
 
 
 @fp.fpy
-def scale(a: fp.Real, x: list[fp.Real]):
+def scale(a: fp.Real, x: list[fp.Real]) -> list[fp.Real]:
     """
     Scale a vector by a scalar.
 
@@ -100,7 +100,7 @@ def scale(a: fp.Real, x: list[fp.Real]):
     return [a * xi for xi in x]
 
 @fp.fpy
-def dot_add(x: list[fp.Real], y: list[fp.Real], c: fp.Real):
+def dot_add(x: list[fp.Real], y: list[fp.Real], c: fp.Real) -> fp.Real:
     """
     Compute `xy + c`, dot product with addition.
 

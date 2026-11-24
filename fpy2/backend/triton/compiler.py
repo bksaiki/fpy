@@ -12,7 +12,8 @@ The pipeline, in order, and why:
    before inlining copies what it would clear.
 4. The normal form, then ``unfold_round`` and the normal form again: the
    lowering sees inlined callees and emits branches of its own.
-5. ``Simplify``: clears what the lowerings leave.
+5. ``Simplify`` and ``hoist``: clears what the lowerings leave, then hoists
+   loop-invariant work.
 6. ``split_names``, as Triton holds a name a loop assigns at one type; then
    tiling, after the normal form so it sees inlined loops; then ``Simplify``.
 
@@ -27,15 +28,12 @@ from ...number import Context
 from ...transform import (
     AssertElim,
     FreeVarElim,
-    HoistInvariant,
-    HoistScale,
     Simplify,
     Specialize,
-    TransformDeclined,
     ZipElim,
 )
 from ...types import Type
-from ..backend import Backend, CompileError
+from ..backend import Backend, CompileError, hoist
 from .emitter import KernelSource, emit_kernel
 from .normalize import normalize, normalize_module
 from .split_names import split_names
@@ -95,7 +93,7 @@ class TritonCompiler(Backend):
         func: Function,
         *,
         ctx: Context | None = None,
-        arg_types: 'list[Type | None] | None' = None,
+        arg_types: list[Type | None] | None = None,
     ) -> KernelSource:
         """*func* as a Triton kernel.
 
@@ -105,12 +103,7 @@ class TritonCompiler(Backend):
         """
         if not isinstance(func, Function):
             raise TypeError(f"Expected a 'Function', got {func}")
-        if not any(str(a.name) == self.block for a in func.ast.args):
-            raise CompileError(
-                f'`{func.name}` has no `{self.block}` parameter; a kernel '
-                'takes its tile width as an argument, since the launcher '
-                'picks the value'
-            )
+        self._check_block(func)
         module = Module()
         module.add(func, ctx=ctx, arg_types=arg_types)
         return self._compile_one(self._specialize(module), func.name)
@@ -119,8 +112,19 @@ class TritonCompiler(Backend):
         """Every public entry of *module*, each as its own kernel."""
         if not isinstance(module, Module):
             raise TypeError(f"Expected a 'Module', got {module}")
+        for entry in module.public():
+            self._check_block(entry)
         spec = self._specialize(module)
         return [self._compile_one(spec, entry.name) for entry in spec]
+
+    def _check_block(self, func: Function) -> None:
+        """A kernel takes its tile width as an argument: the launcher picks it."""
+        if not any(str(a.name) == self.block for a in func.ast.args):
+            raise CompileError(
+                f'`{func.name}` has no `{self.block}` parameter; a kernel '
+                'takes its tile width as an argument, since the launcher '
+                'picks the value'
+            )
 
     def _specialize(self, module: Module) -> Module:
         """`AssertElim` where asked, then steps 1 and 2 of the pipeline."""
@@ -145,12 +149,7 @@ class TritonCompiler(Backend):
             ready = ready.with_ast(normalize(unfold(ready.ast, self.unfold)))
 
         if self.optimize:
-            ready = ready.with_ast(Simplify.apply(ready.ast))
-            for hoist in (HoistInvariant.apply, HoistScale.apply):
-                try:
-                    ready = ready.with_ast(hoist(ready.ast))
-                except TransformDeclined:
-                    pass  # nothing to hoist is not a failure
+            ready = ready.with_ast(hoist(Simplify.apply(ready.ast)))
 
         tiles = tile_loops(split_names(ready.ast), self.block)
         if self.optimize:

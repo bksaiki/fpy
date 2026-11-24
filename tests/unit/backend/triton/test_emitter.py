@@ -350,6 +350,38 @@ class TestSelectOps:
         assert _emit(f, [_R32, _R32, _R32]).count('tl.maximum(') == 2
 
 
+class TestSpecialConstants:
+    """`fp.nan()` and `fp.inf()` are `C(nan)` and `C(inf)`."""
+
+    def test_nan_is_rounded_under_the_context(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            with fp.MX_E2M1:
+                y = fp.nan()
+            return x + y
+
+        assert "float('nan')" not in _emit(f, [_R32])
+
+    def test_inf_rounds_to_nan_without_infinity(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            with fp.MX_E4M3:
+                y = fp.inf()
+            return x + y
+
+        assert "float('nan')" in _emit(f, [_R32])
+
+    def test_refused_where_rounding_aborts(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            with fp.INTEGER:
+                y = fp.nan()
+            return x + y
+
+        with pytest.raises(TritonEmitError, match='aborts'):
+            _emit(f, [_R32])
+
+
 class TestDestructuring:
     """`a, b = (x, y)`.  Triton has no tuple *value* to bind, so the binding
     comes apart into one assignment per element."""
@@ -379,12 +411,23 @@ class TestDestructuring:
         assert out == (
             'a = x\n'
             'b = y\n'
-            '_t0 = b\n'
-            '_t1 = a\n'
-            'a = _t0\n'
-            'b = _t1\n'
+            '__t0 = b\n'
+            '__t1 = a\n'
+            'a = __t0\n'
+            'b = __t1\n'
             'return (a - b)'
         )
+
+    def test_a_temporary_avoids_the_programs_names(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            __t0 = x + 1
+            a, b = (x, y)
+            a, b = (b, a + __t0)
+            return a - b
+
+        out = _emit(f, [_R32, _R32])
+        assert '__t0 = b' not in out and '(a + __t0)' in out
 
     def test_no_temporaries_when_nothing_is_read_back(self):
         @fp.fpy(ctx=fp.FP32)
@@ -846,6 +889,16 @@ class TestTryWiden:
 
         out = _emit(f, [_R32], ctx=fp.REAL)
         assert 'tl.float64' in out and ', tl.float32)' in out
+
+    def test_a_literal_past_the_double_range_is_refused(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(t: fp.Real):
+            with fp.REAL:
+                y = 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 * t
+            return y
+
+        with pytest.raises(TritonEmitError, match='not representable'):
+            _emit(f, [_R32], ctx=fp.REAL)
 
 
 @fp.fpy(ctx=fp.REAL)

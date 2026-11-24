@@ -37,8 +37,9 @@ class RoundTestCase():
 
         # saturation
         sat_ctx = MPBFixedContext(-1, limit, RM.RTZ, OV.SATURATE)
-        assert sat_ctx.round(x) == limit
-        assert sat_ctx.round(neg_x) == -limit
+        for v, want in ((x, limit), (neg_x, -limit)):
+            r = sat_ctx.round(v)
+            assert r == want and r.overflow and r.inexact, r
 
         # wrap
         wrap_ctx = MPBFixedContext(-1, limit, RM.RTZ, OV.WRAP)

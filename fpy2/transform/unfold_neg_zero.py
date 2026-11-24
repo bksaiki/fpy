@@ -68,7 +68,6 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
-from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     REAL,
     Context,
@@ -84,6 +83,7 @@ from .utils import (
     RoundingScopes,
     ScopedRoundingRewriter,
     check_where,
+    clone,
 )
 
 _FixedCtx = MPFixedContext | MPBFixedContext
@@ -164,9 +164,8 @@ def _ctx_expr(e: Expr | None, src: _Source, loc: Location | None) -> Expr:
         isinstance(e, Call) and e.fn is type(src.ctx)
         and type(src.dropped) is type(src.ctx)
     ):
-        # a structurally-fresh copy: each emitted block must occupy distinct
-        # AST nodes, and the source expression stays in place under `where`
-        call = DefaultTransformVisitor()._visit_expr(e, None)
+        # each emitted block must occupy distinct AST nodes
+        call = clone(e)
         assert isinstance(call, Call)
         # the flag is keyword-only in both constructors
         kwargs = tuple(kv for kv in call.kwargs if kv[0] != 'enable_neg_zero')
@@ -191,14 +190,11 @@ class _UnfoldNegZeroInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.gensym = Gensym(scopes.def_use.names())
         self.where = where
-
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
 
     def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
         """The rounding's format, if its sign of zero can be taken out of its

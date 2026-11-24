@@ -317,7 +317,7 @@ def determinant_3x3(A: list[list[fp.Real]]) -> fp.Real:
     return det
 
 @fp.fpy
-def matvec(A: list[list[fp.Real]], x: list[fp.Real]):
+def matvec(A: list[list[fp.Real]], x: list[fp.Real]) -> list[fp.Real]:
     """
     Multiply a matrix by a vector: A * x.
 
@@ -337,7 +337,7 @@ def matvec(A: list[list[fp.Real]], x: list[fp.Real]):
     return result
 
 @fp.fpy
-def outer_product(x: list[fp.Real], y: list[fp.Real]):
+def outer_product(x: list[fp.Real], y: list[fp.Real]) -> list[list[fp.Real]]:
     """
     Compute outer product of two vectors: x ⊗ y.
 
@@ -353,7 +353,7 @@ def outer_product(x: list[fp.Real], y: list[fp.Real]):
     return result
 
 @fp.fpy
-def get_row(A: list[list[fp.Real]], i: int):
+def get_row(A: list[list[fp.Real]], i: int) -> list[fp.Real]:
     """
     Extract a row from a matrix.
 
@@ -364,7 +364,7 @@ def get_row(A: list[list[fp.Real]], i: int):
     return A[i][:]
 
 @fp.fpy
-def get_column(A: list[list[fp.Real]], j: int):
+def get_column(A: list[list[fp.Real]], j: int) -> list[fp.Real]:
     """
     Extract a column from a matrix.
 

@@ -91,7 +91,7 @@ def rescale_fixed(func: Function, where: int | Cursor | None = None) -> Function
     :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(RescaleFixed.apply_with_edits(
         func.ast, where=func.rebase(where)

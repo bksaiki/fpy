@@ -1,7 +1,9 @@
 from enum import IntEnum
+from fractions import Fraction
+from typing import Any
 
-from ...utils import DEFAULT, DefaultOr, bitmask, default_repr, enum_repr
-from ..number import RNG, Float, RealFloat
+from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr, enum_repr
+from ..number import RNG, Float, Real, RealFloat
 from ..round import OverflowMode, RoundingMode
 from .context import EncodableContext
 from .format import EncodableFormat
@@ -11,7 +13,7 @@ from .mpb_float import MPBFloatContext, MPBFloatFormat
 @enum_repr
 class EFloatNanKind(IntEnum):
     """
-    Describes how NaN values are encoded for `ExtFloatContext` rounding contexts.
+    Describes how NaN values are encoded for `EFloatContext` rounding contexts.
     """
     IEEE_754 = 0
     """IEEE 754 compliant: NaNs have the largest exponent"""
@@ -62,7 +64,7 @@ class EFloatFormat(EncodableFormat):
         enable_inf: bool,
         nan_kind: EFloatNanKind,
         eoffset: int,
-    ):
+    ) -> None:
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\' for es={es}, got {type(es)}')
         if not isinstance(nbits, int):
@@ -89,7 +91,7 @@ class EFloatFormat(EncodableFormat):
         self._mpb_fmt = _ext_to_mpb_fmt(es, nbits, enable_inf, nan_kind, eoffset)
         self._has_nonzero = _has_nonzero(nbits, enable_inf, nan_kind)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, EFloatFormat)
             and self.es == other.es
@@ -99,7 +101,7 @@ class EFloatFormat(EncodableFormat):
             and self.eoffset == other.eoffset
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset))
 
     @property
@@ -178,7 +180,7 @@ class EFloatFormat(EncodableFormat):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_fmt.to_ordinal(x, infval=infval)
 
-    def to_fractional_ordinal(self, x: Float):
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_fmt.to_fractional_ordinal(x)
@@ -300,31 +302,9 @@ class EFloatFormat(EncodableFormat):
                     mbits = bitmask(self.m)
                 case _:
                     raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
-        elif x.is_zero():
-            ebits = 0
-            mbits = 0
-        elif x.e <= self.emin:
-            offset = x.exp - self.expmin
-            if offset > 0:
-                c = x.c << offset
-            elif offset < 0:
-                c = x.c >> -offset
-            else:
-                c = x.c
-
-            ebits = 0
-            mbits = c
         else:
-            offset = x.p - self.pmax
-            if offset > 0:
-                c = x.c >> offset
-            elif offset < 0:
-                c = x.c << -offset
-            else:
-                c = x.c
-
-            ebits = x.e - self.emin + 1
-            mbits = c & bitmask(self.pmax - 1)
+            # finite: the magnitude's ordinal is its bit pattern
+            return (sbit << (self.nbits - 1)) | abs(self._mpb_fmt._mps_fmt._to_ordinal(x.as_real()))
 
         return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
 
@@ -332,64 +312,26 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(x, int) or x < 0 or x >= (1 << self.nbits):
             raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
 
-        emask = bitmask(self.es)
-        mmask = bitmask(self.m)
-
-        sbit = x >> (self.nbits - 1)
-        ebits = (x >> self.m) & emask
-        mbits = x & mmask
-
-        s = sbit != 0
-
+        s = (x >> (self.nbits - 1)) != 0
+        ord_bits = x & bitmask(self.nbits - 1)
         match self.nan_kind:
             case EFloatNanKind.IEEE_754:
-                if ebits == 0:
-                    return Float(s=s, c=mbits, exp=self.expmin)
-                elif ebits == emask:
-                    if self.enable_inf and mbits == 0:
-                        return Float(s=s, isinf=True)
-                    return Float(s=s, isnan=True)
-                else:
-                    c = (1 << self.m) | mbits
-                    exp = self.expmin + (ebits - 1)
-                    return Float(s=s, c=c, exp=exp)
-
+                if (ord_bits >> self.m) == bitmask(self.es):
+                    isinf = self.enable_inf and (ord_bits & bitmask(self.m)) == 0
+                    return Float(s=s, isinf=isinf, isnan=not isinf)
             case EFloatNanKind.MAX_VAL:
-                ord_bits = (ebits << self.m) | mbits
-                nan_bits = bitmask(self.nbits - 1)
-                inf_bits = nan_bits - 1
-
-                if ord_bits == nan_bits:
+                if ord_bits == bitmask(self.nbits - 1):
                     return Float(s=s, isnan=True)
-                elif self.enable_inf and ord_bits == inf_bits:
+                if self.enable_inf and ord_bits == bitmask(self.nbits - 1) - 1:
                     return Float(s=s, isinf=True)
-                else:
-                    if ebits == 0:
-                        return Float(s=s, c=mbits, exp=self.expmin)
-                    c = (1 << self.m) | mbits
-                    exp = self.expmin + (ebits - 1)
-                    return Float(s=s, c=c, exp=exp)
-
             case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
-                ord_bits = (ebits << self.m) | mbits
-                inf_bits = bitmask(self.nbits - 1)
-
-                if self.enable_inf and ord_bits == inf_bits:
+                if self.enable_inf and ord_bits == bitmask(self.nbits - 1):
                     return Float(s=s, isinf=True)
-
-                if ebits == 0:
-                    if mbits == 0:
-                        if s and self.nan_kind == EFloatNanKind.NEG_ZERO:
-                            return Float(s=s, isnan=True)
-                        return Float(s=s, c=0, exp=self.expmin)
-                    return Float(s=s, c=mbits, exp=self.expmin)
-
-                c = (1 << self.m) | mbits
-                exp = self.expmin + (ebits - 1)
-                return Float(s=s, c=c, exp=exp)
-
+                if s and ord_bits == 0 and self.nan_kind == EFloatNanKind.NEG_ZERO:
+                    return Float(s=s, isnan=True)
             case _:
                 raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
+        return Float(s=s, x=self._mpb_fmt._mps_fmt.from_ordinal(ord_bits))
 
 
 @default_repr
@@ -463,7 +405,7 @@ class EFloatContext(EncodableContext):
         rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\', got \'{type(rm)}\' for rm={rm}')
         if not isinstance(overflow, OverflowMode):
@@ -471,7 +413,7 @@ class EFloatContext(EncodableContext):
         if num_randbits is not None and not isinstance(num_randbits, int):
             raise TypeError(f'Expected \'int\', got \'{type(num_randbits)}\' for num_randbits={num_randbits}')
         if overflow == OverflowMode.WRAP:
-            raise ValueError('OverflowMode.WRAP is not supported for ExtFloatContext')
+            raise ValueError('OverflowMode.WRAP is not supported for EFloatContext')
 
         self._fmt = EFloatFormat(es, nbits, enable_inf, nan_kind, eoffset)
 
@@ -512,7 +454,7 @@ class EFloatContext(EncodableContext):
             neg_maxval=self._fmt._mpb_fmt.neg_maxval, rng=rng,
         )
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, EFloatContext)
             and self.es == other.es
@@ -527,7 +469,7 @@ class EFloatContext(EncodableContext):
             and self.inf_value == other.inf_value
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.es,
             self.nbits,
@@ -542,35 +484,35 @@ class EFloatContext(EncodableContext):
         ))
 
     @property
-    def pmax(self):
+    def pmax(self) -> int:
         return self._fmt.pmax
 
     @property
-    def emax(self):
+    def emax(self) -> int:
         return self._fmt.emax
 
     @property
-    def emin(self):
+    def emin(self) -> int:
         return self._fmt.emin
 
     @property
-    def expmax(self):
+    def expmax(self) -> int:
         return self._fmt.expmax
 
     @property
-    def expmin(self):
+    def expmin(self) -> int:
         return self._fmt.expmin
 
     @property
-    def nmin(self):
+    def nmin(self) -> int:
         return self._fmt.nmin
 
     @property
-    def m(self):
+    def m(self) -> int:
         return self._fmt.m
 
     @property
-    def ebias(self):
+    def ebias(self) -> int:
         return self._fmt.ebias
 
     def with_params(
@@ -586,36 +528,22 @@ class EFloatContext(EncodableContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'EFloatContext':
-        if es is DEFAULT:
-            es = self.es
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if enable_inf is DEFAULT:
-            enable_inf = self.enable_inf
-        if nan_kind is DEFAULT:
-            nan_kind = self.nan_kind
-        if eoffset is DEFAULT:
-            eoffset = self.eoffset
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
-            raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
+            raise TypeError(f'Unexpected parameters {kwargs} for EFloatContext')
         return EFloatContext(
-            es, nbits, enable_inf, nan_kind, eoffset,
-            rm, overflow, num_randbits,
-            rng=rng, nan_value=nan_value, inf_value=inf_value,
+            default_or(es, self.es),
+            default_or(nbits, self.nbits),
+            default_or(enable_inf, self.enable_inf),
+            default_or(nan_kind, self.nan_kind),
+            default_or(eoffset, self.eoffset),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value),
         )
 
     def is_stochastic(self) -> bool:
@@ -635,7 +563,7 @@ class EFloatContext(EncodableContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'EFloatContext':
@@ -650,13 +578,13 @@ class EFloatContext(EncodableContext):
             nan_value=nan_value, inf_value=inf_value,
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         return self._mpb_ctx.round_params()
 
-    def _fixup(self, x: Float):
+    def _fixup(self, x: Float) -> Float:
         if x.isnan and self.nan_kind == EFloatNanKind.NONE:
             if self.nan_value is None:
                 if self.enable_inf:
@@ -673,15 +601,11 @@ class EFloatContext(EncodableContext):
             return Float(x=x, s=False, ctx=self)._with_flags(x)
         return x
 
-    def round(self, x, *, exact: bool = False) -> Float:
-        y = self._mpb_ctx.round(x, exact=exact)
-        y._ctx = self
-        return self._fixup(y)
+    def round(self, x: Real | RealFloat | str, *, exact: bool = False) -> Float:
+        return self._fixup(self._bind(self._mpb_ctx.round(x, exact=exact)))
 
-    def round_at(self, x, n, *, exact: bool = False) -> Float:
-        x = self._mpb_ctx.round_at(x, n, exact=exact)
-        x._ctx = self
-        return self._fixup(x)
+    def round_at(self, x: Real | RealFloat | str, n: int, *, exact: bool = False) -> Float:
+        return self._fixup(self._bind(self._mpb_ctx.round_at(x, n, exact=exact)))
 
     def zero(self, s: bool = False) -> Float:
         return Float(x=self._fmt.zero(s), ctx=self)
@@ -704,7 +628,7 @@ def _format_is_valid(
     nbits: int,
     enable_inf: bool,
     nan_kind: EFloatNanKind,
-):
+) -> bool:
     """Returns True if the EFloat format is valid."""
     if nbits < 1:
         return False

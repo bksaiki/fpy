@@ -22,9 +22,6 @@ FP64_EMAX = (1 << (FP64_ES - 1)) - 1
 FP64_EMIN = 1 - FP64_EMAX
 """minimum (normalized) exponent value of a `float`"""
 
-FP64_EXPMAX = FP64_EMAX - FP64_P + 1
-"""maximum (unnormalized) exponent value of a `float`"""
-
 FP64_EXPMIN = FP64_EMIN - FP64_P + 1
 """minimum (unnormalized) exponent value of a `float`"""
 

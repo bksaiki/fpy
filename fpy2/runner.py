@@ -1,5 +1,5 @@
 """
-This module defines a running for design-space exploration tasks.
+This module defines a runner for design-space exploration tasks.
 """
 
 import concurrent.futures
@@ -7,8 +7,10 @@ import gzip
 import hashlib
 import pickle
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     'Runner',
@@ -60,7 +62,9 @@ class Runner[C, K, R](ABC):
     - R: The result type.
     """
 
-    def __init__(self, logging: bool = False):
+    logging: bool
+
+    def __init__(self, logging: bool = False) -> None:
         self.logging = logging
 
     @abstractmethod
@@ -87,7 +91,7 @@ class Runner[C, K, R](ABC):
     @abstractmethod
     def sample(self, key: K, output_dir: Path, seed: int, no_cache: bool) -> Path:
         """
-        Generates a `RunnerSample` from a given key.
+        Generates a sample from a given key.
 
         Parameters:
         - key: The key for the sample.
@@ -117,7 +121,7 @@ class Runner[C, K, R](ABC):
         results: dict[C, R],
         output_dir: Path,
         seed: int
-    ):
+    ) -> None:
         """
         Plots the results of the design-space exploration.
 
@@ -129,7 +133,7 @@ class Runner[C, K, R](ABC):
         """
         ...
 
-    def log(self, where: str, *args):
+    def log(self, where: str, *args: Any) -> None:
         """
         Logs a message if logging is enabled.
         """
@@ -143,7 +147,7 @@ class Runner[C, K, R](ABC):
         num_threads: int = 1,
         no_cache: bool = False,
         replot: bool = False
-    ):
+    ) -> None:
         """
         Runs the design-space exploration.
 
@@ -190,7 +194,7 @@ class Runner[C, K, R](ABC):
                     uniq_keys.add(key)
 
             # run sampling
-            samples = self._run_sampling(sampling_tasks, num_threads, no_cache)
+            samples = self._run_sampling(sampling_tasks, num_threads)
 
             # generate sweep tasks
             sweep_tasks: list[RunnerWorkerTask[C]] = [
@@ -205,33 +209,21 @@ class Runner[C, K, R](ABC):
         self.log('run', 'plotting results')
         self.plot(configs, results, output_dir, seed)
 
-    def _run_sampling(self, tasks: list[SampleWorkerTask[K]], num_threads: int, no_cache: bool) -> dict[K, Path]:
+    def _map[T, V](self, tag: str, what: str, fn: Callable[[T], V], tasks: list[T], num_threads: int) -> list[V]:
+        """*fn* over *tasks*, across *num_threads* processes where there are several."""
+        if num_threads > 1 and len(tasks) > 1:
+            self.log(tag, f'running {len(tasks)} {what} with {num_threads} threads')
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
+                return list(executor.map(fn, tasks))
+        self.log(tag, f'running {len(tasks)} {what} in single-threaded mode')
+        return [fn(task) for task in tasks]
+
+    def _run_sampling(self, tasks: list[SampleWorkerTask[K]], num_threads: int) -> dict[K, Path]:
         """
         Internal method to run a sweep of sampling tasks.
         """
-        # run workers
-        samples = {}
-        if num_threads > 1 and len(tasks) > 1:
-            # run with multiple processes
-            self.log('run_sampling', f'running {len(tasks)} samples with {num_threads} threads')
-            with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
-                futures = { executor.submit(self._sample_one, task): task for task in tasks }
-                for future in concurrent.futures.as_completed(futures):
-                    task = futures[future]
-                    try:
-                        path = future.result()
-                        samples[task.key] = path
-                    except Exception:
-                        self.log('run_sampling', f'sample {task.key} generated an exception')
-                        raise
-        else:
-            # single-threaded mode
-            self.log('run_sampling', f'running {len(tasks)} samples in single-threaded mode')
-            for task in tasks:
-                path = self._sample_one(task)
-                samples[task.key] = path
-
-        return samples
+        paths = self._map('run_sampling', 'samples', self._sample_one, tasks, num_threads)
+        return {task.key: path for task, path in zip(tasks, paths, strict=True)}
 
     def _sample_one(self, task: SampleWorkerTask[K]) -> Path:
         """
@@ -246,27 +238,8 @@ class Runner[C, K, R](ABC):
         """
         Internal method to run a sweep of configurations.
         """
-        # run workers
-        results = {}
-        if num_threads > 1 and len(tasks) > 1:
-            # run with multiple processes
-            self.log('run_sweep', f'running {len(tasks)} configs with {num_threads} threads')
-            with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
-                futures = { executor.submit(self._run_one, task): task for task in tasks }
-                for future in concurrent.futures.as_completed(futures):
-                    task = futures[future]
-                    try:
-                        r = future.result()
-                        results[task.config] = r
-                    except Exception:
-                        self.log('run', f'config {task.config} generated an exception')
-                        raise
-        else:
-            # single-threaded mode
-            self.log('run_sweep', f'running {len(tasks)} configs in single-threaded mode')
-            for task in tasks:
-                r = self._run_one(task)
-                results[task.config] = r
+        rs = self._map('run_sweep', 'configs', self._run_one, tasks, num_threads)
+        results = {task.config: r for task, r in zip(tasks, rs, strict=True)}
 
         # save results to cache
         self.log('run_sweep', 'saving results to cache')
@@ -291,7 +264,7 @@ class Runner[C, K, R](ABC):
         """
         return name
 
-    def _gen_cache_name(self, key) -> str:
+    def _gen_cache_name(self, key: Any) -> str:
         """
         Generates a cache file name from a key.
         """
@@ -301,7 +274,7 @@ class Runner[C, K, R](ABC):
             skey = str(key)
         return hashlib.md5(skey.encode()).hexdigest()
 
-    def _open_cache(self, output_dir: Path, cache_name: str = '__cache__'):
+    def _open_cache(self, output_dir: Path, cache_name: str = '__cache__') -> Path:
         """
         Opens (and creates) a cache directory inside the output directory.
         """
@@ -310,13 +283,13 @@ class Runner[C, K, R](ABC):
         self.log('open_cache', f'opened cache directory `{cache_dir}`')
         return cache_dir
 
-    def _write_cache(self, path: Path, data):
+    def _write_cache(self, path: Path, data: Any) -> None:
         """Writes data to a gzipped cache file."""
         self.log('write_cache', f'writing cache to `{path}`')
         with gzip.open(path, 'wb') as f:
             pickle.dump(data, f)
 
-    def _read_cache(self, path: Path):
+    def _read_cache(self, path: Path) -> Any:
         """Reads data from a gzipped cache file."""
         self.log('read_cache', f'reading cache from `{path}`')
         try:

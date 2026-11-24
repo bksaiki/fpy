@@ -3,6 +3,7 @@ Scheduling language: listing the sites a strategy can be aimed at
 """
 
 from collections.abc import Callable
+from typing import Any
 
 from ..function import Function
 from ..transform import (
@@ -97,7 +98,7 @@ def sites(
     func: Function,
     /,
     within: Cursor | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> list[Cursor]:
     """
     The sites `strategy` could rewrite in `func`, in the order a `where` index
@@ -170,7 +171,7 @@ def sites(
         [body[0] at `f.py:8:8`, body[1] at `f.py:10:8`]
     """
     if not isinstance(func, Function):
-        raise TypeError(f'Expected a \'Function\', got {func}')
+        raise TypeError(f"Expected a 'Function', got {func}")
     lister = _SITES.get(strategy)
     if lister is None:
         name = getattr(strategy, '__name__', strategy)
@@ -183,7 +184,7 @@ def refusals(
     func: Function,
     /,
     within: Cursor | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> list[tuple[Cursor, str]]:
     """
     Why each program point `strategy` could have acted on in `func` is not a
@@ -230,7 +231,7 @@ def refusals(
           'constructor call to shift symbolically'), ...]
     """
     if not isinstance(func, Function):
-        raise TypeError(f'Expected a \'Function\', got {func}')
+        raise TypeError(f"Expected a 'Function', got {func}")
     if strategy not in _SITES:
         name = getattr(strategy, '__name__', strategy)
         raise ValueError(f'`{name}` takes no `where`, so it has no sites to refuse')

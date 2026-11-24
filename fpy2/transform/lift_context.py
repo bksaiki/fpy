@@ -19,16 +19,16 @@ class _ContextFinder(DefaultVisitor):
     eval_info: PartialEvalInfo
     ctx_exprs: list[Expr]
 
-    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
+    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo) -> None:
         self.func = func
         self.eval_info = eval_info
         self.ctx_exprs = []
 
-    def visit(self):
+    def visit(self) -> list[Expr]:
         self._visit_function(self.func, False)
         return self.ctx_exprs
 
-    def _visit_context(self, stmt: ContextStmt, ctx: bool):
+    def _visit_context(self, stmt: ContextStmt, ctx: bool) -> None:
         return super()._visit_context(stmt, False)
 
     def _visit_expr(self, e: Expr, ctx: bool) -> Expr:
@@ -54,7 +54,7 @@ class _ContextLifter(DefaultTransformVisitor):
     expr_to_name: dict[Expr, NamedId]
     name_to_expr: dict[NamedId, Expr]
 
-    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo, ctx_exprs: list[Expr]):
+    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo, ctx_exprs: list[Expr]) -> None:
         self.func = func
         self.expr_to_name = {}
         self.name_to_expr = {}
@@ -69,7 +69,7 @@ class _ContextLifter(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
         # visit the function body to eliminate context expressions
         func = super()._visit_function(func, ctx)
         # prepend variable bindings for lifted context expressions

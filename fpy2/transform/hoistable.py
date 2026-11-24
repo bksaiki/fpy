@@ -79,21 +79,18 @@ from ..ast.fpyast import (
     Assign,
     Compare,
     ContextStmt,
-    EffectStmt,
     Expr,
     ForeignVal,
-    ForStmt,
     FuncDef,
     If1Stmt,
     IfExpr,
     IfStmt,
-    IndexedAssign,
     ListComp,
+    Location,
     NamedId,
     NaryOp,
     Not,
     Or,
-    ReturnStmt,
     Stmt,
     StmtBlock,
     UnderscoreId,
@@ -137,13 +134,10 @@ class _HoistableInstance(DefaultTransformVisitor):
 
     func: FuncDef
     gensym: Gensym
-    prefix: str
-    """Base name for the temporaries this instance mints."""
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, prefix: str = 't'):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
-        self.prefix = prefix
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -160,7 +154,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         rebuilt = super()._visit_expr(e, ctx)
         if not ctx.hoistable:
             return rebuilt
-        fresh = lambda: self.gensym.fresh(self.prefix)
+        fresh = lambda: self.gensym.fresh('t')
         return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _lowered(self, e: Expr, ctx: _Ctx) -> bool:
@@ -172,9 +166,9 @@ class _HoistableInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # The two expression lowerings
 
-    def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
+    def _visit_if_expr(self, e: IfExpr, ctx: _Ctx) -> Expr:
         if self._lowered(e, ctx):
-            t = self.gensym.fresh(self.prefix)
+            t = self.gensym.fresh('t')
             # two steps: `_branch_on` appends the condition's own statements,
             # which belong before the `if`
             stmt = self._branch_on(e, t, ctx)
@@ -204,7 +198,7 @@ class _HoistableInstance(DefaultTransformVisitor):
             e.loc,
         )
 
-    def _bind(self, target: NamedId, e: Expr, ctx: _Ctx, loc) -> Stmt:
+    def _bind(self, target: NamedId, e: Expr, ctx: _Ctx, loc: Location | None) -> Stmt:
         """The statement binding *target* to *e*, appending *e*'s own statements
         to *ctx* first.
 
@@ -219,23 +213,23 @@ class _HoistableInstance(DefaultTransformVisitor):
                 return self._short_circuit(e, ctx, target)
             # a chain assigns its target before the later operands run, so one
             # that reads the target would see the accumulator
-            acc = self.gensym.fresh(self.prefix)
+            acc = self.gensym.fresh('t')
             ctx.stmts.append(self._short_circuit(e, ctx, acc))
             return Assign(target, None, Var(acc, loc), loc)
         return Assign(target, None, self._visit_expr(e, ctx), loc)
 
-    def _arm(self, target: NamedId, e: Expr, ctx: _Ctx, loc) -> StmtBlock:
+    def _arm(self, target: NamedId, e: Expr, ctx: _Ctx, loc: Location | None) -> StmtBlock:
         """A block binding *target* to *e*, with *e*'s own statements inside it
         -- the slot the arm lacked, running exactly when the arm did."""
         inner = ctx.buffer()
         inner.stmts.append(self._bind(target, e, inner, loc))
         return StmtBlock(inner.stmts)
 
-    def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
+    def _visit_naryop(self, e: NaryOp, ctx: _Ctx) -> Expr:
         if not isinstance(e, (And, Or)):
             return super()._visit_naryop(e, ctx)
         if self._lowered(e, ctx):
-            t = self.gensym.fresh(self.prefix)
+            t = self.gensym.fresh('t')
             ctx.stmts.append(self._short_circuit(e, ctx, t))
             return Var(t, e.loc)
         # Short-circuit: the first operand always runs, the rest do not.
@@ -247,7 +241,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         ]
         return type(e)(args, e.loc)
 
-    def _short_circuit(self, e: 'And | Or', ctx: _Ctx, target: NamedId) -> Stmt:
+    def _short_circuit(self, e: And | Or, ctx: _Ctx, target: NamedId) -> Stmt:
         """*e* accumulated into *target*, one guard per operand after the first.
 
         The guards are *flat* and short-circuit all the same: once an ``or``'s
@@ -271,7 +265,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         ctx.stmts.extend(stmts[:-1])
         return stmts[-1]
 
-    def _visit_compare(self, e: Compare, ctx: _Ctx):
+    def _visit_compare(self, e: Compare, ctx: _Ctx) -> Compare:
         """``a < b < c`` is the conjunction of the adjacent pairs, so every
         operand after the second runs only where the earlier tests held."""
         sealed = ctx.sealed()
@@ -281,7 +275,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         ]
         return Compare(e.ops, args, e.loc)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> Expr:
         # The element runs once per iteration, and a later clause's iterable may
         # read an earlier clause's target, so the whole comprehension is sealed.
         return super()._visit_list_comp(e, ctx.sealed())
@@ -289,7 +283,7 @@ class _HoistableInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # Statements
 
-    def _visit_block(self, block: StmtBlock, ctx: Any):
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, Any]:
         # a temporary belongs to the block whose statement needs it, and the
         # prefix rule is asked of one statement at a time
         inner = _Ctx(stmts=[])
@@ -300,7 +294,7 @@ class _HoistableInstance(DefaultTransformVisitor):
             inner.stmts.append(s)
         return StmtBlock(inner.stmts), ctx
 
-    def _visit_assign(self, stmt: Assign, ctx: _Ctx):
+    def _visit_assign(self, stmt: Assign, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         if isinstance(stmt.target, NamedId) and stmt.type is None:
             # A lowered right-hand side assigns this name directly rather than a
             # temporary this statement copies.  Not where the assignment carries
@@ -310,26 +304,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         expr = self._visit_expr(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
-        indices = [self._visit_expr(i, ctx) for i in stmt.indices]
-        expr = self._visit_expr(stmt.expr, ctx)
-        return IndexedAssign(stmt.var, indices, expr, stmt.loc), ctx
-
-    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
-        return ReturnStmt(self._visit_expr(stmt.expr, ctx), stmt.loc), ctx
-
-    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        body, _ = self._visit_block(stmt.body, ctx)
-        return If1Stmt(cond, body, stmt.loc), ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        ift, _ = self._visit_block(stmt.ift, ctx)
-        iff, _ = self._visit_block(stmt.iff, ctx)
-        return IfStmt(cond, ift, iff, stmt.loc), ctx
-
-    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         if isinstance(stmt.cond, ATOMIC):
             # already a place; nothing in it to hoist
             body, _ = self._visit_block(stmt.body, ctx)
@@ -359,12 +334,7 @@ class _HoistableInstance(DefaultTransformVisitor):
             body.stmts.append(Assign(c, None, again, stmt.loc))
         return WhileStmt(Var(c, stmt.loc), body, stmt.loc)
 
-    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
-        iterable = self._visit_expr(stmt.iterable, ctx)
-        body, _ = self._visit_block(stmt.body, ctx)
-        return ForStmt(stmt.target, iterable, body, stmt.loc), ctx
-
-    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         """A ``with`` statement, whose two halves round differently.
 
         As in :meth:`fpy2.transform.anf._ANFInstance._visit_context`:
@@ -384,16 +354,13 @@ class _HoistableInstance(DefaultTransformVisitor):
         body, _ = self._visit_block(stmt.body, ctx)
         return ContextStmt(stmt.target, context, body, stmt.loc), ctx
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         # the message is evaluated only where the test fails, and there is no
         # slot that runs then -- so it is sealed, like a comprehension
         test = self._visit_expr(stmt.test, ctx)
         sealed = ctx.sealed()
         msg = None if stmt.msg is None else self._visit_expr(stmt.msg, sealed)
         return AssertStmt(test, msg, stmt.loc), ctx
-
-    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
-        return EffectStmt(self._visit_expr(stmt.expr, ctx), stmt.loc), ctx
 
 
 class Hoistable:

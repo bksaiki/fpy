@@ -316,7 +316,7 @@ class TestAbstractFormat():
 
     # ------------------------------------------------------------------
     # Subnormal-region containment: the asymmetric branch of
-    # ``_is_contained_in`` where ``self.prec > other.prec`` but every
+    # ``contained_in`` where ``self.prec > other.prec`` but every
     # value in ``self`` lives within ``other``'s subnormal region.
 
     def test_contains_high_prec_but_small_bound_in_subnormal_region(self):
@@ -795,14 +795,11 @@ class TestNextBound:
         """Each rebuilds the format, and the constructor defaults
         `has_neg_zero` to `False`, so a builder that forgets it drops the flag
         silently."""
-        from fpy2.number.number.reals import RealFloat
-
         f = self._fp32()
         assert f.has_neg_zero
         for out in (
             f.with_prec_offset(2),
             f.with_exp_offset(-2),
-            f.with_bounds_scale(RealFloat(c=2, exp=0)),
             f.next_bound(),
         ):
             assert out.has_neg_zero, out

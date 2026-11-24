@@ -2,17 +2,18 @@
 Mathematical functions under rounding contexts.
 """
 
+from collections.abc import Callable, Sequence
 from fractions import Fraction
+from typing import overload
 
 from .number import REAL, RM, Context, Float, Real, RealFloat
-from .number.engine import ENGINES
+from .number.engine import ENGINES, Engine
+from .number.engine.engine import EngineRes
 from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
 __all__ = [
     '_cvt_to_float',
-    # utilities
     '_cvt_to_real',
-    # General operations
     'acos',
     'acosh',
     'add',
@@ -23,7 +24,6 @@ __all__ = [
     'atanh',
     'cast',
     'cbrt',
-    # Round-to-integer operations
     'ceil',
     'const_1_pi',
     'const_2_pi',
@@ -40,11 +40,9 @@ __all__ = [
     'copysign',
     'cos',
     'cosh',
-    # Constants
     'digits',
     'dim',
     'div',
-    # Tensor
     'empty',
     'erf',
     'erfc',
@@ -59,14 +57,12 @@ __all__ = [
     'fmax',
     'fmin',
     'fmod',
-    # Tuple
     'fst',
     'hexfloat',
     'hypot',
     'inf',
     'isfinite',
     'isinf',
-    # Classification
     'isnan',
     'isnormal',
     'lgamma',
@@ -83,12 +79,10 @@ __all__ = [
     'pow',
     'rational',
     'remainder',
-    # Rounding operations
     'round',
     'round_at',
     'round_exact',
     'roundint',
-    # Numerical data
     'signbit',
     'sin',
     'sinh',
@@ -130,7 +124,7 @@ def _cvt_to_float(x: Real) -> Float:
         case _:
             raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(t)}\' for x={x}')
 
-def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, ...] = ()):
+def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, ...] = ()) -> Float | Fraction:
     if ctx is REAL and isinstance(x, Fraction):
         return x
     else:
@@ -145,17 +139,53 @@ def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, 
         return result
 
 
+def _check_ctx(ctx: object) -> None:
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+
+type _Op = Callable[[Engine], Callable[..., EngineRes]]
+
+def _dispatch(op: _Op, ctx: Context, *args: Real) -> tuple[Float | Fraction, tuple[Float | Fraction, ...]]:
+    """The first engine's result for *op* over *args*, and *args* as reals."""
+    _check_ctx(ctx)
+    xs = tuple(_cvt_to_real(x) for x in args)
+    for engine in ENGINES:
+        r = op(engine)(*xs, ctx)
+        if r is not None:
+            return r, xs
+    raise NotImplementedError(f'{op(Engine()).__name__}() not implemented for ctx={ctx}')
+
+def _eval(op: _Op, ctx: Context, *args: Real) -> Float | Fraction:
+    """*op* over *args*, rounded under *ctx*."""
+    r, xs = _dispatch(op, ctx, *args)
+    return _normalize(r, ctx, xs)
+
+def _const(op: _Op, ctx: Context) -> Float:
+    """The constant *op* rounded under *ctx*; no engine computes one exactly."""
+    r = _eval(op, ctx)
+    assert isinstance(r, Float)
+    return r
+
+
+def _round_integer(op: _Op, ctx: Context, x: Real) -> Float | Fraction:
+    """The integer *op* rounds *x* to under *ctx*, inexact where it differs from *x*."""
+    r, _ = _dispatch(op, ctx, x)
+    y = _normalize(r, ctx)
+    if isinstance(y, Float) and y.is_finite() and y != x:
+        y._real._flags._set_inexact(True)
+    return y
+
 def _rational(x: Float | Fraction) -> Fraction:
     return x if isinstance(x, Fraction) else x.as_rational()
 
 
-def _zero_sum(r: Real, ctx: Context, terms: tuple[Float | Fraction, ...],
-              zero_signs: tuple[bool, ...]) -> Real:
+def _zero_sum(r: Float | Fraction, ctx: Context, terms: tuple[Float | Fraction, ...],
+              zero_signs: tuple[bool, ...]) -> Float | Fraction:
     """*r*, the sum of *terms*, with IEEE 754's sign when that sum is exactly
     zero (Sec. 6.3): its terms' sign when all are zeros of that one sign
     (*zero_signs*, a zero term's sign), else -0 rounding toward negative and
     +0 otherwise.  Only the toward-negative case differs from the engines'."""
-    if (getattr(ctx, 'rm', None) is not RM.RTN or not isinstance(r, Float)
+    if (ctx.rounding_mode() is not RM.RTN or not isinstance(r, Float)
             or not r.is_zero() or r.s):
         return r
     if len(zero_signs) == len(terms) and len(set(zero_signs)) == 1:
@@ -193,436 +223,148 @@ def _flatten(x: list) -> list:
 ################################################################################
 # General operations
 
-def acos(x: Real, ctx: Context = REAL):
+def acos(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse cosine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.acos, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.acos(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'acos() not implemented for ctx={ctx}')
-
-def acosh(x: Real, ctx: Context = REAL):
+def acosh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse hyperbolic cosine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.acosh, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.acosh(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'acosh() not implemented for ctx={ctx}')
-
-def add(x: Real, y: Real, ctx: Context = REAL):
+def add(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Adds `x` and `y` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    r, (xr, yr) = _dispatch(lambda e: e.add, ctx, x, y)
+    return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, yr),
+                     _zero_sign(xr) + _zero_sign(yr))
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.add(xr, yr, ctx)
-        if r is not None:
-            return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, yr),
-                             _zero_sign(xr) + _zero_sign(yr))
-
-    raise NotImplementedError(f'add() not implemented for ctx={ctx}')
-
-def asin(x: Real, ctx: Context = REAL):
+def asin(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse sine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.asin, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.asin(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'asin() not implemented for ctx={ctx}')
-
-def asinh(x: Real, ctx: Context = REAL):
+def asinh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse hyperbolic sine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.asinh, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.asinh(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'asinh() not implemented for ctx={ctx}')
-
-def atan(x: Real, ctx: Context = REAL):
+def atan(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse tangent of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.atan, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.atan(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'atan() not implemented for ctx={ctx}')
-
-def atan2(y: Real, x: Real, ctx: Context = REAL):
+def atan2(y: Real, x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes `atan(y / x)` taking into account the correct quadrant
     that the point `(x, y)` resides in. The result is rounded under `ctx`.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.atan2, ctx, y, x)
 
-    yr = _cvt_to_real(y)
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.atan2(yr, xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (yr, xr))
-
-    raise NotImplementedError(f'atan2() not implemented for ctx={ctx}')
-
-def atanh(x: Real, ctx: Context = REAL):
+def atanh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the inverse hyperbolic tangent of `x` under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.atanh, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.atanh(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'atanh() not implemented for ctx={ctx}')
-
-def cbrt(x: Real, ctx: Context = REAL):
+def cbrt(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the cube root of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.cbrt, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.cbrt(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'cbrt() not implemented for ctx={ctx}')
-
-def copysign(x: Real, y: Real, ctx: Context = REAL):
+def copysign(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Returns `|x| * sign(y)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.copysign, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.copysign(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'copysign() not implemented for ctx={ctx}')
-
-def cos(x: Real, ctx: Context = REAL):
+def cos(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the cosine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.cos, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.cos(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'cos() not implemented for ctx={ctx}')
-
-def cosh(x: Real, ctx: Context = REAL):
+def cosh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the hyperbolic cosine `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.cosh, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.cosh(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'cosh() not implemented for ctx={ctx}')
-
-def div(x: Real, y: Real, ctx: Context = REAL):
+def div(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `x / y` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.div, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.div(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'div() not implemented for ctx={ctx}')
-
-def erf(x: Real, ctx: Context = REAL):
+def erf(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the error function of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.erf, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.erf(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'erf() not implemented for ctx={ctx}')
-
-def erfc(x: Real, ctx: Context = REAL):
+def erfc(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `1 - erf(x)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.erfc, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.erfc(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'erfc() not implemented for ctx={ctx}')
-
-def exp(x: Real, ctx: Context = REAL):
+def exp(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `e ** x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.exp, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.exp(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'exp() not implemented for ctx={ctx}')
-
-def exp2(x: Real, ctx: Context = REAL):
+def exp2(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `2 ** x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.exp2, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.exp2(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'exp2() not implemented for ctx={ctx}')
-
-def exp10(x: Real, ctx: Context = REAL):
+def exp10(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `10 *** x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.exp10, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.exp10(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'exp10() not implemented for ctx={ctx}')
-
-def expm1(x: Real, ctx: Context = REAL):
+def expm1(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `exp(x) - 1` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.expm1, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.expm1(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'expm1() not implemented for ctx={ctx}')
-
-def fabs(x: Real, ctx: Context = REAL):
+def fabs(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `|x|` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.fabs, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.fabs(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'fabs() not implemented for ctx={ctx}')
-
-def fdim(x: Real, y: Real, ctx: Context = REAL):
+def fdim(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `max(x - y, 0)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.fdim, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.fdim(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'fdim() not implemented for ctx={ctx}')
-
-def fma(x: Real, y: Real, z: Real, ctx: Context = REAL):
+def fma(x: Real, y: Real, z: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `x * y + z` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    r, (xr, yr, zr) = _dispatch(lambda e: e.fma, ctx, x, y, z)
+    out = _normalize(r, ctx, (xr, yr, zr))
+    if any(isinstance(t, Float) and t.is_nar() for t in (xr, yr)):
+        return out
+    # the exact product's sign, when it is zero
+    p = _rational(xr) * _rational(yr)
+    ps = (_signbit_of(xr) != _signbit_of(yr),) if p == 0 else ()
+    return _zero_sum(out, ctx, (p, zr), ps + _zero_sign(zr))
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    zr = _cvt_to_real(z)
-    for engine in ENGINES:
-        r = engine.fma(xr, yr, zr, ctx)
-        if r is not None:
-            out = _normalize(r, ctx, (xr, yr, zr))
-            if any(isinstance(t, Float) and t.is_nar() for t in (xr, yr)):
-                return out
-            # the exact product's sign, when it is zero
-            p = _rational(xr) * _rational(yr)
-            ps = (_signbit_of(xr) != _signbit_of(yr),) if p == 0 else ()
-            return _zero_sum(out, ctx, (p, zr), ps + _zero_sign(zr))
-
-    raise NotImplementedError(f'fma() not implemented for ctx={ctx}')
-
-def fmax(x: Real, y: Real, ctx: Context = REAL):
+def fmax(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `max(x, y)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.fmax, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.fmax(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'fmax() not implemented for ctx={ctx}')
-
-def fmin(x: Real, y: Real, ctx: Context = REAL):
+def fmin(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `min(x, y)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.fmin, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.fmin(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'fmin() not implemented for ctx={ctx}')
-
-def fmod(x: Real, y: Real, ctx: Context = REAL):
+def fmod(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the remainder of `x / y` rounded under this context.
 
     The remainder has the same sign as `x`; it is exactly `x - iquot * y`,
     where `iquot` is the `x / y` with its fractional part truncated.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.fmod, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.fmod(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'fmod() not implemented for ctx={ctx}')
-
-def hypot(x: Real, y: Real, ctx: Context = REAL):
+def hypot(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `sqrt(x * x + y * y)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.hypot, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.hypot(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'hypot() not implemented for ctx={ctx}')
-
-def lgamma(x: Real, ctx: Context = REAL):
+def lgamma(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the log-gamma of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.lgamma, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.lgamma(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'lgamma() not implemented for ctx={ctx}')
-
-def log(x: Real, ctx: Context = REAL):
+def log(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log(x)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.log, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.log(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'log() not implemented for ctx={ctx}')
-
-def log10(x: Real, ctx: Context = REAL):
+def log10(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log10(x)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.log10, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.log10(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'log10() not implemented for ctx={ctx}')
-
-def log1p(x: Real, ctx: Context = REAL):
+def log1p(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log1p(x)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.log1p, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.log1p(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'log1p() not implemented for ctx={ctx}')
-
-def log2(x: Real, ctx: Context = REAL):
+def log2(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `log2(x)` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.log2, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.log2(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'log2() not implemented for ctx={ctx}')
-
-def mod(x: Real, y: Real, ctx: Context = REAL):
+def mod(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes `x % y` rounded under `ctx`.
 
@@ -630,33 +372,13 @@ def mod(x: Real, y: Real, ctx: Context = REAL):
 
         x % y = x - floor(x / y) * y
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.mod, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.mod(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'mod() not implemented for ctx={ctx}')
-
-def mul(x: Real, y: Real, ctx: Context = REAL):
+def mul(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Multiplies `x` and `y` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.mul, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.mul(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'mul() not implemented for ctx={ctx}')
-
-def neg(x: Real, ctx: Context = REAL):
+def neg(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `-x` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
@@ -669,139 +391,55 @@ def neg(x: Real, ctx: Context = REAL):
 
     raise NotImplementedError(f'neg() not implemented for ctx={ctx}')
 
-def pow(x: Real, y: Real, ctx: Context = REAL):
+def pow(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes `x**y` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.pow, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.pow(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'pow() not implemented for ctx={ctx}')
-
-def remainder(x: Real, y: Real, ctx: Context = REAL):
+def remainder(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the remainder of `x / y` rounded under `ctx`.
 
     The remainder is exactly `x - quo * y`, where `quo` is the
     integral value nearest the exact value of `x / y`.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.remainder, ctx, x, y)
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.remainder(xr, yr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr, yr))
-
-    raise NotImplementedError(f'remainder() not implemented for ctx={ctx}')
-
-def sin(x: Real, ctx: Context = REAL):
+def sin(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the sine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.sin, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.sin(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'sin() not implemented for ctx={ctx}')
-
-def sinh(x: Real, ctx: Context = REAL):
+def sinh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the hyperbolic sine of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.sinh, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.sinh(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'sinh() not implemented for ctx={ctx}')
-
-def sqrt(x: Real, ctx: Context = REAL):
+def sqrt(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes square-root of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.sqrt, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.sqrt(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'sqrt() not implemented for ctx={ctx}')
-
-def sub(x: Real, y: Real, ctx: Context = REAL):
+def sub(x: Real, y: Real, ctx: Context = REAL) -> Float | Fraction:
     """Subtracts `y` from `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    r, (xr, yr) = _dispatch(lambda e: e.sub, ctx, x, y)
+    ny = -_rational(yr) if not (isinstance(yr, Float) and yr.is_nar()) else yr
+    return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, ny),
+                     _zero_sign(xr) + tuple(not s for s in _zero_sign(yr)))
 
-    xr = _cvt_to_real(x)
-    yr = _cvt_to_real(y)
-    for engine in ENGINES:
-        r = engine.sub(xr, yr, ctx)
-        if r is not None:
-            ny = -_rational(yr) if not (isinstance(yr, Float) and yr.is_nar()) else yr
-            return _zero_sum(_normalize(r, ctx, (xr, yr)), ctx, (xr, ny),
-                             _zero_sign(xr) + tuple(not s for s in _zero_sign(yr)))
-
-    raise NotImplementedError(f'sub() not implemented for ctx={ctx}')
-
-def tan(x: Real, ctx: Context = REAL):
+def tan(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the tangent of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.tan, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.tan(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'tan() not implemented for ctx={ctx}')
-
-def tanh(x: Real, ctx: Context = REAL):
+def tanh(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes the hyperbolic tangent of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _eval(lambda e: e.tanh, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.tanh(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'tanh() not implemented for ctx={ctx}')
-
-def tgamma(x: Real, ctx: Context = REAL):
+def tgamma(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """Computes gamma of `x` rounded under `ctx`."""
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.tgamma(xr, ctx)
-        if r is not None:
-            return _normalize(r, ctx, (xr,))
-
-    raise NotImplementedError(f'tgamma() not implemented for ctx={ctx}')
+    return _eval(lambda e: e.tgamma, ctx, x)
 
 #############################################################################
 # Rounding operations
 
-def _round(x: Real, ctx: Context | None, exact: bool):
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+def _round(x: Real, ctx: Context | None, exact: bool) -> Float | Fraction:
+    _check_ctx(ctx)
     if ctx is None or ctx is REAL:
         # real computation; no rounding
         if isinstance(x, Fraction):
@@ -811,7 +449,11 @@ def _round(x: Real, ctx: Context | None, exact: bool):
     else:
         return ctx.round(x, exact=exact)
 
-def round(x: Real, ctx: Context = REAL):
+@overload
+def round(x: float | Float, ctx: Context = REAL) -> Float: ...
+@overload
+def round(x: Real, ctx: Context = REAL) -> Float | Fraction: ...
+def round(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Rounds `x` under the given context `ctx`.
 
@@ -819,7 +461,7 @@ def round(x: Real, ctx: Context = REAL):
     """
     return _round(x, ctx, exact=False)
 
-def round_exact(x: Real, ctx: Context = REAL):
+def round_exact(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Rounds `x` under the given context `ctx`.
 
@@ -842,7 +484,7 @@ def round_at(x: Real, n: Real, ctx: Context = REAL) -> Float:
     else:
         return ctx.round_at(x, int(n))
 
-def cast(x: Real, ctx: Context = REAL):
+def cast(x: Real, ctx: Context = REAL) -> Real:
     """
     Identity operation that checks if `x` is representable in the context `ctx`.
     
@@ -850,61 +492,33 @@ def cast(x: Real, ctx: Context = REAL):
     This is useful for asserting that a value fits within a specific rounding context.
     """
     if ctx is None or ctx is REAL:
-        # real computation; always representable
         return x
     else:
-        # Check if x can be exactly represented in ctx
         rounded = ctx.round(x, exact=True)
         return rounded
 
 #############################################################################
 # Round-to-integer operations
 
-def ceil(x: Real, ctx: Context = REAL):
+def ceil(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the smallest integer greater than or equal to `x`
     that is representable under `ctx`.
 
     If the context supports overflow, the result may be infinite.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _round_integer(lambda e: e.ceil, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.ceil(xr, ctx)
-        if r is not None:
-            y = _normalize(r, ctx)
-            # set the inexact flag if the result does not equal the original value
-            if isinstance(y, Float) and y.is_finite() and y != x:
-                y._real._flags._set_inexact(True)
-            return y
-
-    raise NotImplementedError(f'ceil() not implemented for ctx={ctx}')
-
-def floor(x: Real, ctx: Context = REAL):
+def floor(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the largest integer less than or equal to `x`
     that is representable under `ctx`.
 
     If the context supports overflow, the result may be infinite.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _round_integer(lambda e: e.floor, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.floor(xr, ctx)
-        if r is not None:
-            y = _normalize(r, ctx)
-            # set the inexact flag if the result does not equal the original value
-            if isinstance(y, Float) and y.is_finite() and y != x:
-                y._real._flags._set_inexact(True)
-            return y
-
-    raise NotImplementedError(f'floor() not implemented for ctx={ctx}')
-
-def trunc(x: Real, ctx: Context = REAL):
+def trunc(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Computes the integer with the largest magnitude whose
     magnitude is less than or equal to the magnitude of `x`
@@ -912,56 +526,29 @@ def trunc(x: Real, ctx: Context = REAL):
 
     If the context supports overflow, the result may be infinite.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _round_integer(lambda e: e.trunc, ctx, x)
 
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.trunc(xr, ctx)
-        if r is not None:
-            y = _normalize(r, ctx)
-            # set the inexact flag if the result does not equal the original value
-            if isinstance(y, Float) and y.is_finite() and y != x:
-                y._real._flags._set_inexact(True)
-            return y
-
-    raise NotImplementedError(f'trunc() not implemented for ctx={ctx}')
-
-def nearbyint(x: Real, ctx: Context = REAL):
+def nearbyint(x: Real, ctx: Context = REAL) -> Float:
     """
     Rounds `x` to a representable integer according to
     the rounding mode of this context.
 
     If the context supports overflow, the result may be infinite.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    _check_ctx(ctx)
     if ctx is None or ctx is REAL:
         raise RuntimeError('nearbyint() not supported in RealContext')
     else:
         return ctx.round_integer(x)
 
-def roundint(x: Real, ctx: Context = REAL):
+def roundint(x: Real, ctx: Context = REAL) -> Float | Fraction:
     """
     Rounds `x` to the nearest representable integer,
     rounding ties away from zero in halfway cases.
 
     If the context supports overflow, the result may be infinite.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    xr = _cvt_to_real(x)
-    for engine in ENGINES:
-        r = engine.roundint(xr, ctx)
-        if r is not None:
-            y = _normalize(r, ctx)
-            # set the inexact flag if the result does not equal the original value
-            if isinstance(y, Float) and y.is_finite() and y != x:
-                y._real._flags._set_inexact(True)
-            return y
-
-    raise NotImplementedError(f'roundint() not implemented for ctx={ctx}')
+    return _round_integer(lambda e: e.roundint, ctx, x)
 
 #############################################################################
 # Classification
@@ -1013,16 +600,12 @@ def logb(x: Real, ctx: Context = REAL) -> Float:
     # TODO: compute `logb` for a non-dyadic fraction
     x = _cvt_to_float(x)
     if x.is_nonzero():
-        # finite, non-zero => floor(log2(abs(x)))
         return ctx.round(RealFloat.from_int(x.e))
     elif x.isinf:
-        # infinite => +inf
         return ctx.round(Float(isinf=True))
     elif x.isnan:
-        # NaN => NaN
         return ctx.round(Float(isnan=True))
     else:
-        # 0 => -inf
         return ctx.round(Float(s=True, isinf=True))
 
 
@@ -1052,7 +635,7 @@ def empty(*dims: Real, ctx: Context = REAL) -> list:
 
     return _empty(int_dims)
 
-def dim(x: list, ctx: Context = REAL):
+def dim(x: list, ctx: Context = REAL) -> Float:
     """
     Returns the number of dimensions of the tensor `x`.
 
@@ -1061,9 +644,7 @@ def dim(x: list, ctx: Context = REAL):
     A shape query: the answer is an exact integer, so `ctx` is accepted for
     uniformity and ignored (as it is by the other queries and projections).
     """
-    # `dim` is list-only in FPy (matches `TypeInfer`, which unifies `Dim`'s
-    # argument with a list type); reject a non-list operand rather than
-    # silently returning 0.
+    # `dim` is list-only in FPy
     if not isinstance(x, list):
         raise TypeError(f'dim() expects a list, got {x}')
     dim = 0
@@ -1078,7 +659,7 @@ def dim(x: list, ctx: Context = REAL):
 
     return Float.from_int(dim, checked=False)
 
-def size(x: list, dim: Real, ctx: Context = REAL):
+def size(x: list, dim: Real, ctx: Context = REAL) -> Float:
     """
     Returns the size of the dimension `dim` of the tensor `x`.
 
@@ -1096,7 +677,7 @@ def size(x: list, dim: Real, ctx: Context = REAL):
 #############################################################################
 # Tuple
 
-def fst(x, ctx: Context = REAL):
+def fst[T](x: Sequence[T], ctx: Context = REAL) -> T:
     """
     Returns the first element `x` of a pair `(x, y)`.
     """
@@ -1104,7 +685,7 @@ def fst(x, ctx: Context = REAL):
         raise ValueError(f'fst requires a pair, got `{x}`')
     return x[0]
 
-def snd(x, ctx: Context = REAL):
+def snd[T](x: Sequence[T], ctx: Context = REAL) -> T:
     """
     Returns the second element `y` of a pair `(x, y)`.
     """
@@ -1172,199 +753,95 @@ def rational(n: int, d: int, ctx: Context = REAL) -> Float:
         return ctx.round(x)
 
 def nan(ctx: Context = REAL) -> Float:
-    """
-    Creates a `Float` representing NaN (Not a Number).
-    The result is rounded under the given context.
-    """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return Float(isnan=True, ctx=ctx)
+    """NaN (Not a Number) rounded under `ctx`."""
+    _check_ctx(ctx)
+    return ctx.round(Float(isnan=True))
 
 def inf(ctx: Context = REAL) -> Float:
-    """
-    Creates a `Float` representing (positive) infinity.
-    The result is rounded under the given context.
-    """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return Float(isinf=True, ctx=ctx)
+    """Positive infinity rounded under `ctx`."""
+    _check_ctx(ctx)
+    return ctx.round(Float(isinf=True))
 
 def const_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing π (pi).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_pi(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_pi() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_pi, ctx)
 
 def const_e(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing e (Euler's number).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_e(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_e() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_e, ctx)
 
 def const_log2e(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing log2(e) (the logarithm of e base 2).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_log2e(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_log2e() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_log2e, ctx)
 
 def const_log10e(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing log10(e) (the logarithm of e base 10).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_log10e(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_log10e() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_log10e, ctx)
 
 def const_ln2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing ln(2) (the natural logarithm of 2).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_ln2(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_ln2() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_ln2, ctx)
 
 def const_pi_2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing π/2 (pi divided by 2).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_pi_2(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_pi_2() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_pi_2, ctx)
 
 def const_pi_4(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing π/4 (pi divided by 4).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_pi_4(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_pi_4() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_pi_4, ctx)
 
 def const_1_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing 1/π (one divided by pi).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_1_pi(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_1_pi() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_1_pi, ctx)
 
 def const_2_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing 2/π (two divided by pi).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_2_pi(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_2_pi() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_2_pi, ctx)
 
 def const_2_sqrt_pi(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing 2/sqrt(π) (two divided by the square root of pi).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_2_sqrtpi(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_2_sqrt_pi() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_2_sqrt_pi, ctx)
 
 def const_sqrt2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing sqrt(2) (the square root of 2).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_sqrt2(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_sqrt2() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_sqrt2, ctx)
 
 def const_sqrt1_2(ctx: Context = REAL) -> Float:
     """
     Creates a `Float` representing sqrt(1/2) (the square root of 1/2).
     The result is rounded under the given context.
     """
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-
-    for engine in ENGINES:
-        r = engine.const_sqrt1_2(ctx)
-        if r is not None:
-            return _normalize(r, ctx)
-
-    raise NotImplementedError(f'const_sqrt1_2() not implemented for ctx={ctx}')
+    return _const(lambda e: e.const_sqrt1_2, ctx)

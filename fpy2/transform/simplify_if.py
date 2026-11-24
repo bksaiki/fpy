@@ -24,10 +24,9 @@ from ..number import (
 from ..primitive import Primitive
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
-from .cursor import Cursor, EditLog, StmtPath
-from .error import TransformDeclined
+from .cursor import Cursor, EditLog
 from .rename_target import RenameTarget
-from .utils import SiteRewriter, check_where
+from .utils import SiteRewriter, check_where, clone
 
 # Scoped statements (`with`) are absent on purpose: the scan descends into
 # them, since their contents become unconditional too.
@@ -54,22 +53,18 @@ bounds the blowup when arms nest.
 """
 
 
-def _clone(e: Expr) -> Expr:
-    """A substituted expression cannot be shared between two occurrences: the
-    analyses key on node identity."""
-    return DefaultTransformVisitor()._visit_expr(e, None)
-
-
 class _Subst(DefaultTransformVisitor):
     """Replaces names by expressions, one fresh copy per occurrence."""
 
-    def __init__(self, env: dict[NamedId, Expr]):
+    env: dict[NamedId, Expr]
+
+    def __init__(self, env: dict[NamedId, Expr]) -> None:
         super().__init__()
         self.env = env
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> Expr:
         sub = self.env.get(e.name)
-        return Var(e.name, e.loc) if sub is None else _clone(sub)
+        return Var(e.name, e.loc) if sub is None else clone(sub)
 
     def apply(self, e: Expr) -> Expr:
         return self._visit_expr(e, None)
@@ -78,11 +73,13 @@ class _Subst(DefaultTransformVisitor):
 class _Size(DefaultVisitor):
     """Expression nodes beneath a node, to bound substitution growth."""
 
-    def __init__(self):
+    n: int
+
+    def __init__(self) -> None:
         super().__init__()
         self.n = 0
 
-    def _visit_expr(self, e: Expr, ctx):
+    def _visit_expr(self, e: Expr, ctx: None) -> None:
         self.n += 1
         return super()._visit_expr(e, ctx)
 
@@ -141,11 +138,15 @@ class _Unhoistable(DefaultVisitor):
     requested abort.
     """
 
-    def __init__(self, ctx_use: ContextUseAnalysis):
+    ctx_use: ContextUseAnalysis
+    aborts: str | None
+    unproven: str | None
+
+    def __init__(self, ctx_use: ContextUseAnalysis) -> None:
         super().__init__()
         self.ctx_use = ctx_use
-        self.aborts: str | None = None
-        self.unproven: str | None = None
+        self.aborts = None
+        self.unproven = None
 
     def _abort(self, why: str) -> None:
         if self.aborts is None:
@@ -155,21 +156,21 @@ class _Unhoistable(DefaultVisitor):
         if self.unproven is None:
             self.unproven = why
 
-    def _visit_statement(self, stmt: Stmt, ctx):
+    def _visit_statement(self, stmt: Stmt, ctx: None) -> None:
         why = _UNHOISTABLE.get(type(stmt))
         if why is not None:
             self._abort(why)
         return super()._visit_statement(stmt, ctx)
 
-    def _visit_list_ref(self, e: ListRef, ctx):
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> None:
         self._cannot_prove('a subscript may be out of range outside its guard')
         super()._visit_list_ref(e, ctx)
 
-    def _visit_list_slice(self, e: ListSlice, ctx):
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> None:
         self._cannot_prove('a slice may be out of range outside its guard')
         super()._visit_list_slice(e, ctx)
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         """A callee's body is not scanned, so an abort inside it -- an
         `assert`, a rounding that overflows -- would reach the hoist unseen.
         Refused rather than analyzed interprocedurally.
@@ -191,7 +192,7 @@ class _Unhoistable(DefaultVisitor):
                 self._abort('a call to a foreign function may abort')
         super()._visit_call(e, ctx)
 
-    def _visit_expr(self, e: Expr, ctx):
+    def _visit_expr(self, e: Expr, ctx: None) -> None:
         if isinstance(e, Cast):
             self._abort(
                 '`fp.cast` asserts its result is exact, so hoisting it can abort'
@@ -204,9 +205,7 @@ class _Unhoistable(DefaultVisitor):
 
         Keyed on whether `ContextUse` records *e* as a use site, not on its node
         class: every rounded operation consults the ambient context, so `x * x`
-        overflows under an `ASSERT` context exactly as `fp.round(x)` does.  An
-        earlier version asked `isinstance(e, Round | Cast)` and let arithmetic,
-        and `fp.round_at`, through.
+        overflows under an `ASSERT` context exactly as `fp.round(x)` does.
 
         A context that does not resolve to a concrete one -- a function with no
         ``ctx=`` inherits its caller's -- cannot be shown either way, so it is
@@ -270,6 +269,8 @@ class _SimplifyIfInstance(SiteRewriter):
     """Single-use instance of the SimplifyIf pass."""
     func: FuncDef
     def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
+    strict: bool
     gensym: Gensym
 
     def __init__(
@@ -279,7 +280,7 @@ class _SimplifyIfInstance(SiteRewriter):
         ctx_use: ContextUseAnalysis,
         strict: bool,
         where: int | Cursor | None = None,
-    ):
+    ) -> None:
         super().__init__()
         self.func = func
         self.def_use = def_use
@@ -288,7 +289,7 @@ class _SimplifyIfInstance(SiteRewriter):
         self.where = where
         self.gensym = Gensym(reserved=def_use.names())
 
-    def apply(self):
+    def apply(self) -> tuple[FuncDef, set[NamedId]]:
         func = self._visit_function(self.func, None)
         self.check_site('an `if` statement')
         return func, self.gensym.generated
@@ -296,29 +297,14 @@ class _SimplifyIfInstance(SiteRewriter):
     def _claims(self, stmt: Stmt, *bodies: StmtBlock) -> bool:
         """Whether to rewrite here.  A refusal that was aimed at is raised
         rather than skipped: a named site this pass cannot take is an error."""
-        block, pos = self._site
         why: str | None = None
         for body in bodies:
             why = _why_unhoistable(body, self.ctx_use, self.strict)
             if why is not None:
                 break
+        return self._claim(stmt, why, 'cannot rewrite `if` to `if` expression')
 
-        if why is not None:
-            if self._refuse(stmt, why) and not self.listing:
-                raise TransformDeclined(f'cannot rewrite `if` to `if` expression: {why}')
-            return False
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects(block, pos, idx):
-            return False
-        self._matched += 1
-        if self.listing:
-            self.found.append(StmtPath(self._paths[id(block)], pos))
-            return False
-        return True
-
-    def _emit(self, ctx: list[Stmt], stmts: list[Stmt]):
+    def _emit(self, ctx: list[Stmt], stmts: list[Stmt]) -> tuple[Stmt, None]:
         """Give the enclosing block *stmts* in place of the `if`, returning the
         last as the replacement per :meth:`SiteRewriter._visit_block`."""
         self._replaced = True
@@ -326,7 +312,7 @@ class _SimplifyIfInstance(SiteRewriter):
         return stmts[-1], None
 
     def _rewrite(
-        self, cond_e: Expr, ift: StmtBlock, iff: StmtBlock | None, ctx,
+        self, cond_e: Expr, ift: StmtBlock, iff: StmtBlock | None, ctx: list[Stmt],
     ) -> list[Stmt]:
         """The statements replacing an `if`, with *iff* `None` for a one-armed
         one -- which is this rewrite with an empty else throughout: no names
@@ -406,12 +392,12 @@ class _SimplifyIfInstance(SiteRewriter):
             stmts.append(Assign(var, None, Var(tmp[var], None), None))
         return stmts
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: list[Stmt]):
+    def _visit_if1(self, stmt: If1Stmt, ctx: list[Stmt]) -> tuple[Stmt, list[Stmt] | None]:
         if not self._claims(stmt, stmt.body):
             return super()._visit_if1(stmt, ctx)
         return self._emit(ctx, self._rewrite(stmt.cond, stmt.body, None, ctx))
 
-    def _visit_if(self, stmt: IfStmt, ctx: list[Stmt]):
+    def _visit_if(self, stmt: IfStmt, ctx: list[Stmt]) -> tuple[Stmt, list[Stmt] | None]:
         if not self._claims(stmt, stmt.ift, stmt.iff):
             return super()._visit_if(stmt, ctx)
         return self._emit(
@@ -439,7 +425,7 @@ class SimplifyIf:
 
     @staticmethod
     def _instance(
-        func: FuncDef, strict: bool, where: 'int | Cursor | None',
+        func: FuncDef, strict: bool, where: int | Cursor | None,
     ) -> _SimplifyIfInstance:
         def_use = DefineUse.analyze(func)
         ctx_use = ContextUse.analyze(func, def_use=def_use)
@@ -447,7 +433,7 @@ class SimplifyIf:
 
     @staticmethod
     def sites(
-        func: FuncDef, within: 'Cursor | None' = None, *, strict: bool = False,
+        func: FuncDef, within: Cursor | None = None, *, strict: bool = False,
     ) -> list[Cursor]:
         """The `if` statements this pass would rewrite, in visit order --
         what a `where` index counts, and what `within` narrows.
@@ -459,7 +445,7 @@ class SimplifyIf:
 
     @staticmethod
     def refusals(
-        func: FuncDef, within: 'Cursor | None' = None, *, strict: bool = False,
+        func: FuncDef, within: Cursor | None = None, *, strict: bool = False,
     ) -> list[tuple[Cursor, str]]:
         """Why each `if` this pass could have rewritten is not a site."""
         return SimplifyIf._instance(func, strict, None).list_refusals(within)
@@ -467,7 +453,7 @@ class SimplifyIf:
     @staticmethod
     def apply(
         func: FuncDef,
-        where: 'int | Cursor | None' = None,
+        where: int | Cursor | None = None,
         *,
         strict: bool = False,
     ) -> FuncDef:
@@ -483,7 +469,7 @@ class SimplifyIf:
     @staticmethod
     def apply_with_edits(
         func: FuncDef,
-        where: 'int | Cursor | None' = None,
+        where: int | Cursor | None = None,
         *,
         strict: bool = False,
     ) -> EditLog:

@@ -18,7 +18,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
@@ -26,7 +26,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
 
-    def _visit_var(self, e: Var, ctx: _Ctx):
+    def _visit_var(self, e: Var, ctx: _Ctx) -> Expr:
         if e.name in ctx:
             return ctx[e.name]
         else:
@@ -99,9 +99,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             return StmtBlock(stmts)
         else:
             # no need to apply the transformation
-            cond = self._visit_expr(stmt.cond, ctx)
-            body, _ = self._visit_block(stmt.body, ctx)
-            s = If1Stmt(cond, body, None)
+            s, _ = super()._visit_if1(stmt, ctx)
             return StmtBlock([s])
 
     def _visit_if(self, stmt: IfStmt, ctx: _Ctx) -> StmtBlock:
@@ -217,7 +215,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
 
         return StmtBlock(stmts)
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx) -> tuple[StmtBlock, _Ctx]:
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             match stmt:

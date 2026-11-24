@@ -49,17 +49,12 @@ must hold, tried in this order:
 
 Three conditions on the third rule are load-bearing, not cautious:
 
-* **Both roundings to nearest.** Measured: ``add`` through an intermediate far
-  wider than any rule asks still disagrees with a *directed* target.
-  Multiplication escapes this only by going through ``rndExact``.
+* **Both roundings to nearest.** Multiplication escapes this only by going through ``rndExact``.
 * **Every operand representable in the target.** FPy's signature is
   ``op: Fx -> Fy -> F1`` -- only the result is rounded -- so this needs checking.
   An operand on a finer grid lets the exact result land within half an
   intermediate ulp of a target midpoint, which the proofs' separation argument
-  rules out.  Measured, 3-digit target over the rule's exact 7-digit
-  intermediate: 4-digit operands already disagree on 16 of 6400 pairs, 6-digit
-  on 1748 of 102400.  Containment is against ``F1``, not ``F2`` -- every one of
-  those operands is inside ``F2``.
+  rules out.  Containment is against ``F1``, not ``F2``.
 * **No mixed exponent family for ``/`` and ``sqrt``**, which are proved
   separately for FLX and FLT.  ``+`` is stated over ``WithBot`` and spans both.
 
@@ -108,6 +103,7 @@ from ..ast.fpyast import (
     Fst,
     FuncDef,
     Len,
+    Location,
     Max,
     Min,
     Mul,
@@ -126,7 +122,7 @@ from ..ast.fpyast import (
     UnaryOp,
     Var,
 )
-from ..number import REAL, Context, Float, RealFloat
+from ..number import REAL, Context, Float, RealFloat, same_value
 from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
@@ -147,7 +143,7 @@ _NOT_SPLITTABLE = (
     Len, Size, Dim, Fst, Snd,
     # `min`/`max` *select* an argument and hand it back with its own format
     # rather than rounding to the active context, so there is no rounding here
-    # to split -- measured: every other real-valued operation does round
+    # to split
     Min, Max,
     # not finite reals, which is what the theorems quantify over
     ConstInf, ConstNan,
@@ -272,9 +268,7 @@ class _SplitRoundInstance(RoundingRewriter):
             for v in probes:
                 once = target.round(v)
                 twice = target.round(self.ctx.round(v))
-                # `str` rather than `==`: it separates the zeros and is total on
-                # NaN, which compares equal to nothing
-                if str(once) != str(twice):
+                if not same_value(once, twice):
                     return False
         except (ValueError, OverflowError):
             # a context that cannot represent a probe -- `enable_nan=False`, or
@@ -324,7 +318,7 @@ class _SplitRoundInstance(RoundingRewriter):
             return False        # unbounded result: nothing to prove
         return pos <= f2.pos_bound and neg >= f2.neg_bound
 
-    def _wrap(self, t: NamedId, loc) -> Expr:
+    def _wrap(self, t: NamedId, loc: Location | None) -> Expr:
         # an assignment rounds nothing in FPy, so the second rounding is
         # explicit -- and sits in the enclosing block, which applies `rm1`
         return Round(None, Var(t, loc), loc)

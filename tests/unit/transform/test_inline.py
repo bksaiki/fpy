@@ -125,11 +125,14 @@ class TestFuncInline():
         for xv in (0.0, 1.5, -3.25, 10.0):
             assert a(xv) == inlined_fn(xv)
 
-    def test_a_call_inside_a_comprehension_is_refused(self):
-        """Splicing the body would put it outside the comprehension, where its
-        targets are not bound; the call is left in place."""
+    def test_a_call_not_evaluated_once_is_refused(self):
+        """The body is spliced ahead of the call's statement, so a call its
+        statement may skip or repeat is left in place: in a comprehension the
+        targets would be unbound, and in a guarded arm the callee's `assert`
+        would run on the path the guard excludes."""
         @fp.fpy
         def twice(x: fp.Real) -> fp.Real:
+            assert x > 0
             t = x * 2
             return t
 
@@ -138,10 +141,25 @@ class TestFuncInline():
             ys = [twice(xs[i]) for i in range(len(xs))]
             return ys[0]
 
-        inlined = fp.transform.FuncInline.apply(uses_comp.ast, recursive=True)
-        assert _count_fpy_calls(inlined) == 1, 'the call should be left alone'
-        fn = uses_comp.with_ast(inlined)
-        assert repr(fn([1.0, 2.0])) == repr(uses_comp([1.0, 2.0]))
+        @fp.fpy
+        def uses_arm(x: fp.Real) -> fp.Real:
+            return twice(x) if x > 0 else 0
+
+        @fp.fpy
+        def uses_chain(x: fp.Real) -> bool:
+            return x > 0 and twice(x) > 1
+
+        @fp.fpy
+        def uses_while_cond(x: fp.Real) -> fp.Real:
+            while x > 0 and twice(x) < 10:
+                x = x + 1
+            return x
+
+        for f, arg in ((uses_comp, [1.0, 2.0]), (uses_arm, -1.0),
+                       (uses_chain, -1.0), (uses_while_cond, -1.0)):
+            inlined = fp.transform.FuncInline.apply(f.ast, recursive=True)
+            assert _count_fpy_calls(inlined) == 1, f'{f.name}: the call should be left alone'
+            assert repr(f.with_ast(inlined)(arg)) == repr(f(arg)), f.name
 
     def test_a_call_outside_the_comprehension_still_inlines(self):
         """The iterables are expressions of the enclosing block, so a call

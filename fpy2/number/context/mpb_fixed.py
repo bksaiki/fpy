@@ -3,7 +3,10 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
-from ...utils import DEFAULT, DefaultOr, default_repr
+from fractions import Fraction
+from typing import Any
+
+from ...utils import DEFAULT, DefaultOr, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import SizedContext, zero_sign
@@ -37,6 +40,9 @@ class MPBFixedFormat(SizedFormat):
     enable_inf: bool
     """is infinity representable?"""
 
+    enable_neg_zero: bool
+    """is -0 representable?"""
+
     _mp_fmt: MPFixedFormat
     """underlying unbounded format"""
 
@@ -54,7 +60,7 @@ class MPBFixedFormat(SizedFormat):
         enable_nan: bool = False,
         enable_inf: bool = False,
         enable_neg_zero: bool = True,
-    ):
+    ) -> None:
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(pos_maxval, RealFloat):
@@ -89,7 +95,7 @@ class MPBFixedFormat(SizedFormat):
         self._pos_maxval_ord = self._mp_fmt._to_ordinal(pos_maxval)
         self._neg_maxval_ord = self._mp_fmt._to_ordinal(neg_maxval)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPBFixedFormat)
             and self.nmin == other.nmin
@@ -100,7 +106,7 @@ class MPBFixedFormat(SizedFormat):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__,
             self.nmin,
@@ -117,8 +123,6 @@ class MPBFixedFormat(SizedFormat):
         return self.nmin + 1
 
     def representable_in(self, x: RealFloat | Float) -> bool:
-        # `_mp_fmt` carries the same `enable_neg_zero`, so it rejects a
-        # negative zero on this format's behalf
         if not self._mp_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
@@ -158,7 +162,7 @@ class MPBFixedFormat(SizedFormat):
         else:
             return self._mp_fmt.to_ordinal(x)
 
-    def to_fractional_ordinal(self, x: Float):
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return self._mp_fmt.to_fractional_ordinal(x)
@@ -266,6 +270,9 @@ class MPBFixedContext(SizedContext):
     enable_inf: bool
     """is infinity representable?"""
 
+    enable_neg_zero: bool
+    """is -0 representable?"""
+
     nan_value: Float | None
     """
     if NaN is not enabled, what value should NaN round to?
@@ -296,7 +303,7 @@ class MPBFixedContext(SizedContext):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if not isinstance(overflow, OverflowMode):
@@ -344,7 +351,7 @@ class MPBFixedContext(SizedContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPBFixedContext)
             and self.nmin == other.nmin
@@ -360,7 +367,7 @@ class MPBFixedContext(SizedContext):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.nmin,
             self.pos_maxval,
@@ -389,47 +396,23 @@ class MPBFixedContext(SizedContext):
         enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPBFixedContext':
-        if nmin is DEFAULT:
-            nmin = self.nmin
-        if maxval is DEFAULT:
-            maxval = self.pos_maxval
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if neg_maxval is DEFAULT:
-            neg_maxval = self.neg_maxval
-        if rng is DEFAULT:
-            rng = self.rng
-        if enable_nan is DEFAULT:
-            enable_nan = self.enable_nan
-        if enable_inf is DEFAULT:
-            enable_inf = self.enable_inf
-        if enable_neg_zero is DEFAULT:
-            enable_neg_zero = self.enable_neg_zero
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPBFixedContext(
-            nmin=nmin,
-            maxval=maxval,
-            rm=rm,
-            num_randbits=num_randbits,
-            overflow=overflow,
-            neg_maxval=neg_maxval,
-            rng=rng,
-            enable_nan=enable_nan,
-            enable_inf=enable_inf,
-            enable_neg_zero=enable_neg_zero,
-            nan_value=nan_value,
-            inf_value=inf_value
+            nmin=default_or(nmin, self.nmin),
+            maxval=default_or(maxval, self.pos_maxval),
+            rm=default_or(rm, self.rm),
+            num_randbits=default_or(num_randbits, self.num_randbits),
+            overflow=default_or(overflow, self.overflow),
+            neg_maxval=default_or(neg_maxval, self.neg_maxval),
+            rng=default_or(rng, self.rng),
+            enable_nan=default_or(enable_nan, self.enable_nan),
+            enable_inf=default_or(enable_inf, self.enable_inf),
+            enable_neg_zero=default_or(enable_neg_zero, self.enable_neg_zero),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value)
         )
 
     @property
@@ -454,7 +437,7 @@ class MPBFixedContext(SizedContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPBFixedContext':
@@ -474,10 +457,10 @@ class MPBFixedContext(SizedContext):
             inf_value=inf_value,
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         return None, self.nmin - self.num_randbits
@@ -488,26 +471,14 @@ class MPBFixedContext(SizedContext):
             return x < self.neg_maxval
         return x > self.pos_maxval
 
-    def _overflow_to_infinity(self, s: bool):
+    def _overflow_to_infinity(self, s: bool) -> bool:
         """Should overflows round to infinity (rather than MAX_VAL)?"""
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return False
-            case RoundingDirection.RAZ:
-                return True
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return True
-            case _:
-                raise RuntimeError(f'unrechable {direction}')
+        return direction != RoundingDirection.RTZ
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round_at()` but only for `RealFloat` or `Float` instances.
-
-        Optionally, specify `n` to override the least absolute digit position.
         If `n < self.nmin`, it will be set to `self.nmin`.
         """
         if n is None:
@@ -540,9 +511,6 @@ class MPBFixedContext(SizedContext):
                 raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
-        # the sign is preserved only when this context has a negative zero;
-        # `FixedContext` is one that does not, since two's complement has a
-        # single encoding of zero
         if xr.is_zero():
             return Float(s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
@@ -568,7 +536,7 @@ class MPBFixedContext(SizedContext):
                     else:
                         result = self.maxval(xr.s)
                 case OverflowMode.SATURATE:
-                    return self.maxval(s=xr.s)
+                    result = self.maxval(s=xr.s)
                 case OverflowMode.WRAP:
                     ord_abs = self._fmt._mp_fmt.to_ordinal(Float(x=xr)) - self._fmt._neg_maxval_ord
                     total_ord = self._fmt._pos_maxval_ord - self._fmt._neg_maxval_ord + 1
@@ -586,12 +554,3 @@ class MPBFixedContext(SizedContext):
         # step 5. return the rounded value.
         return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
-    def round(self, x, *, exact: bool = False):
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False):
-        if not isinstance(n, int):
-            raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)

@@ -3,7 +3,9 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
-from ...utils import DEFAULT, DefaultOr
+from typing import Any
+
+from ...utils import DEFAULT, DefaultOr, default_or
 from ..number import RNG, Float
 from ..round import OverflowMode, RoundingMode
 from .efloat import EFloatContext, EFloatFormat, EFloatNanKind
@@ -18,16 +20,16 @@ class IEEEFormat(EFloatFormat):
     It describes the set of representable values for `IEEEContext`.
     """
 
-    def __init__(self, es: int, nbits: int):
+    def __init__(self, es: int, nbits: int) -> None:
         super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits})'
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, IEEEFormat) and self.es == other.es and self.nbits == other.nbits
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.es, self.nbits))
 
 
@@ -52,10 +54,10 @@ class IEEEContext(EFloatContext):
         num_randbits: int | None = 0,
         *,
         rng: RNG | None = None
-    ):
+    ) -> None:
         super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits, rng=rng)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r}, num_randbits={self.num_randbits!r})'
 
     def with_params(
@@ -66,23 +68,18 @@ class IEEEContext(EFloatContext):
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
         rng: DefaultOr[RNG | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'IEEEContext':
-        if es is DEFAULT:
-            es = self.es
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
-        return IEEEContext(es, nbits, rm, overflow, num_randbits, rng=rng)
+        return IEEEContext(
+            default_or(es, self.es),
+            default_or(nbits, self.nbits),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+        )
 
     def format(self) -> IEEEFormat:
         return IEEEFormat(self.es, self.nbits)
@@ -95,13 +92,15 @@ class IEEEContext(EFloatContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None,
     ) -> 'IEEEContext':
         """Creates a context from an `IEEEFormat` and rounding parameters."""
         if not isinstance(fmt, IEEEFormat):
             raise TypeError(f'Expected \'IEEEFormat\', got {type(fmt)}')
+        if nan_value is not None or inf_value is not None:
+            raise ValueError('an IEEE format holds NaN and infinity: nan_value and inf_value do not apply')
         if overflow is None:
             overflow = OverflowMode.OVERFLOW
         return cls(fmt.es, fmt.nbits, rm, overflow, num_randbits, rng=rng)

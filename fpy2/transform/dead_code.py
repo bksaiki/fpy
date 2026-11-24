@@ -34,7 +34,7 @@ class _Eliminator(DefaultTransformVisitor):
         unused_assign: set[Assign],
         unused_fv: set[NamedId],
         dead_ctx: set[ContextStmt],
-    ):
+    ) -> None:
         self.func = func
         self.def_use = def_use
         self.unused_assign = unused_assign
@@ -45,7 +45,7 @@ class _Eliminator(DefaultTransformVisitor):
     def _is_empty_block(self, block: StmtBlock) -> bool:
         return len(block.stmts) == 1 and isinstance(block.stmts[0], PassStmt)
 
-    def _visit_assign(self, assign: Assign, ctx: None):
+    def _visit_assign(self, assign: Assign, ctx: None) -> tuple[Stmt | None, None]:
         if assign in self.unused_assign:
             # remove any assignment marked for deletion
             self.eliminated = True
@@ -168,7 +168,7 @@ class _Eliminator(DefaultTransformVisitor):
             return None, ctx
         return super()._visit_while(stmt, ctx)
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> tuple[Stmt | StmtBlock, None]:
         body, _ = self._visit_block(stmt.body, ctx)
         if stmt in self.dead_ctx:
             # splice the body in; a `pass` body leaves a stray one for
@@ -179,12 +179,12 @@ class _Eliminator(DefaultTransformVisitor):
         s = ContextStmt(stmt.target, stmt.ctx, body, stmt.loc)
         return s, ctx
 
-    def _visit_pass(self, stmt: PassStmt, ctx: None):
+    def _visit_pass(self, stmt: PassStmt, ctx: None) -> tuple[None, None]:
         # unnecessary pass statement
         self.eliminated = True
         return None, ctx
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> tuple[Stmt | None, None]:
         # ``assert True`` (with or without message) is a no-op: the
         # message is only evaluated when the test is False, so dropping
         # the whole statement is sound regardless of msg purity.
@@ -195,7 +195,7 @@ class _Eliminator(DefaultTransformVisitor):
             return None, ctx
         return super()._visit_assert(stmt, ctx)
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+    def _visit_effect(self, stmt: EffectStmt, ctx: None) -> tuple[Stmt | None, None]:
         # An expression statement whose value is discarded and whose
         # evaluation is observably pure has no effect.
         if Purity.analyze_expr(stmt.expr, self.def_use):
@@ -233,13 +233,13 @@ class _Eliminator(DefaultTransformVisitor):
 
             return StmtBlock(stmts), ctx
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
         free_vars = {v for v in func.free_vars if v not in self.unused_fv}
         body, _ = self._visit_block(func.body, ctx)
         meta = FuncMeta(free_vars, func.ctx, func.meta.pre, func.meta.spec, func.meta.props, func.env)
         return FuncDef(func.name, func.args, body, meta, loc=func.loc)
 
-    def _apply(self):
+    def _apply(self) -> tuple[FuncDef, bool]:
         func = self._visit_function(self.func, None)
         return func, self.eliminated
 
@@ -259,18 +259,23 @@ def _same_context(inner: ContextScope, outer: ContextScope) -> bool:
     )
 
 
+class _Finder(DefaultVisitor):
+    out: dict[ContextStmt, ContextScopeSite]
+
+    def __init__(self) -> None:
+        self.out = {}
+
+    def _visit_context(self, stmt: ContextStmt, parent: ContextScopeSite) -> None:
+        self.out[stmt] = parent
+        super()._visit_context(stmt, stmt)
+
+
 def _enclosing_scope(func: FuncDef) -> dict[ContextStmt, ContextScopeSite]:
     """Each `with` block in *func* mapped to the scope it sits in: the `with`
     around it, or *func* itself.  Empty if *func* has none."""
-    out: dict[ContextStmt, ContextScopeSite] = {}
-
-    class _Finder(DefaultVisitor):
-        def _visit_context(self, stmt: ContextStmt, parent: ContextScopeSite):
-            out[stmt] = parent
-            super()._visit_context(stmt, stmt)
-
-    _Finder()._visit_function(func, func)
-    return out
+    finder = _Finder()
+    finder._visit_function(func, func)
+    return finder.out
 
 
 class _DeadCodeEliminate:
@@ -281,7 +286,7 @@ class _DeadCodeEliminate:
     func: FuncDef
     def_use: DefineUseAnalysis
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.def_use = def_use
 
@@ -335,7 +340,7 @@ class _DeadCodeEliminate:
             and not any(isinstance(s, PhiDef) for s in self.def_use.successors[d])
         )
 
-    def apply(self):
+    def apply(self) -> tuple[FuncDef, bool]:
         # elimination status
         eliminated_any = False
 
@@ -361,14 +366,7 @@ class _DeadCodeEliminate:
                         ):
                             # assignment
                             unused_assign.add(d.site)
-                        # TODO: IndexedAssign-sited defs are not eliminated
-                        # here.  ``xs[i] = e`` creates a fresh SSA def of
-                        # ``xs`` (per ``reaching_defs``), and if no later
-                        # statement reads ``xs`` the def is technically
-                        # unused — but eliminating the IndexedAssign would
-                        # be unsound without alias analysis (a different
-                        # name aliasing the same list might still observe
-                        # the mutation).  Conservatively leave them in.
+                        # an unused `IndexedAssign` def is kept: an alias may observe it
                     case PhiDef():
                         # phi variable with no uses
                         unused_phi.add(d)

@@ -54,7 +54,7 @@ def elim_round(func: Function) -> Function:
             return (_t * z)
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     ast = RoundElim.apply(func.ast)
     return func.with_ast(ast)

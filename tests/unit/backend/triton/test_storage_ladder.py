@@ -10,8 +10,8 @@ import pytest
 import fpy2 as fp
 from fpy2.analysis.storage_infer import StorageSelectionError
 from fpy2.backend.triton.storage import (
-    _ABSTRACT,
     _SIGMA,
+    DOMAIN,
     scalar_fits_in,
     scalar_sup,
 )
@@ -28,7 +28,7 @@ class TestTheLadderIsOrdered:
         an earlier one would never be reached."""
         for a in _TYS:
             for b in _TYS:
-                if a is not b and _ABSTRACT[b] <= _ABSTRACT[a]:
+                if a is not b and DOMAIN.abstract[b] <= DOMAIN.abstract[a]:
                     assert _IDX[b] < _IDX[a], (
                         f'{b.format()} fits in {a.format()} but comes later'
                     )
@@ -36,8 +36,8 @@ class TestTheLadderIsOrdered:
     def test_minimal_upper_bounds_are_still_not_unique(self):
         """Integer rungs stay mutually incomparable, so the sequence is still
         the tie-break: with fp16 the ladder is still not a lattice."""
-        assert not _ABSTRACT[T.U8] <= _ABSTRACT[T.S8]
-        assert not _ABSTRACT[T.S8] <= _ABSTRACT[T.U8]
+        assert not DOMAIN.abstract[T.U8] <= DOMAIN.abstract[T.S8]
+        assert not DOMAIN.abstract[T.S8] <= DOMAIN.abstract[T.U8]
 
 
 class TestTheFloatRungsAreAChain:

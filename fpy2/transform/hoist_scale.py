@@ -1,6 +1,6 @@
 """Pulling an invariant factor out of a reduction."""
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from ..analysis import (
     ArraySizeAnalysis,
@@ -19,8 +19,8 @@ from ..analysis import (
 from ..analysis.array_size import ListSize, size_eq, trip_count
 from ..analysis.value_class import ValueClass, is_positive_literal
 from ..ast import *
+from ..ast.accessors import subblocks
 from .cursor import Cursor, EditLog
-from .error import TransformDeclined
 from .hoist_invariant import _from_before, _Nodes, _own_exprs
 from .path import walk_blocks
 from .utils import RoundingScopes, SiteRewriter, check_where
@@ -32,10 +32,12 @@ type _Reduction = Sum | AMax | AMin
 class _Reductions(DefaultVisitor):
     """Every reduction in an expression, outermost first."""
 
-    def __init__(self):
-        self.found: list[_Reduction] = []
+    found: list[_Reduction]
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: None):
+    def __init__(self) -> None:
+        self.found = []
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> None:
         if isinstance(e, Sum | AMax | AMin):
             self.found.append(e)
         super()._visit_unaryop(e, ctx)
@@ -83,10 +85,10 @@ class _Site(NamedTuple):
     elt: Expr
     fixed: tuple[NamedId, ...]
     """names bound per element, which the factor must not read"""
-    red_stmt: 'Stmt | None' = None
-    loop: 'ForStmt | None' = None
-    write: 'IndexedAssign | None' = None
-    prod_stmt: 'Assign | None' = None
+    red_stmt: Stmt | None = None
+    loop: ForStmt | None = None
+    write: IndexedAssign | None = None
+    prod_stmt: Assign | None = None
 
 
 def _targets(comp: ListComp) -> tuple[NamedId, ...]:
@@ -103,7 +105,7 @@ def _targets(comp: ListComp) -> tuple[NamedId, ...]:
     return tuple(out)
 
 
-def _comp_site(red: _Reduction) -> '_Site | None':
+def _comp_site(red: _Reduction) -> _Site | None:
     """A reduction over a scaled comprehension."""
     comp = red.arg
     if not isinstance(comp, ListComp) or not isinstance(comp.elt, Mul):
@@ -129,19 +131,16 @@ def _all_writes(loop: ForStmt, name: NamedId) -> int:
     leave an element holding a value the factor was never applied to.
     """
     count = 0
-
-    class V(DefaultVisitor):
-        def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-            nonlocal count
-            if stmt.var == name:
+    blocks = [loop.body]
+    while blocks:
+        for stmt in blocks.pop().stmts:
+            if isinstance(stmt, IndexedAssign) and stmt.var == name:
                 count += 1
-            super()._visit_indexed_assign(stmt, ctx)
-
-    V()._visit_block(loop.body, None)
+            blocks.extend(b for _, b in subblocks(stmt))
     return count
 
 
-def _created_by(stmt: Stmt, name: NamedId, facts: '_Facts') -> 'Definition | None':
+def _created_by(stmt: Stmt, name: NamedId, facts: _Facts) -> Definition | None:
     """The definition of *name* that *stmt* introduces."""
     for d in facts.def_use.name_to_defs.get(name, set()):
         if isinstance(d, AssignDef) and d.site is stmt:
@@ -149,7 +148,7 @@ def _created_by(stmt: Stmt, name: NamedId, facts: '_Facts') -> 'Definition | Non
     return None
 
 
-def _loop_site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+def _loop_site(red: _Reduction, stmt: Stmt, facts: _Facts) -> _Site | None:
     """A reduction over a list a loop above it filled.
 
     The loop is found through the *definition* the reduction reads, not by
@@ -189,12 +188,12 @@ def _loop_site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     )
 
 
-def _site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+def _site(red: _Reduction, stmt: Stmt, facts: _Facts) -> _Site | None:
     """The rewrite's shape at *red*, in whichever form it takes."""
     return _comp_site(red) or _loop_site(red, stmt, facts)
 
 
-def _indexed_by_target(site: _Site, facts: '_Facts') -> bool:
+def _indexed_by_target(site: _Site, facts: _Facts) -> bool:
     """Whether the write's index is exactly the loop's own target.
 
     Without this a loop of the right trip count may still write one slot over
@@ -213,7 +212,7 @@ def _indexed_by_target(site: _Site, facts: '_Facts') -> bool:
             == facts.def_use.find_def_from_site(target, site.loop))
 
 
-def _covers(site: _Site, facts: '_Facts') -> bool:
+def _covers(site: _Site, facts: _Facts) -> bool:
     """Whether the loop writes every element of the list it fills: as many
     iterations as the list has elements.
 
@@ -228,7 +227,7 @@ def _covers(site: _Site, facts: '_Facts') -> bool:
     return size_eq(trip_count(site.loop.iterable, facts.sizes), filled.size)
 
 
-def _varies(site: _Site, facts: '_Facts') -> list[str]:
+def _varies(site: _Site, facts: _Facts) -> list[str]:
     """The names the factor reads that do not hold still across the reduction."""
     names = LiveVars.analyze(site.factor)
     if site.loop is None:
@@ -242,7 +241,7 @@ def _varies(site: _Site, facts: '_Facts') -> list[str]:
     )
 
 
-def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
+def _why_not(site: _Site, facts: _Facts) -> str | None:
     """Why the factor may not leave *site*'s reduction, or `None` where it may."""
     if not facts.scopes.is_exact(site.red):
         return 'the reduction does not round exactly'
@@ -328,7 +327,7 @@ class _HoistScale(SiteRewriter):
     _wrap: dict[int, Expr]
     """reductions to multiply by a factor, by id"""
 
-    def __init__(self, func: FuncDef, facts: _Facts, where: int | Cursor | None):
+    def __init__(self, func: FuncDef, facts: _Facts, where: int | Cursor | None) -> None:
         super().__init__()
         self.func = func
         self.facts = facts
@@ -336,26 +335,12 @@ class _HoistScale(SiteRewriter):
         self._drop = {}
         self._wrap = {}
 
-    def _claims(self, red: _Reduction, why: str | None) -> bool:
-        if why is not None:
-            if self._refuse(red, why) and not self.listing:
-                raise TransformDeclined(f'cannot hoist the factor: {why}')
-            return False
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(red, idx):
-            return False
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(red)
-            return False
-        return True
-
-    def _visit_expr(self, e: Expr, ctx):
-        if (elt := self._drop.get(id(e))) is not None:
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
+        elt = self._drop.get(id(e))
+        if elt is not None:
             return self._visit_expr(elt, ctx)
-        if (factor := self._wrap.get(id(e))) is not None:
+        factor = self._wrap.get(id(e))
+        if factor is not None:
             return Mul(factor, super()._visit_expr(e, ctx), e.loc)
         return super()._visit_expr(e, ctx)
 
@@ -377,7 +362,7 @@ class _HoistScale(SiteRewriter):
                             'no scaled list write fills the reduction'
                             if site is None else _why_not(site, self.facts)
                         )
-                        if not self._claims(red, why):
+                        if not self._claim(red, why, 'cannot hoist the factor'):
                             continue
                         assert site is not None
                         self._drop[id(site.prod)] = site.elt
@@ -389,7 +374,7 @@ class _HoistScale(SiteRewriter):
                                 body, body.stmts.index(site.prod_stmt)
                             )
 
-    def _visit_function(self, func: FuncDef, ctx):
+    def _visit_function(self, func: FuncDef, ctx: Any) -> FuncDef:
         self._begin(func)
         self._drop = {}
         self._wrap = {}
@@ -432,24 +417,24 @@ class HoistScale:
 
     @staticmethod
     def _instance(
-        func: FuncDef, where: 'int | Cursor | None'
+        func: FuncDef, where: int | Cursor | None
     ) -> _HoistScale:
         return _HoistScale(func, _Facts.of(func), where)
 
     @staticmethod
-    def sites(func: FuncDef, within: 'Cursor | None' = None) -> list[Cursor]:
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[Cursor]:
         """The reductions this pass would rewrite, in visit order."""
         return HoistScale._instance(func, None).list_sites(within)
 
     @staticmethod
     def refusals(
-        func: FuncDef, within: 'Cursor | None' = None
+        func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
         """Why each reduction this pass could have rewritten is not a site."""
         return HoistScale._instance(func, None).list_refusals(within)
 
     @staticmethod
-    def apply(func: FuncDef, where: 'int | Cursor | None' = None) -> FuncDef:
+    def apply(func: FuncDef, where: int | Cursor | None = None) -> FuncDef:
         """Hoist the invariant factor out of *func*'s reductions.
 
         `where` names one site: an index counting the reductions this rewrite
@@ -460,7 +445,7 @@ class HoistScale:
 
     @staticmethod
     def apply_with_edits(
-        func: FuncDef, where: 'int | Cursor | None' = None
+        func: FuncDef, where: int | Cursor | None = None
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):

@@ -30,7 +30,6 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
-from .path import StmtPath
 from .utils import (
     SiteRewriter,
     check_where,
@@ -38,6 +37,7 @@ from .utils import (
     copy_target,
     infer_array_size,
     integer_ctx,
+    rem,
     static_size,
 )
 
@@ -100,7 +100,7 @@ class _SplitLoop(SiteRewriter):
         inner_id: NamedId,
         array_size: ArraySizeAnalysis | None,
         use_fmod: bool = True
-    ):
+    ) -> None:
         super().__init__()
         self.func = func
         self.factor = factor
@@ -119,17 +119,6 @@ class _SplitLoop(SiteRewriter):
         if isinstance(self.factor, Integer) and self.factor.val >= 1:
             return self.factor.val
         return None
-
-    def _rem(self, a: Expr, b: Expr) -> Expr:
-        """``a`` remainder ``b``, spelled as the caller asked.
-
-        The two differ on a negative dividend (`-5 fmod 4 = -1`, `-5 % 4 = 3`)
-        and every dividend here is a length or a value in ``[0, f)``, so they
-        agree; which one a backend can emit is what differs, and that is the
-        caller's to know."""
-        if self.use_fmod:
-            return Fmod(None, a, b, None)
-        return Mod(a, b, None)
 
     @staticmethod
     def _ref(x: NamedId | int) -> Expr:
@@ -289,7 +278,7 @@ class _SplitLoop(SiteRewriter):
                     Compare(
                         [CompareOp.EQ],
                         [
-                            self._rem(Var(n, None), Var(f, None)),
+                            rem(Var(n, None), Var(f, None), self.use_fmod),
                             Integer(0, None)
                         ],
                         None
@@ -327,7 +316,7 @@ class _SplitLoop(SiteRewriter):
             emitted.append(self._dynamic_prelude(t, f, n, factor, [
                 Assign(m_id, None, Sub(
                     Var(n, None),
-                    self._rem(Var(n, None), Var(f, None)),
+                    rem(Var(n, None), Var(f, None), self.use_fmod),
                     None
                 ), None),
             ], stmt.loc))
@@ -366,19 +355,7 @@ class _SplitLoop(SiteRewriter):
         return emitted
 
     def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
-        block, pos = self._site
-        reason = self._refuses(stmt)
-        if reason is not None:
-            self._refuse(stmt, reason)
-            return super()._visit_for(stmt, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects(block, pos, idx):
-            return super()._visit_for(stmt, ctx)
-        self._matched += 1
-        if self.listing:
-            self.found.append(StmtPath(self._paths[id(block)], pos))
+        if not self._claim(stmt, self._refuses(stmt)):
             return super()._visit_for(stmt, ctx)
 
         iterable = self._visit_expr(stmt.iterable, ctx)
@@ -401,13 +378,13 @@ class _SplitLoop(SiteRewriter):
         ctx.extend(emitted[:-1])
         return emitted[-1], None
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 
 def _lister(
-    func: FuncDef, factor: 'Expr | None', strategy: SplitLoopStrategy
-) -> '_SplitLoop':
+    func: FuncDef, factor: Expr | None, strategy: SplitLoopStrategy
+) -> _SplitLoop:
     """The pass instance a listing walks `func` with.
 
     `use_fmod` is absent on purpose: it changes which node a remainder is

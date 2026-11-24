@@ -12,7 +12,7 @@ import pytest
 import fpy2 as fp
 from fpy2.analysis.format_infer import ListFormat, SetFormat, TupleFormat
 from fpy2.backend.cpp.storage import (
-    _ABSTRACT,
+    DOMAIN,
     _SIGMA,
     CppStorageDomain,
     StorageSelectionError,
@@ -258,7 +258,7 @@ class TestStorageBottom:
 
     def test_bottom_takes_the_smallest_rung(self):
         """Every rung contains it vacuously, so the cheapest wins.
-        ``_to_abstract`` cannot answer this: every ``AbstractFormat``
+        ``to_abstract`` cannot answer this: every ``AbstractFormat``
         represents a ``+0.0``, so none of them *is* the empty set."""
         assert choose_storage_scalar(SetFormat.bottom()) == CppScalar.U8
 
@@ -336,7 +336,7 @@ class TestTheLadderIsOrdered:
         idx = {t: i for i, (t, _) in enumerate(_SIGMA)}
         for a in _TYS:
             for b in _TYS:
-                if a is not b and _ABSTRACT[b] <= _ABSTRACT[a]:
+                if a is not b and DOMAIN.abstract[b] <= DOMAIN.abstract[a]:
                     assert idx[b] < idx[a], (
                         f'{b.format()} fits in {a.format()} but comes later'
                     )
@@ -344,8 +344,8 @@ class TestTheLadderIsOrdered:
     def test_minimal_upper_bounds_are_not_unique(self):
         """`u8` and `s8` are incomparable, so containment alone cannot order
         the ladder: the sequence is the tie-break."""
-        assert not _ABSTRACT[CppScalar.U8] <= _ABSTRACT[CppScalar.S8]
-        assert not _ABSTRACT[CppScalar.S8] <= _ABSTRACT[CppScalar.U8]
+        assert not DOMAIN.abstract[CppScalar.U8] <= DOMAIN.abstract[CppScalar.S8]
+        assert not DOMAIN.abstract[CppScalar.S8] <= DOMAIN.abstract[CppScalar.U8]
 
 
 class TestTheJoinIsNAry:

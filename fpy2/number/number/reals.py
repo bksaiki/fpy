@@ -7,7 +7,7 @@ import math
 import numbers
 import random
 from fractions import Fraction
-from typing import Self, overload
+from typing import NoReturn, Self, overload
 
 import numpy as np
 
@@ -79,7 +79,7 @@ class RealFloat(numbers.Rational):
         tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None
-    ):
+    ) -> None:
         """
         Creates a new `RealFloat` value.
 
@@ -88,9 +88,6 @@ class RealFloat(numbers.Rational):
         The significand may be specified with `c` or `m` (unless `x` is given).
         If `x` is given, any field not specified is copied from `x`.
         """
-        # if x is not None and not isinstance(x, RealFloat):
-        #     raise TypeError(f'expected RealFloat, got {type(x)}')
-
         # c and negative
         if c is not None:
             if m is not None:
@@ -135,30 +132,19 @@ class RealFloat(numbers.Rational):
             self._exp = 0
 
         # flags
-        if x is None:
-            self._flags = Flags(
-                invalid=invalid,
-                divzero=divzero,
-                overflow=overflow,
-                tiny_pre=tiny_pre,
-                tiny_post=tiny_post,
-                inexact=inexact,
-                carry=carry
-            )
-        else:
-            self._flags = Flags(
-                x=x._flags,
-                invalid=invalid,
-                divzero=divzero,
-                overflow=overflow,
-                tiny_pre=tiny_pre,
-                tiny_post=tiny_post,
-                inexact=inexact,
-                carry=carry
-            )
+        self._flags = Flags(
+            x=None if x is None else x._flags,
+            invalid=invalid,
+            divzero=divzero,
+            overflow=overflow,
+            tiny_pre=tiny_pre,
+            tiny_post=tiny_post,
+            inexact=inexact,
+            carry=carry
+        )
 
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (f'{self.__class__.__name__}('
             + 's=' + repr(self._s)
             + ', exp=' + repr(self._exp)
@@ -167,11 +153,11 @@ class RealFloat(numbers.Rational):
             + ')'
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
         fn = get_current_str_converter()
         return fn(self)
 
-    def __hash__(self): # type: ignore[override]
+    def __hash__(self) -> int: # type: ignore[override]
         # first, try hashing as an integer
         try:
             i = int(self)
@@ -181,29 +167,29 @@ class RealFloat(numbers.Rational):
             q = self.as_rational()
             return hash(q)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, RealFloat | int | float | Fraction):
             return False
         ord = self.compare(other)
         return ord == Ordering.EQUAL
 
-    def __lt__(self, other):
+    def __lt__(self, other: 'RealFloat | float | Fraction') -> bool:
         ord = self.compare(other)
         return ord == Ordering.LESS
 
-    def __le__(self, other):
+    def __le__(self, other: 'RealFloat | float | Fraction') -> bool:
         ord = self.compare(other)
         return ord == Ordering.LESS or ord == Ordering.EQUAL
 
-    def __gt__(self, other):
+    def __gt__(self, other: 'RealFloat | float | Fraction') -> bool:
         ord = self.compare(other)
         return ord == Ordering.GREATER
 
-    def __ge__(self, other):
+    def __ge__(self, other: 'RealFloat | float | Fraction') -> bool:
         ord = self.compare(other)
         return ord == Ordering.GREATER or ord == Ordering.EQUAL
 
-    def __neg__(self):
+    def __neg__(self) -> 'RealFloat':
         """
         Unary minus.
 
@@ -212,7 +198,7 @@ class RealFloat(numbers.Rational):
         """
         return RealFloat(s=not self._s, x=self)
 
-    def __pos__(self):
+    def __pos__(self) -> 'RealFloat':
         """
         Unary plus. 
 
@@ -229,7 +215,7 @@ class RealFloat(numbers.Rational):
     @overload
     def __add__(self, other: Fraction) -> 'RealFloat': ...
 
-    def __add__(self, other):
+    def __add__(self, other: 'RealFloat | int | float | Fraction') -> 'RealFloat | float':
         """
         Adds `self` and `other` exactly.
 
@@ -242,10 +228,7 @@ class RealFloat(numbers.Rational):
                 other = RealFloat.from_int(other)
             case float():
                 if math.isnan(other) or math.isinf(other):
-                    # ``self`` is always finite; nan / +/-inf absorb the
-                    # addend.  Return ``other`` directly — converting
-                    # ``self`` to a Python float would raise for any
-                    # ``RealFloat`` outside ``float``'s representable range.
+                    # ``self`` is finite; nan / +/-inf absorb the addend
                     return other
                 else:
                     other = RealFloat.from_float(other)
@@ -299,7 +282,7 @@ class RealFloat(numbers.Rational):
     @overload
     def __radd__(self, other: Fraction) -> 'RealFloat': ...
 
-    def __radd__(self, other):
+    def __radd__(self, other: 'RealFloat | int | float | Fraction') -> 'RealFloat | float':
         return self + other
 
     @overload
@@ -311,7 +294,7 @@ class RealFloat(numbers.Rational):
     @overload
     def __sub__(self, other: Fraction) -> 'RealFloat': ...
 
-    def __sub__(self, other):
+    def __sub__(self, other: 'RealFloat | int | float | Fraction') -> 'RealFloat | float':
         return self + (-other)
     
     @overload
@@ -323,7 +306,7 @@ class RealFloat(numbers.Rational):
     @overload
     def __rsub__(self, other: Fraction) -> 'RealFloat': ...
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: 'RealFloat | int | float | Fraction') -> 'RealFloat | float':
         return (-self) + other
 
     @overload
@@ -335,7 +318,7 @@ class RealFloat(numbers.Rational):
     @overload
     def __mul__(self, other: Fraction) -> 'RealFloat': ...
 
-    def __mul__(self, other):
+    def __mul__(self, other: 'RealFloat | int | float | Fraction') -> 'RealFloat | float':
         """
         Multiplies `self` and `other` exactly.
 
@@ -348,7 +331,6 @@ class RealFloat(numbers.Rational):
                 other = RealFloat.from_int(other)
             case float():
                 if math.isnan(other) or math.isinf(other):
-                    # Convert self to float and perform float arithmetic
                     other_sgn = math.copysign(1.0, other) # extract the sign bit
                     s = self._s != (other_sgn < 0)
                     res_sgn = -1.0 if s else 1.0
@@ -358,7 +340,7 @@ class RealFloat(numbers.Rational):
             case Fraction():
                 other = RealFloat.from_rational(other)
             case _:
-                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+                raise TypeError(f'unsupported operand type(s) for *: \'RealFloat\' and \'{type(other)}\'')
 
         s = self._s != other._s
         if self._c == 0 or other._c == 0:
@@ -380,16 +362,16 @@ class RealFloat(numbers.Rational):
     @overload
     def __rmul__(self, other: Fraction) -> 'RealFloat': ...
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: 'RealFloat | int | float | Fraction') -> 'RealFloat | float':
         return self * other
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: object) -> NoReturn:
         raise NotImplementedError('division cannot be implemented exactly')
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: object) -> NoReturn:
         raise NotImplementedError('division cannot be implemented exactly')
 
-    def __pow__(self, exponent):
+    def __pow__(self, exponent: int) -> 'RealFloat':
         """
         Raising `self` by `exponent` exactly.
 
@@ -410,10 +392,10 @@ class RealFloat(numbers.Rational):
             c = self._c ** exponent
             return RealFloat(s=s, exp=exp, c=c)
 
-    def __rpow__(self, base):
+    def __rpow__(self, base: object) -> NoReturn:
         raise TypeError(f'unsupported operand type(s) for **: \'{type(base)}\' and \'RealFloat\'')
 
-    def __abs__(self):
+    def __abs__(self):  # noqa: ANN204 (typed, `abs` of a `Real` union infers `object`)
         """
         Absolute value.
 
@@ -430,22 +412,22 @@ class RealFloat(numbers.Rational):
     def __ceil__(self) -> int:
         return int(self.round(min_n=-1, rm=RoundingMode.RTP))
 
-    def __round__(self, ndigits=None) -> int:
+    def __round__(self, ndigits: int | None = None) -> int:
         return int(self.round(min_n=-1, rm=RoundingMode.RNE))
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: object) -> NoReturn:
         raise NotImplementedError('division cannot be implemented exactly')
 
-    def __rfloordiv__(self, other):
+    def __rfloordiv__(self, other: object) -> NoReturn:
         raise NotImplementedError('division cannot be implemented exactly')
 
-    def __mod__(self, other):
+    def __mod__(self, other: object) -> NoReturn:
         raise NotImplementedError('modulus cannot be implemented exactly')
 
-    def __rmod__(self, other):
+    def __rmod__(self, other: object) -> NoReturn:
         raise NotImplementedError('modulus cannot be implemented exactly')
 
-    def __float__(self):
+    def __float__(self) -> float:
         """
         Casts this value exactly to a native Python float.
 
@@ -454,7 +436,7 @@ class RealFloat(numbers.Rational):
         fn = get_current_float_converter()
         return fn(self)
 
-    def __int__(self):
+    def __int__(self) -> int:
         """
         Casts this value exactly to a native Python int.
 
@@ -551,7 +533,7 @@ class RealFloat(numbers.Rational):
             return Fraction(self.m, 1 << -self._exp)
 
     @staticmethod
-    def from_int(x: int):
+    def from_int(x: int) -> 'RealFloat':
         """
         Creates a new `RealFloat` value from a Python `int`.
 
@@ -565,7 +547,7 @@ class RealFloat(numbers.Rational):
         return RealFloat(s=s, exp=0, c=c)
 
     @staticmethod
-    def from_float(x: float):
+    def from_float(x: float) -> 'RealFloat':
         """
         Creates a new `RealFloat` value from a Python `float`.
 
@@ -597,7 +579,7 @@ class RealFloat(numbers.Rational):
             return RealFloat(s=s, exp=exp, c=c)
 
     @staticmethod
-    def from_rational(x: numbers.Rational):
+    def from_rational(x: numbers.Rational) -> 'RealFloat':
         """
         Creates a new `RealFloat` value from a `Fraction`.
 
@@ -624,7 +606,7 @@ class RealFloat(numbers.Rational):
                 return RealFloat(m=n, exp=-exp)
 
     @staticmethod
-    def zero(s: bool = False):
+    def zero(s: bool = False) -> 'RealFloat':
         """
         Creates a new `RealFloat` value representing zero.
 
@@ -633,7 +615,7 @@ class RealFloat(numbers.Rational):
         return RealFloat(s=s, exp=0, c=0)
 
     @staticmethod
-    def one(s: bool = False):
+    def one(s: bool = False) -> 'RealFloat':
         """
         Creates a new `RealFloat` value representing one.
 
@@ -642,7 +624,7 @@ class RealFloat(numbers.Rational):
         return RealFloat(s=s, exp=0, c=1)
 
     @staticmethod
-    def power_of_2(exp: int, s: bool = False):
+    def power_of_2(exp: int, s: bool = False) -> 'RealFloat':
         """
         Creates a new `RealFloat` value representing `2**exp`.
 
@@ -654,12 +636,12 @@ class RealFloat(numbers.Rational):
 
 
     @property
-    def base(self):
+    def base(self) -> int:
         """Integer base of this number. Always 2."""
         return 2
 
     @property
-    def p(self):
+    def p(self) -> int:
         """Minimum number of binary digits required to represent this number."""
         return self._c.bit_length()
 
@@ -693,11 +675,11 @@ class RealFloat(numbers.Rational):
         return -self._c if self._s else self._c
 
     @property
-    def numerator(self):
+    def numerator(self) -> int:
         return self.as_rational().numerator
 
     @property
-    def denominator(self):
+    def denominator(self) -> int:
         return self.as_rational().denominator
 
     def is_zero(self) -> bool:
@@ -774,7 +756,7 @@ class RealFloat(numbers.Rational):
         return (self._c & (1 << offset)) != 0
 
 
-    def normalize(self, p: int | None = None, n: int | None = None):
+    def normalize(self, p: int | None = None, n: int | None = None) -> 'RealFloat':
         """
         Returns a value numerically equivalent to `self` based on
         precision `p` and position `n`:
@@ -839,7 +821,7 @@ class RealFloat(numbers.Rational):
         return RealFloat(self._s, exp, c)
 
 
-    def split(self, n: int):
+    def split(self, n: int) -> 'tuple[RealFloat, RealFloat]':
         """
         Splits `self` into two `RealFloat` values where the first value represents
         the digits above `n` and the second value represents the digits below
@@ -878,7 +860,7 @@ class RealFloat(numbers.Rational):
             lo = RealFloat(self._s, exp_lo, c_lo)
             return (hi, lo)
 
-    def compare(self, other: Self | float | Fraction) -> Ordering | None:
+    def compare(self, other: 'RealFloat | float | Fraction') -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
 
@@ -919,6 +901,8 @@ class RealFloat(numbers.Rational):
                             c1 = self._c << (self._exp - exp)
                             c2 = other._c << (other._exp - exp)
                             cmp = Ordering.from_compare(c1, c2)
+                        case _:
+                            raise RuntimeError(f'unreachable: {self.e}, {other.e}')
 
                     # adjust for the sign
                     if self._s:
@@ -958,7 +942,7 @@ class RealFloat(numbers.Rational):
             and self._c == other._c
         )
 
-    def _extract_and_normalize(self, n: int, p: int | None):
+    def _extract_and_normalize(self, n: int, p: int | None) -> tuple[int, int]:
         # extract the relevant parameters
         if self._exp != n + 1 or (p is not None and self.p > p):
             # need to normalize first
@@ -971,7 +955,7 @@ class RealFloat(numbers.Rational):
 
         return c, exp
 
-    def _next_away(self, n: int, p: int | None = None):
+    def _next_away(self, n: int, p: int | None = None) -> 'RealFloat':
         """
         Computes the next number with exponent above `n` and precision
         up to `p` bits, away from zero.
@@ -990,7 +974,7 @@ class RealFloat(numbers.Rational):
 
         return RealFloat(s=self._s, c=c, exp=exp)
 
-    def _next_towards(self, n: int, p: int | None = None):
+    def _next_towards(self, n: int, p: int | None = None) -> 'RealFloat':
         """
         Computes the next number with exponent above `n` and precision
         up to `p` bits, towards zero.
@@ -1009,21 +993,19 @@ class RealFloat(numbers.Rational):
 
         return RealFloat(s=self._s, c=c, exp=exp)
 
-    def next_away_zero(self, p: int | None = None, n: int | None = None):
+    def next_away_zero(self, p: int | None = None, n: int | None = None) -> 'RealFloat':
         """
         Computes the next number away from zero.
 
         If `p` or `n` is specified, then `self` is normalized
         accordingly before computing the next value.
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
-
-        If `self == 0`, then a ValueError is raised.
         """
         if n is None:
             n = self.n
         return self._next_away(n, p)
 
-    def next_towards_zero(self, p: int | None = None, n: int | None = None):
+    def next_towards_zero(self, p: int | None = None, n: int | None = None) -> 'RealFloat':
         """
         Computes the next number towards zero.
 
@@ -1039,7 +1021,7 @@ class RealFloat(numbers.Rational):
             n = self.n
         return self._next_towards(n, p)
 
-    def next_up(self, p: int | None = None, n: int | None = None):
+    def next_up(self, p: int | None = None, n: int | None = None) -> 'RealFloat':
         """
         Computes the next number towards positive infinity.
 
@@ -1058,7 +1040,7 @@ class RealFloat(numbers.Rational):
             # x >= 0, so need to step away from zero
             return self.next_away_zero(p, n)
 
-    def next_down(self, p: int | None = None, n: int | None = None):
+    def next_down(self, p: int | None = None, n: int | None = None) -> 'RealFloat':
         """
         Computes the next number towards negative infinity.
 
@@ -1067,7 +1049,7 @@ class RealFloat(numbers.Rational):
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
         """
         if self._c == 0:
-            # step away from zero towards positive infinity
+            # step away from zero towards negative infinity
             x = self if self._s else RealFloat(s=True, exp=self._exp)
             return x.next_away_zero(p, n)
         elif self._s:
@@ -1077,7 +1059,7 @@ class RealFloat(numbers.Rational):
             # x >= 0, so need to step towards zero
             return self.next_towards_zero(p, n)
 
-    def _round_params(self, max_p: int | None = None, min_n: int | None = None):
+    def _round_params(self, max_p: int | None = None, min_n: int | None = None) -> tuple[int | None, int]:
         """
         Computes rounding parameters `p` and `n`.
 
@@ -1087,7 +1069,7 @@ class RealFloat(numbers.Rational):
         if max_p is None:
             p = None
             if min_n is None:
-                raise ValueError(f'must specify {max_p} or {min_n}')
+                raise ValueError('must specify max_p or min_n')
             else:
                 # fixed-point rounding => limited by n
                 n = min_n
@@ -1102,7 +1084,7 @@ class RealFloat(numbers.Rational):
 
         return p, n
 
-    def _round_increment_direction(self, direction: RoundingDirection):
+    def _round_increment_direction(self, direction: RoundingDirection) -> bool:
         """
         When in the halfway case for nearest rounding modes,
         or not representable in non-nearest rounding modes,
@@ -1127,7 +1109,7 @@ class RealFloat(numbers.Rational):
         lost: 'RealFloat',
         n: int,
         rm: RoundingMode,
-    ):
+    ) -> bool:
         """
         Determines whether we need to increment this value based on
         the rounding mode `rm` and the lost digits `lost` below
@@ -1178,7 +1160,7 @@ class RealFloat(numbers.Rational):
         """
         return self.is_zero() or self.e < emin
 
-    def _tiny_post(self, kept: Self, emin: int, n: int, rm: RoundingMode):
+    def _tiny_post(self, kept: 'RealFloat', emin: int, n: int, rm: RoundingMode) -> bool:
         """
         Computes tininess after rounding.
 
@@ -1218,7 +1200,7 @@ class RealFloat(numbers.Rational):
         emin: int | None,
         rm: RoundingMode,
         exact: bool
-    ):
+    ) -> 'RealFloat':
         """
         Rounds `self` at absolute digit position `n` using the rounding mode
         specified by `rm`. Optionally, specify `p` to limit the precision
@@ -1293,7 +1275,7 @@ class RealFloat(numbers.Rational):
         num_randbits: int | None,
         rng: RNG | None,
         exact: bool
-    ):
+    ) -> 'RealFloat':
         """
         Rounds `self` stochastically at absolute digit position `n` using
         `num_randbits` rounding digits. The rounding mode `rm` decides how to
@@ -1352,7 +1334,7 @@ class RealFloat(numbers.Rational):
         num_randbits: int | None = 0,
         *,
         rng: RNG | None = None,
-        exact: bool = False):
+        exact: bool = False) -> 'RealFloat':
         """
         Creates a copy of `self` rounded at absolute digit position `n`
         using the rounding mode specified by `rm`. If `exact` is `True`,
@@ -1389,7 +1371,7 @@ class RealFloat(numbers.Rational):
         *,
         rng: RNG | None = None,
         exact: bool = False,
-    ):
+    ) -> 'RealFloat':
         """
         Creates a copy of `self` rounded to at most `max_p` digits of precision
         or a least absolute digit position `min_n`, whichever bound
@@ -1401,7 +1383,7 @@ class RealFloat(numbers.Rational):
         If only `min_n` is given, rounding is performed like fixed-point
         rounding and the resulting significand may have more than `max_p` bits
         (any values can be clamped after this operation).
-        If only `min_p` is given, rounding is performed liked floating-point
+        If only `max_p` is given, rounding is performed liked floating-point
         without an exponent bound; the integer significand has at
         most `max_p` digits.
         If both are specified, rounding is performed like IEEE 754 floating-point
@@ -1411,12 +1393,11 @@ class RealFloat(numbers.Rational):
         When `num_randbits=0`, the rounding is performed by rounding
         using the rounding mode specified by `rm`.
 
-        When `randbits` is specified, the rounding is performed stochastically
-        using `randbits` rounding bits to decide which way to round. If `randbits=None`,
+        When `num_randbits` is specified, the rounding is performed stochastically
+        using `num_randbits` rounding bits to decide which way to round. If `num_randbits=None`,
         then all additional bits are considered rounding bits. The rounding mode specified
         by `rm` decides how the additional rounding bits are themselves rounded.
-        If `randbits=None`, rounding is decided by Python's native `random` module,
-        otherwise the value is used as the "randomly" sampled bits.
+        The random bits are drawn from `rng`, or Python's native `random` module if `rng=None`.
         """
 
         if max_p is not None and not isinstance(max_p, int):
@@ -1427,9 +1408,6 @@ class RealFloat(numbers.Rational):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if num_randbits is not None and not isinstance(num_randbits, int):
             raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
-
-        if max_p is None and min_n is None:
-            raise ValueError(f'must specify {max_p} or {min_n}')
 
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)

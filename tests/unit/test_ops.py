@@ -9,6 +9,7 @@ import pytest
 
 from hypothesis import given, strategies as st
 
+from fpy2.number import same_value
 from fpy2.number.engine.real import _MAX_POW_EXPONENT
 
 from .generators import floats, common_contexts
@@ -414,3 +415,26 @@ class TestExactZeroSum:
         tiny = 2.0 ** -149
         r = fp.add(tiny, -tiny / 2, fp.IEEEContext(8, 32, fp.RM.RTN))
         assert r.is_zero() and not r.s
+
+
+class TestSpecialConstants:
+    """`nan()` and `inf()` are `C(nan)` and `C(inf)`."""
+
+    _NAN = fp.Float(isnan=True)
+    _INF = fp.Float(isinf=True)
+    _SIX = fp.Float.from_int(6)
+
+    @pytest.mark.parametrize('ctx, nan, inf', [
+        (fp.FP64, _NAN, _INF),
+        (fp.MX_E4M3, _NAN, _NAN),     # no infinity: it rounds to NaN
+        (fp.MX_E2M1, _SIX, _SIX),     # neither: both saturate
+    ], ids=['FP64', 'MX_E4M3', 'MX_E2M1'])
+    def test_rounded_under_the_context(self, ctx, nan, inf) -> None:
+        assert same_value(fp.nan(ctx), nan)
+        assert same_value(fp.inf(ctx), inf)
+
+    def test_no_value_to_round_to_raises(self) -> None:
+        with pytest.raises(ValueError):
+            fp.nan(fp.INTEGER)
+        with pytest.raises(ValueError):
+            fp.inf(fp.INTEGER)

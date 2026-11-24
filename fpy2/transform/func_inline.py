@@ -3,13 +3,14 @@ Function inlining.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from ..analysis import (
     AssignDef,
     CallGraph,
     DefineUse,
     DefineUseAnalysis,
+    Hoistability,
     PhiDef,
     Reachability,
     ReachingDefs,
@@ -26,7 +27,7 @@ from .rename_target import RenameTarget
 from .utils import SiteRewriter, check_where
 
 
-def _replace_ret(block: StmtBlock, new_var: NamedId):
+def _replace_ret(block: StmtBlock, new_var: NamedId) -> None:
     last_stmt = block.stmts[-1]
     match last_stmt:
         case ReturnStmt():
@@ -42,31 +43,28 @@ def _replace_ret(block: StmtBlock, new_var: NamedId):
 class _Ctx:
     stmts: list[Stmt]
     is_ctx_expr: bool
-    in_while_cond: bool = False
-    in_comp: bool = False
 
     @staticmethod
-    def default():
+    def default() -> '_Ctx':
         return _Ctx(stmts=[], is_ctx_expr=False)
 
 
-def _refuses(e: Call, *, in_while_cond: bool, in_comp: bool) -> str | None:
+def _refuses(e: Call, *, strict: bool) -> str | None:
     """Why the call *e* cannot be inlined, or `None` where it can.
 
-    Decided from the call and the callee alone, so a listing and the rewrite
-    agree and neither spends an index on a call it will not inline.
+    The callee's body is spliced ahead of the call's statement, so the call
+    must be evaluated exactly once whenever that statement is
+    (:class:`~fpy2.analysis.Hoistability`).  Decided from the call and the
+    callee alone, so a listing and the rewrite agree and neither spends an
+    index on a call it will not inline.
     """
     assert isinstance(e.fn, Function)
-    if in_while_cond:
+    if not strict:
         return (
-            f'inlining `{e.fn.name}` here would splice its body before the '
-            f'loop, where a `while` condition is evaluated every iteration'
-        )
-    if in_comp:
-        return (
-            f'inlining `{e.fn.name}` here would splice its body outside the '
-            f'comprehension, where its targets are not bound; lower the '
-            f'comprehension to a loop first'
+            f'`{e.fn.name}` is called where its statement may not evaluate it '
+            f'exactly once (a conditional arm, a short-circuited operand, a '
+            f'`while` condition, a comprehension or an assert message), so its '
+            f'body cannot run ahead of the statement'
         )
     # inlining rewrites the trailing return into an assignment to a temp (see
     # `_replace_ret`): none leaves nothing to rewrite, and several would emit
@@ -104,17 +102,12 @@ class _FuncInline(SiteRewriter):
         inlined: dict[FuncDef, FuncDef] | None = None,
         recursive: bool = True,
         where: int | Cursor | None = None
-    ):
+    ) -> None:
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
         self.where = where
-        # Cache of fully-inlined callee bodies, keyed by callee
-        # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
-        # sites instead of re-inlining the whole callee subtree each
-        # time.  ``FuncInline.apply`` may pre-populate it in leaves-first
-        # order (so every lookup is a hit); otherwise it fills lazily on
-        # first use.  Either way it is never re-built per call site.
+        # fully-inlined callee bodies by callee, reused across call sites
         self.inlined = {} if inlined is None else inlined
         self.recursive = recursive
 
@@ -122,7 +115,7 @@ class _FuncInline(SiteRewriter):
         self.free_vars = set(func.free_vars)
         self.env = func.env.copy()
 
-    def _visit_call(self, e: Call, ctx: _Ctx):
+    def _visit_call(self, e: Call, ctx: _Ctx) -> Expr:
         if not isinstance(e.fn, Function):
             # not calling a function so no inlining
             return super()._visit_call(e, ctx)
@@ -131,21 +124,7 @@ class _FuncInline(SiteRewriter):
             return super()._visit_call(e, ctx)
 
         # a refusal is not a site, so it takes no index
-        reason = _refuses(
-            e, in_while_cond=ctx.in_while_cond, in_comp=ctx.in_comp,
-        )
-        if reason is not None:
-            self._refuse(e, reason)
-            return super()._visit_call(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            # a candidate site, but not the selected one
-            return super()._visit_call(e, ctx)
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
+        if not self._claim(e, _refuses(e, strict=e in self._strict)):
             return super()._visit_call(e, ctx)
 
         # Inline the callee body.  Acyclicity is guaranteed by the
@@ -211,31 +190,13 @@ class _FuncInline(SiteRewriter):
         # return the bound value
         return Var(t, e.loc)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> ListComp:
-        """The element expression is evaluated with the targets bound.
-
-        Splicing a callee's body into the enclosing block would put it where
-        they are not, so a call there is refused rather than inlined into an
-        unbound name.  The iterables are ordinary expressions of the
-        enclosing block and take the unchanged context.
-        """
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, ctx) for i in e.iterables]
-        elt = self._visit_expr(e.elt, replace(ctx, in_comp=True))
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
-        cond = self._visit_expr(stmt.cond, _Ctx(ctx.stmts, False, in_while_cond=True))
-        body, _ = self._visit_block(stmt.body, ctx)
-        return WhileStmt(cond, body, stmt.loc), None
-
-    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx) -> tuple[Stmt, None]:
         ctx_e = self._visit_expr(stmt.ctx, _Ctx(ctx.stmts, True))
         body, _ = self._visit_block(stmt.body, None)
         s = ContextStmt(stmt.target, ctx_e, body, stmt.loc)
         return s, None
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx | None) -> tuple[StmtBlock, None]:
         block_ctx = _Ctx.default()
         for pos, stmt in enumerate(block.stmts):
             self._site = (block, pos)
@@ -251,8 +212,9 @@ class _FuncInline(SiteRewriter):
         b = StmtBlock(block_ctx.stmts)
         return b, None
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
         self._begin(func)
+        self._strict = Hoistability.analyze(func).strict
         body, _ = self._visit_block(func.body, None)
         meta = FuncMeta(self.free_vars, func.meta.ctx, func.meta.pre, func.meta.spec, func.meta.props, self.env)
         return FuncDef(func.name, func.args, body, meta, loc=func.loc)
@@ -261,7 +223,7 @@ class _FuncInline(SiteRewriter):
         return self._visit_function(self.func, None)
 
 
-def _lister(func: FuncDef, funcs: 'Iterable[Function] | None') -> '_FuncInline':
+def _lister(func: FuncDef, funcs: Iterable[Function] | None) -> _FuncInline:
     """The pass instance a listing walks `func` with."""
     return _FuncInline(
         func,

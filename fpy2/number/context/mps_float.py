@@ -5,8 +5,9 @@ numbers with subnormals. Hence, "MP-S."
 """
 
 from fractions import Fraction
+from typing import Any
 
-from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import RoundingMode
 from .context import OrdinalContext, zero_sign
@@ -47,7 +48,7 @@ class MPSFloatFormat(OrdinalFormat):
         enable_nan: bool = True,
         enable_inf: bool = True,
         enable_neg_zero: bool = True,
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -62,7 +63,7 @@ class MPSFloatFormat(OrdinalFormat):
         self.enable_inf = enable_inf
         self.enable_neg_zero = enable_neg_zero
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPSFloatFormat)
             and self.pmax == other.pmax
@@ -72,7 +73,7 @@ class MPSFloatFormat(OrdinalFormat):
             and self.enable_neg_zero == other.enable_neg_zero
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.__class__, self.pmax, self.emin, self.enable_nan,
             self.enable_inf, self.enable_neg_zero,
@@ -304,8 +305,7 @@ class MPSFloatContext(OrdinalContext):
     """is infinity representable?"""
 
     enable_neg_zero: bool
-    """is `-0.0` representable?  When `False`, a negative value that rounds to
-    zero gives `+0.0`, so a result is always in `format()`."""
+    """is `-0.0` representable?"""
 
     nan_value: Float | None
     """
@@ -335,11 +335,11 @@ class MPSFloatContext(OrdinalContext):
         enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
-            raise TypeError(f'Expected integer p < 1 for p={pmax}')
+            raise ValueError(f'Expected positive integer for pmax={pmax}')
         if not isinstance(emin, int):
             raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
         if not isinstance(rm, RoundingMode):
@@ -381,7 +381,7 @@ class MPSFloatContext(OrdinalContext):
         self.inf_value = inf_value
         self._fmt = fmt
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, MPSFloatContext)
             and self.pmax == other.pmax
@@ -395,7 +395,7 @@ class MPSFloatContext(OrdinalContext):
             and same_value(self.inf_value, other.inf_value)
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((
             self.pmax,
             self.emin,
@@ -409,12 +409,12 @@ class MPSFloatContext(OrdinalContext):
         ))
 
     @property
-    def expmin(self):
+    def expmin(self) -> int:
         """Minimum unnormalized exponent."""
         return self.emin - self.pmax + 1
 
     @property
-    def nmin(self):
+    def nmin(self) -> int:
         """First unrepresentable digit for every value in the representation."""
         return self.expmin - 1
 
@@ -430,38 +430,21 @@ class MPSFloatContext(OrdinalContext):
         enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'MPSFloatContext':
-        if pmax is DEFAULT:
-            pmax = self.pmax
-        if emin is DEFAULT:
-            emin = self.emin
-        if rm is DEFAULT:
-            rm = self.rm
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
-        if enable_nan is DEFAULT:
-            enable_nan = self.enable_nan
-        if enable_inf is DEFAULT:
-            enable_inf = self.enable_inf
-        if enable_neg_zero is DEFAULT:
-            enable_neg_zero = self.enable_neg_zero
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPSFloatContext(
-            pmax, emin, rm, num_randbits,
-            rng=rng,
-            enable_nan=enable_nan,
-            enable_inf=enable_inf,
-            enable_neg_zero=enable_neg_zero,
-            nan_value=nan_value,
-            inf_value=inf_value
+            default_or(pmax, self.pmax),
+            default_or(emin, self.emin),
+            default_or(rm, self.rm),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+            enable_nan=default_or(enable_nan, self.enable_nan),
+            enable_inf=default_or(enable_inf, self.enable_inf),
+            enable_neg_zero=default_or(enable_neg_zero, self.enable_neg_zero),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value)
         )
 
     def is_stochastic(self) -> bool:
@@ -477,7 +460,7 @@ class MPSFloatContext(OrdinalContext):
         *,
         rm: RoundingMode = RoundingMode.RNE,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ) -> 'MPSFloatContext':
@@ -494,10 +477,10 @@ class MPSFloatContext(OrdinalContext):
             inf_value=inf_value
         )
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
-    def round_params(self):
+    def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         else:
@@ -508,8 +491,6 @@ class MPSFloatContext(OrdinalContext):
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
-
-        Optionally specify `n` as the least absolute digit position.
         Only overrides rounding behavior when `n > self.nmin`.
         """
         # step 1. handle special values
@@ -544,14 +525,6 @@ class MPSFloatContext(OrdinalContext):
 
         # step 5. wrap the result in a Float
         return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
-
-    def round(self, x, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)
 
     def zero(self, s: bool = False) -> Float:
         """Returns a signed 0 under this context."""

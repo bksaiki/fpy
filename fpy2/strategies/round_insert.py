@@ -101,7 +101,7 @@ def insert_round(
     would change the result.
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(RoundInsert.apply_with_edits(
         func.ast, ctx, where=func.rebase(where)

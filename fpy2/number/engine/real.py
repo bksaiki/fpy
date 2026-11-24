@@ -2,8 +2,7 @@
 Real arithmetic engine for exact computation.
 
 This engine handles exact arithmetic on Float and Fraction types,
-computing results without any rounding. It only works when the
-context requests exact computation (prec=None, n=None).
+computing results without any rounding.
 """
 
 from fractions import Fraction
@@ -62,9 +61,7 @@ class RealEngine(Engine):
     """
     Engine that performs exact real arithmetic.
 
-    This engine only handles operations when the context requests
-    exact computation (both prec and n are None). It works with
-    both Float and Fraction types.
+    It works with both Float and Fraction types.
     """
 
     @staticmethod
@@ -97,53 +94,8 @@ class RealEngine(Engine):
 
     # Unary operations
 
-    def acos(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def acosh(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def asin(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def asinh(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def atan(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def atanh(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def cbrt(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
     def ceil(self, x: EngineArg, ctx: Context) -> EngineRes:
         return self._real_rint(x, RoundingMode.RTP)
-
-    def cos(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def cosh(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def erf(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def erfc(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def exp(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def exp2(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def exp10(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def expm1(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
 
     def fabs(self, x: EngineArg, ctx: Context) -> EngineRes:
         match x:
@@ -157,21 +109,6 @@ class RealEngine(Engine):
     def floor(self, x: EngineArg, ctx: Context) -> EngineRes:
         return self._real_rint(x, RoundingMode.RTN)
 
-    def lgamma(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def log(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def log10(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def log1p(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def log2(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
     def neg(self, x: EngineArg, ctx: Context) -> EngineRes:
         match x:
             case Float():
@@ -183,24 +120,6 @@ class RealEngine(Engine):
 
     def roundint(self, x: EngineArg, ctx: Context) -> EngineRes:
         return self._real_rint(x, RoundingMode.RNA)
-
-    def sin(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def sinh(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def sqrt(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def tan(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def tanh(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def tgamma(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
 
     def trunc(self, x: EngineArg, ctx: Context) -> EngineRes:
         return self._real_rint(x, RoundingMode.RTZ)
@@ -241,9 +160,6 @@ class RealEngine(Engine):
                     return x.as_rational() + y
                 case _:
                     raise RuntimeError("unreachable case")
-
-    def atan2(self, y: EngineArg, x: EngineArg, ctx: Context) -> EngineRes:
-        return None
 
     def copysign(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         # transferring a sign moves no digits, so it is exact for every value,
@@ -293,23 +209,11 @@ class RealEngine(Engine):
                 return Float(x=RealFloat.from_rational(r), ctx=REAL)
             return r
 
-    def fdim(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def fmod(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
     def fmax(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         return max(x, y)
 
     def fmin(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         return min(x, y)
-
-    def hypot(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
-    def mod(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
 
     def mul(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         if _is_nan(x) or _is_nan(y):
@@ -400,9 +304,6 @@ class RealEngine(Engine):
                 case _:
                     raise RuntimeError("unreachable case")
 
-    def remainder(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
-
     def sub(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         # Implement as add(x, neg(y))
         neg_y = self.neg(y, ctx)
@@ -420,42 +321,3 @@ class RealEngine(Engine):
         return self.add(mul_result, z, ctx)
 
     # Mathematical constants
-
-    def const_e(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_log2e(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_log10e(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_ln2(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_ln10(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_pi(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_pi_2(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_pi_4(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_1_pi(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_2_pi(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_2_sqrtpi(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_sqrt2(self, ctx: Context) -> EngineRes:
-        return None
-
-    def const_sqrt1_2(self, ctx: Context) -> EngineRes:
-        return None

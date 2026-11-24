@@ -143,7 +143,7 @@ class _CompToLoopInstance(SiteRewriter):
         temp_id: NamedId | None = None,
         dependent: bool = True,
         index_ranges: bool = False,
-    ):
+    ) -> None:
         self.func = func
         self.def_use = def_use
         self.temp_id = NamedId('t') if temp_id is None else temp_id
@@ -224,7 +224,7 @@ class _CompToLoopInstance(SiteRewriter):
             bound |= _bound_names(t)
         return not (LiveVars.analyze(e.elt) - bound)
 
-    def _take_fill(self, e: ListComp) -> 'tuple[NamedId, tuple[Expr, ...]] | None':
+    def _take_fill(self, e: ListComp) -> tuple[NamedId, tuple[Expr, ...]] | None:
         """The place the loops of *e* may write into, taken once.
 
         Keyed on the comprehension itself and taken before the iterables are
@@ -243,7 +243,9 @@ class _CompToLoopInstance(SiteRewriter):
         self._fill = None
         return taken
 
-    def _lower_dependent(self, e: ListComp, out: list, fill) -> Expr:
+    def _lower_dependent(
+        self, e: ListComp, out: list, fill: tuple[NamedId, tuple[Expr, ...]] | None
+    ) -> Expr:
         """A clause list whose length is a sum rather than a product.
 
         `fp.empty` needs the total up front, with no ``append`` and no counting
@@ -429,26 +431,14 @@ class _CompToLoopInstance(SiteRewriter):
             if e not in self._strict
             else self._verify(e)
         )
-        if declined is not None:
-            self._refuse(e, declined.reason)
+        if not self._claim(e, None if declined is None else declined.reason):
             return super()._visit_expr(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
-            super()._visit_expr(e, ctx)
-            return e
 
         lowered = self._lower(e, ctx)
         self._replaced = True
         return lowered
 
-    def _visit_assign(self, stmt: Assign, ctx: Any):
+    def _visit_assign(self, stmt: Assign, ctx: Any) -> tuple[Stmt, Any]:
         # `z = [...]` fills `z` itself: an `acc` copied into it leaves two
         # names on one list, and a second name is a second *place*.
         self._fill = None
@@ -466,7 +456,7 @@ class _CompToLoopInstance(SiteRewriter):
             return ctx.pop(), ctx
         return s, ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any) -> tuple[Stmt, Any]:
         # `zs[i] = [...]` allocates straight into the slot.  The inner half of
         # `[[...] for ...]` arrives in this shape once the outer is lowered.
         self._fill = None

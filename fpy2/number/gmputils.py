@@ -7,6 +7,7 @@ as well as wrappers for round-to-odd arithmetic.
 """
 
 from collections.abc import Callable
+from fractions import Fraction
 
 import gmpy2 as gmp
 
@@ -25,15 +26,15 @@ __all__ = [
 # Limits
 
 MPFR_EMIN = gmp.get_emin_min()
-"""Maximum exponent for MPFR numbers."""
+"""Minimum exponent for MPFR numbers."""
 
 MPFR_EMAX = gmp.get_emax_max()
-"""Minimum exponent for MPFR numbers."""
+"""Maximum exponent for MPFR numbers."""
 
 ###########################################################
 # Conversions between Float and gmp.mpfr
 
-def float_to_mpfr(x: RealFloat | Float):
+def float_to_mpfr(x: RealFloat | Float) -> gmp.mpfr:
     """
     Converts `x` into an MPFR type exactly.
     """
@@ -48,7 +49,7 @@ def float_to_mpfr(x: RealFloat | Float):
     fmt = f'{s_fmt}{hex(x.c)}p{x.exp}'
     return gmp.mpfr(fmt, precision=x.p, base=16)
 
-def mpfr_to_float(x):
+def mpfr_to_float(x: gmp.mpfr) -> Float:
     """
     Converts `x` into Float type exactly.
 
@@ -59,17 +60,16 @@ def mpfr_to_float(x):
 ###########################################################
 # MPFR round-to-odd arithmetic wrappers
 
-def _round_odd(x: gmp.mpfr, inexact: bool):
+def _round_odd(x: gmp.mpfr, inexact: bool) -> Float:
     """Applies the round-to-odd fix up."""
     s = x.is_signed()
     if x.is_nan():
         return Float(s=s, isnan=True)
     elif x.is_infinite():
         # check for inexactness => only occurs when MPFR overflows
-        # TODO: awkward to use interval information for an infinity
         return Float(s=s, isinf=True, inexact=inexact)
     elif x.is_zero():
-        # check for inexactness => only occurs when MPFR overflows
+        # check for inexactness => only occurs when MPFR underflows
         # TODO: generate a reasonable inexact value
         if inexact:
             exp = gmp.get_emin_min() - 1
@@ -87,7 +87,7 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
             c += 1
         return Float(s=s, c=c, exp=exp)
 
-def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...]):
+def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...]) -> gmp.mpfr:
     """
     Calls an MPFR method `fn` with arguments `args` using `prec` digits
     of precision and round towards zero (RTZ).
@@ -109,7 +109,7 @@ def mpfr_call(
     args: tuple[gmp.mpfr, ...],
     prec: int | None = None,
     n: int | None = None
-):
+) -> Float:
     """
     Evalutes `fn(args)` such that the result may be safely re-rounded.
     Either specify:
@@ -149,7 +149,7 @@ def mpfr_call(
         result = _mpfr_call_with_prec(prec + 2, fn, args)
         return _round_odd(result, result.rc != 0)
 
-def mpfr_value(x, *, prec: int | None = None, n: int | None = None):
+def mpfr_value(x: float | Fraction | str, *, prec: int | None = None, n: int | None = None) -> Float:
     """
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.

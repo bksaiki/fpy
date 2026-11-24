@@ -1,35 +1,9 @@
 """
 Storage inference: one storage format per runtime object.
 
-Format inference bounds an expression by the smallest format its value can take;
-storage inference picks, from a distinguished set the target can spell, one
-format that *contains* that bound:
-
-    e : real   fmt(e) = F   F <= S
-    ------------------------------
-              store(e) = S
-
-The definitions denoting one runtime object form a class -- a union-find over
-``reaching_defs.same_object_defs``, which unions on phi edges and in-place
-updates and nothing else -- and each class stores at the join of its members'
-bounds.  A plain rebind starts a *new* class with its own, possibly narrower,
-storage: ``store`` is per object, not per name.
-
-The domain is :class:`FormatBound` itself, so a backend supplies an ordered
-sequence of formats and a fallback hook (:class:`StorageDomain`), nothing more.
-Spelling a format in the target's own types is the backend's, as is
-*representation* -- whether a list is a handle or a value is no property of a
-format.
-
-The join gives *containment*: every member of a class fits its class's storage.
-It says nothing about *realizability* -- whether a value can be got into a place
-whose storage was fixed elsewhere, such as a parameter or a callee's result --
-which is where every refusal a consumer raises comes from.  For a scalar that is
-a question about formats; for a list it is one about the heap, since changing an
-element type means a new buffer and so a new object.
-
-Termination rests on ``FormatBound`` being finite-depth: a cycle would need
-``xs[0] = xs``, which fails to unify.
+The definitions denoting one runtime object form a class (a union-find over
+``reaching_defs.same_object_defs``), and each class stores at the join of its
+members' bounds, chosen from a backend's :class:`StorageDomain`.
 """
 
 from collections import defaultdict
@@ -49,8 +23,8 @@ from .format_infer import (
     TupleFormat,
     VarFormat,
     is_bottom,
+    to_abstract,
 )
-from .format_infer.analysis import _to_abstract
 from .format_infer.format import RealFloat
 from .reaching_defs import AssignDef, Definition, def_classes
 from .value_class import ClassBound, ListClass, TupleClass, ValueClass
@@ -158,14 +132,6 @@ class StorageAnalysis:
         return self.class_storage[self.def_class[d]]
 
 
-def _lift(bound: FormatBound) -> AbstractFormat | None:
-    """*bound* as an :class:`AbstractFormat`, which is what carries ``<=``, or
-    ``None`` for a bound with no scalar reading."""
-    if isinstance(bound, AbstractableFormat | SetFormat):
-        return _to_abstract(bound)
-    return None
-
-
 def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
     """Why an *exact* bound exceeds every rung, or ``''`` where that is not what
     happened.
@@ -262,7 +228,7 @@ def of_bound(
             'is the active rounding context symbolic?  Try monomorphizing the '
             'function with a concrete context.'
         )
-    af = _lift(bound)
+    af = to_abstract(bound)
     if af is None:
         raise StorageSelectionError(
             f'cannot compare {bound!r} against the storage formats; '
@@ -319,7 +285,7 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
         ))
     afs = []
     for s in storages:
-        af = _lift(s)
+        af = to_abstract(s)
         assert af is not None, (
             f'cannot join a non-numeric storage with a numeric one: {storages!r}'
         )
@@ -334,7 +300,7 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
 def _aggregate(
     domain: StorageDomain,
     bounds: list[FormatBound],
-    classes: 'list[ClassBound] | None' = None,
+    classes: list[ClassBound] | None = None,
 ) -> FormatBound:
     """One storage containing every bound in *bounds*.
 
@@ -366,7 +332,7 @@ class StorageInfer:
         def_to_bound: dict[Definition, FormatBound],
         expr_to_bound: dict[Expr, FormatBound],
         domain: StorageDomain,
-        def_to_class: 'dict[Definition, ClassBound] | None' = None,
+        def_to_class: dict[Definition, ClassBound] | None = None,
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 

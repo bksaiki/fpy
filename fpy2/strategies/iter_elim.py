@@ -78,7 +78,7 @@ def elim_iter(
             return acc
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     # EnumerateElim first: it recognizes ``enumerate(zip(...))`` itself,
     # and after its rewrite a ``zip`` sits on an assignment RHS, out of

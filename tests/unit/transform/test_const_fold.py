@@ -424,18 +424,40 @@ class TestLenFolding:
 
     def test_impure_argument_is_not_dropped(self):
         """Substituting the literal deletes the argument, so an argument that
-        does something may not be folded away."""
+        does something may not be folded away -- however the callee reaches
+        the list it writes."""
         @fp.fpy(ctx=fp.FP64)
-        def sneaky(xs: list[fp.Real]) -> list[fp.Real]:
+        def direct(xs: list[fp.Real]) -> list[fp.Real]:
             xs[0] = 1.0
             return xs
 
         @fp.fpy(ctx=fp.FP64)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            return len(sneaky(xs))
+        def in_loop(xs: list[fp.Real]) -> list[fp.Real]:
+            for i in range(len(xs)):
+                xs[i] = 1.0
+            return xs
 
-        e = _return_expr(ConstFold.apply(_fix_lengths(f, 32)))
-        assert isinstance(e, Len), f'expected Len; got {type(e).__name__}'
+        @fp.fpy(ctx=fp.FP64)
+        def via_alias(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = xs
+            ys[0] = 1.0
+            return xs
+
+        @fp.fpy(ctx=fp.FP64)
+        def f1(xs: list[fp.Real]) -> fp.Real:
+            return len(direct(xs))
+
+        @fp.fpy(ctx=fp.FP64)
+        def f2(xs: list[fp.Real]) -> fp.Real:
+            return len(in_loop(xs))
+
+        @fp.fpy(ctx=fp.FP64)
+        def f3(xs: list[fp.Real]) -> fp.Real:
+            return len(via_alias(xs))
+
+        for f in (f1, f2, f3):
+            e = _return_expr(ConstFold.apply(_fix_lengths(f, 32)))
+            assert isinstance(e, Len), f'{f.name}: expected Len; got {type(e).__name__}'
 
     def test_enable_op_false_suppresses_it(self):
         @fp.fpy(ctx=fp.FP64)

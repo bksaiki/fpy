@@ -2,6 +2,7 @@
 
 import dataclasses
 from collections.abc import Callable
+from typing import NoReturn
 
 import titanfp.fpbench.fpcast as fpc
 
@@ -45,124 +46,92 @@ class _TupleAccess:
     off: int | None
 
 
-# Cached table storage
-_nullary_table_cache: dict[type[NullaryOp], fpc.Expr] | None = None
-_unary_table_cache: dict[type[UnaryOp], type[fpc.Expr]] | None = None
-_binary_table_cache: dict[type[BinaryOp], type[fpc.Expr]] | None = None
-_ternary_table_cache: dict[type[TernaryOp], type[fpc.Expr]] | None = None
-_nary_table_cache: dict[type[NaryOp], type[fpc.Expr]] | None = None
+_NULLARY: dict[type[NullaryOp], fpc.Expr] = {
+    ConstNan: fpc.Constant('NAN'),
+    ConstInf: fpc.Constant('INFINITY'),
+    ConstPi: fpc.Constant('PI'),
+    ConstE: fpc.Constant('E'),
+    ConstLog2E: fpc.Constant('LOG2E'),
+    ConstLog10E: fpc.Constant('LOG10E'),
+    ConstLn2: fpc.Constant('LN2'),
+    ConstPi_2: fpc.Constant('PI_2'),
+    ConstPi_4: fpc.Constant('PI_4'),
+    Const1_Pi: fpc.Constant('M_1_PI'),
+    Const2_Pi: fpc.Constant('M_2_PI'),
+    Const2_SqrtPi: fpc.Constant('M_2_SQRTPI'),
+    ConstSqrt2: fpc.Constant('SQRT2'),
+    ConstSqrt1_2: fpc.Constant('SQRT1_2'),
+}
 
-def _get_nullary_table() -> dict[type[NullaryOp], fpc.Expr]:
-    """Get the cached nullary operations table."""
-    global _nullary_table_cache
-    if _nullary_table_cache is None:
-        _nullary_table_cache = {
-            ConstNan: fpc.Constant('NAN'),
-            ConstInf: fpc.Constant('INFINITY'),
-            ConstPi: fpc.Constant('PI'),
-            ConstE: fpc.Constant('E'),
-            ConstLog2E: fpc.Constant('LOG2E'),
-            ConstLog10E: fpc.Constant('LOG10E'),
-            ConstLn2: fpc.Constant('LN2'),
-            ConstPi_2: fpc.Constant('PI_2'),
-            ConstPi_4: fpc.Constant('PI_4'),
-            Const1_Pi: fpc.Constant('M_1_PI'),
-            Const2_Pi: fpc.Constant('M_2_PI'),
-            Const2_SqrtPi: fpc.Constant('M_2_SQRTPI'),
-            ConstSqrt2: fpc.Constant('SQRT2'),
-            ConstSqrt1_2: fpc.Constant('SQRT1_2'),
-        }
-    return _nullary_table_cache
+_UNARY: dict[type[UnaryOp], type[fpc.Expr]] = {
+    Abs: fpc.Fabs,
+    Sqrt: fpc.Sqrt,
+    Neg: fpc.Neg,
+    Cbrt: fpc.Cbrt,
+    Ceil: fpc.Ceil,
+    Floor: fpc.Floor,
+    NearbyInt: fpc.Nearbyint,
+    RoundInt: fpc.Round,
+    Trunc: fpc.Trunc,
+    Acos: fpc.Acos,
+    Asin: fpc.Asin,
+    Atan: fpc.Atan,
+    Cos: fpc.Cos,
+    Sin: fpc.Sin,
+    Tan: fpc.Tan,
+    Acosh: fpc.Acosh,
+    Asinh: fpc.Asinh,
+    Atanh: fpc.Atanh,
+    Cosh: fpc.Cosh,
+    Sinh: fpc.Sinh,
+    Tanh: fpc.Tanh,
+    Exp: fpc.Exp,
+    Exp2: fpc.Exp2,
+    Expm1: fpc.Expm1,
+    Log: fpc.Log,
+    Log10: fpc.Log10,
+    Log1p: fpc.Log1p,
+    Log2: fpc.Log2,
+    Erf: fpc.Erf,
+    Erfc: fpc.Erfc,
+    Lgamma: fpc.Lgamma,
+    Tgamma: fpc.Tgamma,
+    IsFinite: fpc.Isfinite,
+    IsInf: fpc.Isinf,
+    IsNan: fpc.Isnan,
+    IsNormal: fpc.Isnormal,
+    Signbit: fpc.Signbit,
+    Not: fpc.Not,
+    Cast: fpc.Cast,
+}
 
-def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
-    """Get the cached unary operations table."""
-    global _unary_table_cache
-    if _unary_table_cache is None:
-        _unary_table_cache = {
-            Abs: fpc.Fabs,
-            Sqrt: fpc.Sqrt,
-            Neg: fpc.Neg,
-            Cbrt: fpc.Cbrt,
-            Ceil: fpc.Ceil,
-            Floor: fpc.Floor,
-            NearbyInt: fpc.Nearbyint,
-            RoundInt: fpc.Round,
-            Trunc: fpc.Trunc,
-            Acos: fpc.Acos,
-            Asin: fpc.Asin,
-            Atan: fpc.Atan,
-            Cos: fpc.Cos,
-            Sin: fpc.Sin,
-            Tan: fpc.Tan,
-            Acosh: fpc.Acosh,
-            Asinh: fpc.Asinh,
-            Atanh: fpc.Atanh,
-            Cosh: fpc.Cosh,
-            Sinh: fpc.Sinh,
-            Tanh: fpc.Tanh,
-            Exp: fpc.Exp,
-            Exp2: fpc.Exp2,
-            Expm1: fpc.Expm1,
-            Log: fpc.Log,
-            Log10: fpc.Log10,
-            Log1p: fpc.Log1p,
-            Log2: fpc.Log2,
-            Erf: fpc.Erf,
-            Erfc: fpc.Erfc,
-            Lgamma: fpc.Lgamma,
-            Tgamma: fpc.Tgamma,
-            IsFinite: fpc.Isfinite,
-            IsInf: fpc.Isinf,
-            IsNan: fpc.Isnan,
-            IsNormal: fpc.Isnormal,
-            Signbit: fpc.Signbit,
-            Not: fpc.Not,
-            Cast: fpc.Cast,
-        }
-    return _unary_table_cache
+_BINARY: dict[type[BinaryOp], type[fpc.Expr]] = {
+    Add: fpc.Add,
+    Sub: fpc.Sub,
+    Mul: fpc.Mul,
+    Div: fpc.Div,
+    Copysign: fpc.Copysign,
+    Fdim: fpc.Fdim,
+    Fmod: fpc.Fmod,
+    Remainder: fpc.Remainder,
+    Hypot: fpc.Hypot,
+    Atan2: fpc.Atan2,
+    Pow: fpc.Pow,
+}
 
-def _get_binary_table() -> dict[type[BinaryOp], type[fpc.Expr]]:
-    """Get the cached binary operations table."""
-    global _binary_table_cache
-    if _binary_table_cache is None:
-        _binary_table_cache = {
-            Add: fpc.Add,
-            Sub: fpc.Sub,
-            Mul: fpc.Mul,
-            Div: fpc.Div,
-            Copysign: fpc.Copysign,
-            Fdim: fpc.Fdim,
-            Fmod: fpc.Fmod,
-            Remainder: fpc.Remainder,
-            Hypot: fpc.Hypot,
-            Atan2: fpc.Atan2,
-            Pow: fpc.Pow,
-        }
-    return _binary_table_cache
+_TERNARY: dict[type[TernaryOp], type[fpc.Expr]] = {
+    Fma: fpc.Fma,
+}
 
-def _get_ternary_table() -> dict[type[TernaryOp], type[fpc.Expr]]:
-    """Get the cached ternary operations table."""
-    global _ternary_table_cache
-    if _ternary_table_cache is None:
-        _ternary_table_cache = {
-            Fma: fpc.Fma,
-        }
-    return _ternary_table_cache
-
-def _get_nary_table() -> dict[type[NaryOp], type[fpc.Expr]]:
-    """Get the cached n-ary operations table."""
-    global _nary_table_cache
-    if _nary_table_cache is None:
-        _nary_table_cache = {
-            Or: fpc.Or,
-            And: fpc.And,
-        }
-    return _nary_table_cache
+_NARY: dict[type[NaryOp], type[fpc.Expr]] = {
+    Or: fpc.Or,
+    And: fpc.And,
+}
 
 class FPCoreCompileError(CompileError):
     """Any FPCore compilation error"""
 
-def _nary_mul(args: list[fpc.Expr]):
+def _nary_mul(args: list[fpc.Expr]) -> fpc.Expr:
     assert args != [], 'must be at least 1 argument'
     if len(args) == 1:
         return args[0]
@@ -172,7 +141,7 @@ def _nary_mul(args: list[fpc.Expr]):
             e = fpc.Mul(e, arg)
         return e
 
-def _size0_expr(x: str):
+def _size0_expr(x: str) -> fpc.Size:
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
@@ -186,7 +155,7 @@ class _FPCoreCompileInstance(Visitor):
     unsafe_int_cast: bool
     _type_info: TypeAnalysis | None
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
@@ -225,7 +194,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
 
-    def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[fpc.Expr]):
+    def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[fpc.Expr]) -> list[tuple[str, fpc.Expr]]:
         tuple_binds: list[tuple[str, fpc.Expr]] = []
         for i, elt in enumerate(binding):
             # `pos` indexes the outer dimensions, so the element position goes
@@ -242,7 +211,7 @@ class _FPCoreCompileInstance(Visitor):
                     raise FPCoreCompileError('unexpected tensor element', elt)
         return tuple_binds
 
-    def _compile_comp_binding(self, tuple_id: str, target, idx: fpc.Expr):
+    def _compile_comp_binding(self, tuple_id: str, target: Id | TupleBinding, idx: fpc.Expr) -> list[tuple[str, fpc.Expr]]:
         """The bindings one comprehension clause's target needs.
 
         Under the target's own name: `elt` is compiled against those.
@@ -257,7 +226,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', target)
 
-    def _compile_compareop(self, op: CompareOp):
+    def _compile_compareop(self, op: CompareOp) -> type[fpc.Expr]:
         match op:
             case CompareOp.LT:
                 return fpc.LT
@@ -277,46 +246,32 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_var(self, e: Var, ctx: None) -> fpc.Expr:
         return fpc.Var(str(e.name))
 
-    def _visit_bool(self, e: BoolVal, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None) -> fpc.Expr:
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
     def _visit_foreign(self, e: ForeignVal, ctx: None) -> fpc.Expr:
         raise FPCoreCompileError('unsupported value', e.val)
 
-    def _visit_decnum(self, e: Decnum, ctx: None) -> fpc.Expr:
-        if e.is_integer() and self.unsafe_int_cast:
-            # unsafe integer cast: compile under integer context
-            v = int(e.as_rational())
-            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
-        raise FPCoreCompileError('cannot compile unrounded constant', e.val)
+    def _unrounded(self, e: RationalVal, integral: bool, shown: object) -> fpc.Expr:
+        """*e* under an integer context, where an unsafe integer cast allows it."""
+        if self.unsafe_int_cast and integral:
+            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(int(e.as_rational())))
+        raise FPCoreCompileError('cannot compile unrounded constant', shown)
 
-    def _visit_hexnum(self, e: Hexnum, ctx: None):
-        if e.is_integer() and self.unsafe_int_cast:
-            # unsafe integer cast: compile under integer context
-            v = int(e.as_rational())
-            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
-        raise FPCoreCompileError('cannot compile unrounded constant', e.val)
+    def _visit_decnum(self, e: Decnum, ctx: None) -> fpc.Expr:
+        return self._unrounded(e, e.is_integer(), e.val)
+
+    def _visit_hexnum(self, e: Hexnum, ctx: None) -> fpc.Expr:
+        return self._unrounded(e, e.is_integer(), e.val)
 
     def _visit_integer(self, e: Integer, ctx: None) -> fpc.Expr:
-        if self.unsafe_int_cast:
-            # unsafe integer cast: compile under integer context
-            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(e.val))
-        else:
-            raise FPCoreCompileError('cannot compile unrounded constant', e.val)
+        return self._unrounded(e, True, e.val)
 
-    def _visit_rational(self, e: Rational, ctx: None):
-        if self.unsafe_int_cast and e.is_integer():
-            # unsafe integer cast: compile under integer context
-            v = int(e.as_rational())
-            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
-        raise FPCoreCompileError('cannot compile unrounded constant', f'{e.p}/{e.q}')
+    def _visit_rational(self, e: Rational, ctx: None) -> fpc.Expr:
+        return self._unrounded(e, e.is_integer(), f'{e.p}/{e.q}')
 
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
-        if self.unsafe_int_cast and e.e == 0 and e.b == 2:
-            # unsafe integer cast: compile under integer context
-            v = int(e.as_rational())
-            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
-        raise FPCoreCompileError('cannot compile unrounded constant', f'digits({e.m}, {e.e}, {e.b})')
+        return self._unrounded(e, e.e == 0 and e.b == 2, f'digits({e.m}, {e.e}, {e.b})')
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
         if e.kwargs:
@@ -332,25 +287,18 @@ class _FPCoreCompileInstance(Visitor):
         return fpc.UnknownOperator(*args, name=name)
 
     def _visit_round(self, e: Round, ctx: None) -> fpc.Expr:
-        # round expression
         match e.arg:
             case Decnum():
-                # round(n) => n
                 return fpc.Decnum(e.arg.val)
             case Hexnum():
-                # round(n) => n
                 return fpc.Hexnum(e.arg.val)
             case Integer():
-                # round(n) => n
                 return fpc.Integer(e.arg.val)
             case Rational():
-                # round(p/q) => p/q
                 return fpc.Rational(e.arg.p, e.arg.q)
             case Digits():
-                # round(digits(m, e, b)) => digits(m, e, b)
                 return fpc.Digits(e.arg.m, e.arg.e, e.arg.b)
             case _:
-                # round(e) => cast(e)
                 arg = self._visit_expr(e.arg, ctx)
                 return fpc.Cast(arg)
 
@@ -406,12 +354,12 @@ class _FPCoreCompileInstance(Visitor):
             elt = self._visit_empty(args[1:], ctx)
             return fpc.Tensor([(tuple_id, size)], elt)
 
-    def _visit_size(self, arr: Expr, dim: Expr, ctx) -> fpc.Expr:
+    def _visit_size(self, arr: Expr, dim: Expr, ctx: None) -> fpc.Expr:
         tup = self._visit_expr(arr, ctx)
         idx = self._visit_expr(dim, ctx)
         return fpc.Size(tup, idx)
 
-    def _visit_dim(self, arr: Expr, ctx) -> fpc.Expr:
+    def _visit_dim(self, arr: Expr, ctx: None) -> fpc.Expr:
         tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
@@ -427,7 +375,7 @@ class _FPCoreCompileInstance(Visitor):
             raise FPCoreCompileError('missing type for tuple accessor operand', e)
         return ty
 
-    def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> fpc.Expr:
+    def _emit_tuple_accessor(self, e: UnaryOp, ctx: None) -> fpc.Expr:
         """Emit a (possibly nested) ``fst``/``snd`` chain.
 
         A chain that reads one element folds to a single ``ref`` — e.g.
@@ -448,7 +396,7 @@ class _FPCoreCompileInstance(Visitor):
         ]
         return fpc.Let([(tuple_id, acc.e)], fpc.Array(*refs))
 
-    def _tuple_access(self, e: Expr, ctx) -> _TupleAccess:
+    def _tuple_access(self, e: Expr, ctx: None) -> _TupleAccess:
         """Resolve a ``fst``/``snd`` chain over a tuple into a
         :class:`_TupleAccess`, peeling the nesting and tracking the net
         offset into the underlying base tuple."""
@@ -562,8 +510,6 @@ class _FPCoreCompileInstance(Visitor):
         )
 
     def _visit_min(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # Left-fold pairwise via the NaN-propagating, signed-zero-correct
-        # minimum (see :meth:`_fpc_minimum`).
         vals = [self._visit_expr(arg, ctx) for arg in args]
         min_expr = vals[0]
         for val in vals[1:]:
@@ -571,8 +517,6 @@ class _FPCoreCompileInstance(Visitor):
         return min_expr
 
     def _visit_max(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # Left-fold pairwise via the NaN-propagating, signed-zero-correct
-        # maximum (see :meth:`_fpc_maximum`).
         vals = [self._visit_expr(arg, ctx) for arg in args]
         max_expr = vals[0]
         for val in vals[1:]:
@@ -580,17 +524,12 @@ class _FPCoreCompileInstance(Visitor):
         return max_expr
 
     def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # sum(xs) → fold over the list with +.  Shape documented on
-        # :meth:`_visit_list_reduce`.
         return self._visit_list_reduce(arg, fpc.Add, ctx)
 
     def _visit_amin(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # min(xs) → fold over the list with the IEEE 754-2019 ``minimum``
-        # (see :meth:`_fpc_minimum`).
         return self._visit_list_reduce(arg, self._fpc_minimum, ctx)
 
     def _visit_amax(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # max(xs) → fold over the list with the IEEE 754-2019 ``maximum``.
         return self._visit_list_reduce(arg, self._fpc_maximum, ctx)
 
     def _visit_list_reduce(
@@ -643,7 +582,7 @@ class _FPCoreCompileInstance(Visitor):
             )
         )
 
-    def _visit_bool_reduce(self, e: 'AnyOf | AllOf', ctx: None) -> fpc.Expr:
+    def _visit_bool_reduce(self, e: AnyOf | AllOf, ctx: None) -> fpc.Expr:
         """``any``/``all`` — fold the list with ``or``/``and``.  Builds::
 
             (let ([t <tuple>])
@@ -680,77 +619,58 @@ class _FPCoreCompileInstance(Visitor):
         )
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
-        nullary_table = _get_nullary_table()
-        if type(e) not in nullary_table:
-            # unknown operator
+        if type(e) not in _NULLARY:
             raise NotImplementedError('no FPCore operator for', e)
-        return nullary_table[type(e)]
+        return _NULLARY[type(e)]
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
-        unary_table = _get_unary_table()
-        cls = unary_table.get(type(e))
+        cls = _UNARY.get(type(e))
         if cls is not None:
-            # known unary operator
             arg = self._visit_expr(e.arg, ctx)
             return cls(arg)
         else:
             match e:
                 case Len():
-                    # len expression
                     return self._visit_len(e.arg, ctx)
                 case Range1():
-                    # range expression
                     return self._visit_range1(e.arg, ctx)
                 case Dim():
-                    # dim expression
                     return self._visit_dim(e.arg, ctx)
                 case Fst() | Snd():
                     # tuple accessors — fold a chain (e.g. ``fst(snd(e))``)
                     # into a single ``ref``.
                     return self._emit_tuple_accessor(e, ctx)
                 case Enumerate():
-                    # enumerate expression
                     return self._visit_enumerate(e.arg, ctx)
                 case Sum():
-                    # sum expression
                     return self._visit_sum(e.arg, ctx)
                 case AMin():
-                    # min(xs) reduce-form
                     return self._visit_amin(e.arg, ctx)
                 case AMax():
-                    # max(xs) reduce-form
                     return self._visit_amax(e.arg, ctx)
                 case AnyOf() | AllOf():
-                    # any(bs) / all(bs) boolean reduce-forms
                     return self._visit_bool_reduce(e, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
-        binary_table = _get_binary_table()
-        cls = binary_table.get(type(e))
+        cls = _BINARY.get(type(e))
         if cls is not None:
-            # known binary operator
             arg0 = self._visit_expr(e.first, ctx)
             arg1 = self._visit_expr(e.second, ctx)
             return cls(arg0, arg1)
         else:
             match e:
                 case Size():
-                    # size expression
                     return self._visit_size(e.first, e.second, ctx)
                 case Range2():
-                    # range expression
                     return self._visit_range2(e.first, e.second, ctx)
                 case _:
-                    # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
-        ternary_table = _get_ternary_table()
-        cls = ternary_table.get(type(e))
+        cls = _TERNARY.get(type(e))
         if cls is not None:
-            # known ternary operator
             arg0 = self._visit_expr(e.first, ctx)
             arg1 = self._visit_expr(e.second, ctx)
             arg2 = self._visit_expr(e.third, ctx)
@@ -758,37 +678,28 @@ class _FPCoreCompileInstance(Visitor):
         else:
             match e:
                 case Range3():
-                    # range expression
                     return self._visit_range3(e.first, e.second, e.third, ctx)
                 case _:
-                    # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
-        nary_table = _get_nary_table()
-        cls = nary_table.get(type(e))
+        cls = _NARY.get(type(e))
         if cls is not None:
-            # known n-ary operator
             return cls(*[self._visit_expr(c, ctx) for c in e.args])
         else:
             match e:
                 case Zip():
-                    # zip expression
                     return self._visit_zip(e.args, ctx)
                 case Min():
-                    # min expression
                     return self._visit_min(e.args, ctx)
                 case Max():
-                    # max expression
                     return self._visit_max(e.args, ctx)
                 case Empty():
-                    # empty expression
                     return self._visit_empty(e.args, ctx)
                 case _:
-                    # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
-    def _check_comparable(self, e: Compare):
+    def _check_comparable(self, e: Compare) -> None:
         """Reject a comparison of operands FPCore cannot compare.
 
         FPy's ``==`` is ``a -> a -> bool``, so an aggregate arrives well-typed.
@@ -932,7 +843,7 @@ class _FPCoreCompileInstance(Visitor):
                     )
                 )
 
-    def _generate_tuple_set(self, tuple_id: str, iter_id: str, idx_ids: list[str], val_id: str):
+    def _generate_tuple_set(self, tuple_id: str, iter_id: str, idx_ids: list[str], val_id: str) -> fpc.Tensor:
         # dimension bindings
         idx_id = idx_ids[0]
         tensor_dims = [(iter_id, _size0_expr(tuple_id))]
@@ -1075,7 +986,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_attribute(self, e: Attribute, ctx: None) -> fpc.Expr:
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(e).__name__}')
 
-    def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
+    def _visit_assign(self, stmt: Assign, ctx: fpc.Expr) -> fpc.Let | fpc.LetStar:
         match stmt.target:
             case Id():
                 bindings = [(str(stmt.target), self._visit_expr(stmt.expr, None))]
@@ -1086,9 +997,9 @@ class _FPCoreCompileInstance(Visitor):
                 destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.target, [])
                 return fpc.LetStar([tuple_bind] + destruct_bindings, ctx)
             case _:
-                raise RuntimeError('unreachable', stmt.binding)
+                raise RuntimeError('unreachable', stmt.target)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr) -> fpc.Let:
         # ``xs[i1]…[iN] = v`` lowers to the FPCore ``tensor`` form
         # produced by :meth:`_functional_list_update`, with
         # ``Var(stmt.var)`` as the list being updated.  The result
@@ -1102,7 +1013,7 @@ class _FPCoreCompileInstance(Visitor):
         )
         return fpc.Let([(str(stmt.var), update)], ctx)
 
-    def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr):
+    def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr) -> fpc.Expr:
         # check that only one variable is mutated in the loop
         # the `IfBundling` pass is required to ensure this
         mutated = self.def_use.mutated_in(stmt.body)
@@ -1130,7 +1041,7 @@ class _FPCoreCompileInstance(Visitor):
             # cannot compile to FPCore
             raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {sorted(mutated)}')
 
-    def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
+    def _visit_if(self, stmt: IfStmt, ret: fpc.Expr) -> fpc.Expr:
         # check that only one variable is mutated in the loop
         # the `IfBundling` pass is required to ensure this
         mutated_ift = self.def_use.mutated_in(stmt.ift)
@@ -1170,7 +1081,7 @@ class _FPCoreCompileInstance(Visitor):
             # cannot compile to FPCore
             raise FPCoreCompileError(f'if statements cannot have more than 1 mutated or introduced variable: {list(changed)}')
 
-    def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
+    def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr) -> fpc.Expr:
         # check that only one variable is mutated in the loop
         # the `WhileBundling` pass is required to ensure this
         mutated = self.def_use.mutated_in(stmt.body)
@@ -1195,7 +1106,7 @@ class _FPCoreCompileInstance(Visitor):
             raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {sorted(mutated)}')
 
 
-    def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
+    def _visit_for(self, stmt: ForStmt, ret: fpc.Expr) -> fpc.Expr:
         """Lower ``for <x> in <iterable>: <body>``.
 
         FPy's loop target ranges over the iterable's *elements*, while an
@@ -1260,7 +1171,7 @@ class _FPCoreCompileInstance(Visitor):
                     ret
             ))
 
-    def _visit_data(self, data):
+    def _visit_data(self, data: object) -> fpc.Expr | tuple:
         match data:
             case int():
                 return fpc.Integer(data)
@@ -1277,7 +1188,7 @@ class _FPCoreCompileInstance(Visitor):
             case _:
                 raise NotImplementedError(repr(data))
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> fpc.Ctx:
         # check if the context is bound
         if isinstance(stmt.target, NamedId):
             raise FPCoreCompileError('Context statements cannot bind to a variable', stmt.target)
@@ -1305,11 +1216,11 @@ class _FPCoreCompileInstance(Visitor):
             props[k] = fpc.Data(self._visit_data(props[k]))
         return fpc.Ctx(props, body)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: fpc.Expr) -> fpc.Expr:
         # strip the assertion
         return ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: fpc.Expr):
+    def _visit_effect(self, stmt: EffectStmt, ctx: fpc.Expr) -> NoReturn:
         raise FPCoreCompileError('FPCore does not support effectful computation')
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None) -> fpc.Expr:
@@ -1318,7 +1229,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_pass(self, stmt: PassStmt, ctx: None) -> fpc.Expr:
         return ctx
 
-    def _visit_block(self, block: StmtBlock, ctx: fpc.Expr | None):
+    def _visit_block(self, block: StmtBlock, ctx: fpc.Expr | None) -> fpc.Expr:
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)
             stmts = block.stmts[:-1]
@@ -1328,13 +1239,6 @@ class _FPCoreCompileInstance(Visitor):
 
         for stmt in reversed(stmts):
             if isinstance(stmt, ReturnStmt):
-                # FPCore is functional — every construct produces a
-                # single expression value, so multiple-exit control
-                # flow has no natural lowering.  FPy allows multiple
-                # ``return`` statements for the interpreter and cpp
-                # backends; the FPCore backend specifically rejects
-                # them.  Use the FPy interpreter, or rewrite to a
-                # single tail return, if you need this program.
                 raise FPCoreCompileError(
                     'FPCore does not support multiple return statements'
                 )
@@ -1342,7 +1246,7 @@ class _FPCoreCompileInstance(Visitor):
 
         return e
 
-    def _visit_function(self, func: FuncDef, ctx: fpc.Expr | None):
+    def _visit_function(self, func: FuncDef, ctx: fpc.Expr | None) -> fpc.FPCore:
         args = [self._compile_arg(arg) for arg in func.args]
         body = self._visit_block(func.body, ctx)
 
@@ -1422,7 +1326,7 @@ class FPCoreCompiler(Backend):
     unsafe_int_cast: bool
     """any unrounded integer is automatically compiled under an integer context"""
 
-    def __init__(self, *, unsafe_int_cast: bool = False):
+    def __init__(self, *, unsafe_int_cast: bool = False) -> None:
         self.unsafe_int_cast = unsafe_int_cast
 
     def compile_module(self, module: Module) -> dict[str, fpc.FPCore]:
@@ -1457,7 +1361,8 @@ class FPCoreCompiler(Backend):
     def _emit_entry(self, entry: ModuleEntry) -> fpc.FPCore:
         """Emit one FPCore from a (post-pass) public entry."""
         ast = entry.func.ast
-        if bad := unclosed_data_free_vars(ast):
+        bad = unclosed_data_free_vars(ast)
+        if bad:
             raise FPCoreCompileError(
                 f'unbound data free variable(s): {", ".join(bad)}', ast
             )

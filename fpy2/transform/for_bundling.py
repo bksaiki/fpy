@@ -15,31 +15,13 @@ class _ForBundlingInstance(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
-
-    def _visit_tuple_binding(self, binding: TupleBinding, rename: dict[NamedId, NamedId] | None = None):
-        new_vars: list[Id | TupleBinding] = []
-        for var in binding:
-            match var:
-                case NamedId():
-                    if rename is None:
-                        new_vars.append(var)
-                    else:
-                        new_vars.append(rename.get(var, var))
-                case UnderscoreId():
-                    new_vars.append(var)
-                case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(var, rename))
-                case _:
-                    raise NotImplementedError(f'unreachable {var}')
-        return TupleBinding(new_vars, binding.loc)
-
 
     def _visit_for(self, stmt: ForStmt, ctx: None) -> StmtBlock:
         # let x_0, ..., x_N be variables mutated in the for loop
@@ -59,17 +41,14 @@ class _ForBundlingInstance(DefaultTransformVisitor):
         #     t = (x_0', ..., x_N')
         # x_0, ..., x_N = t
         # ```
-        # 
-        # In the case that `x_i` is re-defined in `<target>`,
-        # replace `x_i` with `x_i'` in the target and
-        # generate `_` in place of `x_i'` in the body.
-        # 
+        #
+        # The target is rebound every iteration and is scoped to the loop, so
+        # it is never carried, even where the body reassigns it.
 
-        # identify variables that were mutated in the body
         # sorted: the order decides the tuple's element order and each
         # name's index in it, so a set would make the emitted program
         # depend on hash order and differ run to run
-        mutated = sorted(self.def_use.mutated_in(stmt.body))
+        mutated = sorted(self.def_use.mutated_in(stmt.body) - stmt.target.names())
         if len(mutated) > 1:
             # need to apply the transformation
             stmts: list[Stmt] = []
@@ -80,30 +59,10 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             # fresh variables for each mutated variable
             rename = { var: self.gensym.refresh(var) for var in mutated }
 
-            # extract target names
-            match stmt.target:
-                case NamedId():
-                    target_names = { stmt.target }
-                case UnderscoreId():
-                    target_names = set()
-                case TupleBinding():
-                    target_names = stmt.target.names()
-                case _:
-                    raise RuntimeError('unreachable', stmt.target)
-
             # create a tuple of mutated variables
             e = TupleExpr([Var(var, None) for var in mutated], None)
             s: Stmt = Assign(t, None, e, None)
             stmts.append(s)
-
-            # transform target
-            match stmt.target:
-                case Id():
-                    target: Id | TupleBinding = stmt.target
-                case TupleBinding():
-                    target = self._visit_tuple_binding(stmt.target, rename)
-                case _:
-                    raise RuntimeError('unreachable', stmt.target)
 
             # compile iterable and body
             iterable = self._visit_expr(stmt.iterable, None)
@@ -111,8 +70,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             body = RenameTarget.apply_block(body, rename)
 
             # unpack the tuple at the start of the body
-            # replace any variable in the target with `_`
-            binding = TupleBinding([UnderscoreId() if var in target_names else rename[var] for var in mutated], None)
+            binding = TupleBinding([rename[var] for var in mutated], None)
             s = Assign(binding, None, Var(t, None), None)
             body.stmts.insert(0, s)
 
@@ -121,7 +79,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             body.stmts.append(s)
 
             # append the for statement
-            s = ForStmt(target, iterable, body, None)
+            s = ForStmt(stmt.target, iterable, body, None)
             stmts.append(s)
 
             # unpack the tuple after the loop
@@ -131,21 +89,11 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             return StmtBlock(stmts)
         else:
             # transformation is not needed
-            match stmt.target:
-                case Id():
-                    target = stmt.target
-                case TupleBinding():
-                    target = self._visit_tuple_binding(stmt.target, None)
-                case _:
-                    raise RuntimeError('unreachable', stmt.target)
-
-            iterable = self._visit_expr(stmt.iterable, None)
-            body, _ = self._visit_block(stmt.body, None)
-            s = ForStmt(target, iterable, body, None)
+            s, _ = super()._visit_for(stmt, None)
             return StmtBlock([s])
 
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> tuple[StmtBlock, None]:
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, ForStmt):
@@ -169,7 +117,7 @@ class ForBundling:
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
         if not isinstance(func, FuncDef):
-            raise SyntaxCheck(f'Expected \'FuncDef\', got {func}')
+            raise TypeError(f'Expected \'FuncDef\', got {func}')
 
         def_use = DefineUse.analyze(func)
         ast = _ForBundlingInstance(func, def_use).apply()

@@ -41,20 +41,10 @@ from ...ast.fpyast import (
     Sqrt,
     Sub,
 )
-from ...number import (
-    INTEGER,
-    RM,
-    SINT8,
-    SINT16,
-    SINT32,
-    SINT64,
-    UINT8,
-    UINT16,
-    UINT32,
-    UINT64,
-)
+from ...number import RM
 from ...number.context.context import Context
 from ...number.context.ieee754 import IEEEContext
+from ..storage import INT_CTXS
 from .storage import choose_storage_scalar
 from .types import TritonScalar
 
@@ -105,6 +95,8 @@ class TritonOp:
                 return f'{self.name}({", ".join(args)})'
             case TritonOpStyle.TEMPLATE:
                 return self.name.format(*args)
+            case _:
+                raise RuntimeError(f'unreachable: {self.style}')
 
 
 type OpTable = dict[type[Expr], list[TritonOp]]
@@ -212,16 +204,8 @@ def directed_cast(ctx: Context, src: TritonScalar) -> tuple[str, int] | None:
     return None
 
 
-def _int_ctxs() -> list[Context]:
-    return [
-        SINT8, SINT16, SINT32, SINT64,
-        UINT8, UINT16, UINT32, UINT64,
-        INTEGER,
-    ]
-
-
 def _all_arith_ctxs() -> list[Context]:
-    return _fp_ctxs() + _int_ctxs()
+    return [*_fp_ctxs(), *INT_CTXS]
 
 
 _NATIVE_CTXS = frozenset(_all_arith_ctxs())

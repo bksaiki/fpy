@@ -15,7 +15,7 @@ _common: list[EFloatContext] = [
 
 
 class OrdinalRoundTripTestCase():
-    """Testing `ExtFloatContext.to_ordinal()` and `ExtFloatContext.from_ordinal()`"""
+    """Testing `EFloatContext.to_ordinal()` and `EFloatContext.from_ordinal()`"""
 
     def test_common(self):
         # iterate over common contexts

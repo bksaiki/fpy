@@ -24,6 +24,7 @@ from ..analysis import (
     PartialContext,
 )
 from ..analysis.format_infer import FormatBound
+from ..ast.accessors import operands
 from ..ast.fpyast import Cast, Expr, FuncDef, Round
 from ..number import REAL, MPBFixedContext, MPFixedContext
 from ..number.context.context import Context
@@ -41,7 +42,6 @@ from ..transform import (
     UnfoldSpecial,
 )
 from ..transform.cursor import expr_sites
-from ..transform.utils import operands
 
 __all__ = [
     'UnfoldKind',
@@ -145,7 +145,7 @@ class _Scopes:
     wide: bool
     _formats: dict[Expr, FormatBound] | None
 
-    def __init__(self, func: FuncDef, wide: bool):
+    def __init__(self, func: FuncDef, wide: bool) -> None:
         self.func = func
         self.def_use = DefineUse.analyze(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
@@ -220,16 +220,15 @@ def sites(
     if not isinstance(func, FuncDef):
         raise TypeError(f'Expected \'FuncDef\', got {func}')
     active_of = _Scopes(func, wide)
-    out: list[UnfoldSite] = []
-    for cursor in expr_sites(
-        func,
-        lambda e: _classify(e, active_of, target) is not None,
-        within,
-    ):
-        got = _classify(cursor.resolve(), active_of, target)
-        assert got is not None
-        out.append(UnfoldSite(cursor, *got))
-    return out
+    kinds: dict[Expr, tuple[UnfoldKind, Context | PartialContext]] = {}
+
+    def match(e: Expr) -> bool:
+        got = _classify(e, active_of, target)
+        if got is not None:
+            kinds[e] = got
+        return got is not None
+
+    return [UnfoldSite(c, *kinds[c.resolve()]) for c in expr_sites(func, match, within)]
 
 
 def _split_arith(
@@ -268,16 +267,6 @@ def _arith(func: FuncDef, target: UnfoldTarget) -> list[UnfoldSite]:
     return [s for s in sites(func, target) if s.kind in _ARITH]
 
 
-def _step(
-    func: FuncDef, todo: list[UnfoldSite], target: UnfoldTarget,
-) -> FuncDef | None:
-    for site in todo:
-        out = _split_arith(func, site, target)
-        if out is not None:
-            return out
-    return None
-
-
 def unfold_arith(func: FuncDef, target: UnfoldTarget) -> FuncDef:
     """*func* with every arithmetic site the op table cannot spell computed at
     a native intermediate instead.
@@ -292,7 +281,8 @@ def unfold_arith(func: FuncDef, target: UnfoldTarget) -> FuncDef:
     """
     todo = _arith(func, target)
     while todo:
-        out = _step(func, todo, target)
+        outs = (_split_arith(func, site, target) for site in todo)
+        out = next((o for o in outs if o is not None), None)
         if out is None:
             return func
         func = out

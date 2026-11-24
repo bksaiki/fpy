@@ -3,10 +3,9 @@ Interpreter backed by Python bytecode.
 """
 
 import ast as pyast
-import copy
 import functools
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from fractions import Fraction
 from typing import Any
 
@@ -44,7 +43,7 @@ def _neg_zero() -> Float:
     """Constructs an exact negative zero (not representable as a `Fraction`)."""
     return Float(s=True, exp=0, c=0)
 
-def _cvt_float(x: Value):
+def _cvt_float(x: Value) -> Float:
     match x:
         case Float():
             return x
@@ -55,7 +54,7 @@ def _cvt_float(x: Value):
         case _:
             raise TypeError(f'expected a real number, got `{x}`')
 
-def _cvt_int(val: Value):
+def _cvt_int(val: Value) -> int:
     """
     Converts an integer-valued real to a Python `int`.
 
@@ -69,7 +68,7 @@ def _cvt_int(val: Value):
         raise TypeError(f'expected an integer, got {val}')
     return int(val)
 
-def _cvt_index(val: Value):
+def _cvt_index(val: Value) -> int:
     """
     Converts a list index to a Python `int`.
 
@@ -81,7 +80,7 @@ def _cvt_index(val: Value):
         raise IndexError(f'list index out of range: {idx}')
     return idx
 
-def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
+def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type) -> Any:
     # opaque payloads (e.g. an `rng`) cross back to Python
     arg = unwrap_foreign(arg)
     if ty is int or (ty == int | None and arg is not None):
@@ -107,10 +106,10 @@ def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
         return arg
 
 @functools.lru_cache(maxsize=128)
-def _get_context_signature(cls: type[Context]):
+def _get_context_signature(cls: type[Context]) -> inspect.Signature:
     return inspect.signature(cls.__init__)
 
-def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object]):
+def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object]) -> Context:
     # get the constructor signature
     sig = _get_context_signature(cls)
     _, *params = list(sig.parameters)
@@ -131,7 +130,7 @@ def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object
     return cls(*ctor_args, **ctor_kwargs)
 
 
-def _call_fpy(fn: Function, args, ctx):
+def _call_fpy(fn: Function, args: Sequence[Value], ctx: Context) -> Value:
     """Invoke an FPy function from *inside* the interpreter, bypassing
     ``Function.__call__`` so the Python-boundary conversions are skipped —
     rebuilding containers there would break list sharing with the callee."""
@@ -139,7 +138,7 @@ def _call_fpy(fn: Function, args, ctx):
     return rt.eval(fn, args, ctx, convert=False)
 
 
-def _eval_call(fn, ctx, *args, **kwargs):
+def _eval_call(fn: Any, ctx: Context, *args: Value, **kwargs: object) -> Value:
     # callables (functions, primitives, context classes) are foreign values
     fn = unwrap_foreign(fn)
     match fn:
@@ -168,12 +167,12 @@ def _eval_call(fn, ctx, *args, **kwargs):
             else:
                 raise RuntimeError(f'attempting to call a Python function: `{fn}`')
 
-def _eval_attribute(base, attr: str):
+def _eval_attribute(base: Value, attr: str) -> Value:
     """``e.name``: read a native attribute and re-classify the result."""
     val = getattr(unwrap_foreign(base), attr)
     return to_value(val)
 
-def _eval_enumerate(val: list[Value], ctx: Context):
+def _eval_enumerate(val: list[Value], ctx: Context) -> list[tuple[Float, Value]]:
     if not isinstance(val, list):
         raise TypeError(f'expected a list, got {val}')
     return [
@@ -181,7 +180,7 @@ def _eval_enumerate(val: list[Value], ctx: Context):
         for i, v in enumerate(val)
     ]
 
-def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
+def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None) -> list[Value]:
     """
     Strict slice ``lst[start:stop]``.
 
@@ -201,24 +200,9 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
         raise TypeError(f'expected a list, got {lst}')
 
     n = len(lst)
-    if start is None:
-        start_idx = 0
-    else:
-        if not isinstance(start, RealValue):
-            raise TypeError(f'expected a real number slice bound, got {start}')
-        if not _is_integer(start):
-            raise TypeError(f'expected an integer slice bound, got {start}')
-        start_idx = int(start)
-    if stop is None:
-        stop_idx = n
-    else:
-        if not isinstance(stop, RealValue):
-            raise TypeError(f'expected a real number slice bound, got {stop}')
-        if not _is_integer(stop):
-            raise TypeError(f'expected an integer slice bound, got {stop}')
-        stop_idx = int(stop)
+    start_idx = 0 if start is None else _cvt_int(start)
+    stop_idx = n if stop is None else _cvt_int(stop)
 
-    # Strict bounds: 0 <= start <= stop <= len(lst).
     if start_idx < 0:
         raise IndexError(
             f'slice start {start_idx} out of range (must be >= 0)'
@@ -235,62 +219,16 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
     return lst[start_idx:stop_idx]
 
 
-def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
-    if not isinstance(lst, list):
-        raise TypeError(f'expected a list, got {lst}')
-    array: list = copy.deepcopy(lst) # make a copy
-
-    slices: list[int] = []
-    for idx in idxs:
-        if not isinstance(idx, RealValue):
-            raise TypeError(f'expected a real number slice, got {idx}')
-        if not _is_integer(idx):
-            raise TypeError(f'expected an integer slice, got {idx}')
-        slices.append(int(idx))
-
-    for s in slices[:-1]:
-        array = array[s]
-        if not isinstance(array, list):
-            raise TypeError(f'expected a list, got {array}')
-
-    array[slices[-1]] = val
-    return array
-
-
-def _eval_range(start: Value | None, stop: Value, step: Value | None):
-    # start index
-    if start is None:
-        start_idx = 0
-    else:
-        if not isinstance(start, RealValue):
-            raise TypeError(f'expected a real number argument, got {start}')
-        if not _is_integer(start):
-            raise ValueError(f'expected an integer argument, got {start}')
-        start_idx = int(start)
-
-    # stop index
-    if not isinstance(stop, RealValue):
-        raise TypeError(f'expected a real number argument, got {stop}')
-    if not _is_integer(stop):
-        raise ValueError(f'expected an integer argument, got {stop}')
-    stop_idx = int(stop)
-
-    # step
-    if step is None:
-        step_val = 1
-    else:
-        if not isinstance(step, RealValue):
-            raise TypeError(f'expected a real number argument, got {step}')
-        if not _is_integer(step):
-            raise ValueError(f'expected an integer argument, got {step}')
-        step_val = int(step)
-
+def _eval_range(start: Value | None, stop: Value, step: Value | None) -> list[Float]:
+    start_idx = 0 if start is None else _cvt_int(start)
+    stop_idx = _cvt_int(stop)
+    step_val = 1 if step is None else _cvt_int(step)
     return [
         Float.from_int(i, ctx=INTEGER, checked=False)
         for i in range(start_idx, stop_idx, step_val)
     ]
 
-def _eval_sum(val: list[RealValue], ctx: Context):
+def _eval_sum(val: list[RealValue], ctx: Context) -> RealValue:
     if not isinstance(val, list):
         raise TypeError(f'expected a list, got {val}')
 
@@ -306,99 +244,56 @@ def _eval_sum(val: list[RealValue], ctx: Context):
             accum = ops.add(accum, x, ctx=ctx)
         return accum
 
-def _unchecked_min(vals: list[RealValue]):
-    # propagate any NaN input
-    for x in vals:
-        if isinstance(x, Float) and x.isnan:
-            return x
-
-    # cannot use the built-in min function because of signed zeros
-    result = vals[0]
-    for x in vals[1:]:
-        if x < result:
-            result = x
-        elif (x == result
-            and isinstance(x, Float) and isinstance(result, Float)
-            and x.s and not result.s):
-            result = x  # x is -0, result is +0 → prefer -0 for min
-    return result
-
-def _unchecked_max(vals: list[RealValue]):
+def _eval_extremum(is_min: bool, arg: Any, args: tuple[Any, ...]) -> RealValue:
     """
-    Performs IEEE 754 compliant maximum operation.
+    IEEE 754 `min` (*is_min*) or `max` over its arguments, or over the elements
+    of a lone list argument.
     - propagates NaN inputs (if any argument is NaN, the result is NaN).
-    - max(+0.0, -0.0) == max(-0.0, +0.0) == +0.0.
-    """
-    # propagate any NaN input
-    for x in vals:
-        if isinstance(x, Float) and x.isnan:
-            return x
-
-    # cannot use the built-in max function because of signed zeros
-    result = vals[0]
-    for x in vals[1:]:
-        if x > result:
-            result = x
-        elif (x == result
-            and isinstance(x, Float) and isinstance(result, Float)
-            and not x.s and result.s):
-            result = x  # x is +0, result is -0 → prefer +0 for max
-    return result
-
-def _eval_min(arg, *args):
-    """
-    Performs IEEE 754 compliant minimum operation.
-    - propagates NaN inputs (if any argument is NaN, the result is NaN).
-    - min(+0.0, -0.0) == min(-0.0, +0.0) == -0.0.
+    - -0.0 is below +0.0: min(+0.0, -0.0) == -0.0 and max(+0.0, -0.0) == +0.0.
     """
     if args:
-        # if there are additional values, combine them with the first value into a single list
-        vals = [arg] + list(args)
+        vals = [arg, *args]
     else:
-        # if there are no additional values, we assume its a non-empty list
         if not isinstance(arg, list):
             raise TypeError(f'expected a list, got {arg}')
         if len(arg) == 0:
-            raise ValueError('min() arg is an empty sequence')
+            raise ValueError(f'{"min" if is_min else "max"}() arg is an empty sequence')
         vals = arg
-
-    # every element must be a real number
     for x in vals:
         if not isinstance(x, RealValue):
             raise TypeError(f'expected a real number argument, got {x}')
 
-    # call the underlying NaN-propagating minimum function
-    return _unchecked_min(vals)
-
-
-def _eval_max(arg, *args):
-    if args:
-        # if there are additional values, combine them with the first value into a single list
-        vals = [arg] + list(args)
-    else:
-        # if there are no additional values, we assume its a non-empty list
-        if not isinstance(arg, list):
-            raise TypeError(f'expected a list, got {arg}')
-        if len(arg) == 0:
-            raise ValueError('max() arg is an empty sequence')
-        vals = arg
-
-    # every element must be a real number
     for x in vals:
-        if not isinstance(x, RealValue):
-            raise TypeError(f'expected a real number argument, got {x}')
+        if isinstance(x, Float) and x.isnan:
+            return x
 
-    # call the underlying NaN-propagating maximum function
-    return _unchecked_max(vals)
+    # not the built-in `min`/`max`, which ignore the sign of zero
+    result = vals[0]
+    for x in vals[1:]:
+        beyond = x < result if is_min else x > result
+        signed_zero = (
+            x == result
+            and isinstance(x, Float) and isinstance(result, Float)
+            and x.s != result.s and x.s == is_min
+        )
+        if beyond or signed_zero:
+            result = x
+    return result
 
-def _eval_len(x):
+def _eval_min(arg: Value, *args: Value) -> RealValue:
+    return _eval_extremum(True, arg, args)
+
+def _eval_max(arg: Value, *args: Value) -> RealValue:
+    return _eval_extremum(False, arg, args)
+
+def _eval_len(x: Value) -> int:
     # `len` is list-only in FPy (matches `TypeInfer`); native `len` would
     # otherwise silently accept a tuple.
     if not isinstance(x, list):
         raise TypeError(f'len() expects a list, got {x}')
     return len(x)
 
-def _check_bool_list(x, who: str) -> list[bool]:
+def _check_bool_list(x: object, who: str) -> list[bool]:
     # `any`/`all` are list-of-bool only (matches `TypeInfer`); the native
     # builtins would accept a tuple and coerce reals via truthiness.
     if not isinstance(x, list):
@@ -408,20 +303,20 @@ def _check_bool_list(x, who: str) -> list[bool]:
             raise TypeError(f'{who} expects a list of booleans, got {b}')
     return x
 
-def _eval_any(x):
+def _eval_any(x: Value) -> bool:
     return any(_check_bool_list(x, 'any()'))
 
-def _eval_all(x):
+def _eval_all(x: Value) -> bool:
     return all(_check_bool_list(x, 'all()'))
 
-def _eval_ordered(x, op: str):
+def _eval_ordered(x: Value, op: str) -> RealValue:
     # ordering is real-only (matches `TypeInfer`, which is optional); Python
     # would order a tuple lexicographically and a `bool` as an integer
     if not isinstance(x, RealValue):
         raise TypeError(f'`{op}` expects real operands, got {x}')
     return x
 
-def _eval_eq(a, b) -> bool:
+def _eval_eq(a: Any, b: Any) -> bool:
     """``a == b``, structurally and without shortcutting on identity.
 
     Python's sequence equality compares elements with ``is`` before ``==``,
@@ -546,7 +441,6 @@ def make_namespace() -> dict[str, object]:
         '__fpy_fraction': Fraction,
         '__fpy_negzero': _neg_zero,
         '__fpy_index': _cvt_index,
-        '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
         '__fpy_min': _eval_min,
@@ -587,7 +481,7 @@ class BytecodeCompiler(Visitor):
     gensym: Gensym
     foreign_vals: dict[str, object]
 
-    hook: 'Callable[[int, Any], Any] | None'
+    hook: Callable[[int, Any], Any] | None
     """Called with ``(index, value)`` for every expression evaluated, returning
     the value.  ``hook_sites[index]`` is where it came from.  ``None`` compiles
     the program unchanged."""
@@ -597,8 +491,8 @@ class BytecodeCompiler(Visitor):
 
     def __init__(
         self, func: FuncDef, env: ForeignEnv,
-        *, hook: 'Callable[[int, Any], Any] | None' = None,
-    ):
+        *, hook: Callable[[int, Any], Any] | None = None,
+    ) -> None:
         self.func = func
         self.env = env
         # reserve the program's own names: a bare `fresh('__fpy_cmp')` would
@@ -608,7 +502,7 @@ class BytecodeCompiler(Visitor):
         self.hook = hook
         self.hook_sites = []
 
-    def _visit_expr(self, e: Expr, ctx):
+    def _visit_expr(self, e: Expr, ctx: None) -> pyast.expr:
         """Every expression, wrapped in :attr:`hook` where one is given.
 
         The wrapper is the identity, so the program runs as it would.
@@ -625,26 +519,18 @@ class BytecodeCompiler(Visitor):
             keywords=[], **attrs,
         )
 
-    def compile(self):
-        # compile the function to a Python AST
+    def compile(self) -> Any:
         ast = self._visit_function(self.func, None)
-        # print(pyast.unparse(ast))
-        # wrap the function AST in a module so we can compile it
         mod = pyast.Module(body=[ast], type_ignores=[])
-        # compile the Python AST to bytecode
         source_name = self._location_to_name(self.func.loc)
         code = compile(mod, filename=source_name, mode='exec')
-        # inject runtime symbols
         namespace = make_namespace()
-        # add free variables to the namespace
         for var in self.func.free_vars:
             name = str(var)
             namespace[name] = to_value(self.env[name])
-        # add foreign values to the namespace
         namespace.update(self.foreign_vals)
         if self.hook is not None:
             namespace[HOOK_NAME] = self.hook
-        # return the function object
         exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]
 
@@ -653,11 +539,7 @@ class BytecodeCompiler(Visitor):
 
     def _location_to_attributes(self, loc: Location | None) -> dict[str, int]:
         if loc is None:
-            # Synthetic nodes (e.g. generator-built ASTs without parser
-            # locations) need a valid placeholder.  Python 3.14's bytecode
-            # CFG analyzer rejects ``lineno <= 0``: a sentinel ``-1`` here
-            # breaks stack-depth tracking across control-flow joins and
-            # surfaces as ``Invalid CFG, stack underflow`` at compile time.
+            # placeholder: Python 3.14's CFG analyzer rejects ``lineno <= 0``
             return {
                 'lineno': 1,
                 'col_offset': 0,
@@ -695,15 +577,15 @@ class BytecodeCompiler(Visitor):
             **attrs
         )
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> pyast.Name:
         attrs = self._location_to_attributes(e.loc)
         return pyast.Name(id=str(e.name), ctx=pyast.Load(), **attrs)
 
-    def _visit_bool(self, e: BoolVal, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None) -> pyast.Constant:
         attrs = self._location_to_attributes(e.loc)
         return pyast.Constant(value=e.val, kind=None, **attrs)
 
-    def _visit_foreign(self, e: ForeignVal, ctx: None):
+    def _visit_foreign(self, e: ForeignVal, ctx: None) -> pyast.Name:
         # create a fresh name for the foreign value and add it to the namespace
         name = str(self.gensym.fresh('__fpy_foreign'))
         self.foreign_vals[name] = to_value(e.val)
@@ -712,22 +594,22 @@ class BytecodeCompiler(Visitor):
         attrs = self._location_to_attributes(e.loc)
         return pyast.Name(id=name, ctx=pyast.Load(), **attrs)
 
-    def _visit_decnum(self, e: Decnum, ctx: None):
+    def _visit_decnum(self, e: Decnum, ctx: None) -> pyast.Call:
         return self._rational_to_ast(e)
 
-    def _visit_hexnum(self, e: Hexnum, ctx: None):
+    def _visit_hexnum(self, e: Hexnum, ctx: None) -> pyast.Call:
         return self._rational_to_ast(e)
 
-    def _visit_integer(self, e: Integer, ctx: None):
+    def _visit_integer(self, e: Integer, ctx: None) -> pyast.Call:
         return self._rational_to_ast(e)
 
-    def _visit_rational(self, e: Rational, ctx: None):
+    def _visit_rational(self, e: Rational, ctx: None) -> pyast.Call:
         return self._rational_to_ast(e)
 
-    def _visit_digits(self, e: Digits, ctx: None):
+    def _visit_digits(self, e: Digits, ctx: None) -> pyast.Call:
         return self._rational_to_ast(e)
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: None):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> pyast.Call:
         if type(e) in _NULLARY_TABLE:
             name = f'__fpy_{type(e).__name__}'
             attrs = self._location_to_attributes(e.loc)
@@ -738,7 +620,7 @@ class BytecodeCompiler(Visitor):
         else:
             raise NotImplementedError(f'unsupported nullary operation: {type(e).__name__}')
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: None):
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> pyast.expr:
         arg = self._visit_expr(e.arg, ctx)
         attrs = self._location_to_attributes(e.loc)
 
@@ -764,8 +646,6 @@ class BytecodeCompiler(Visitor):
                 arg_none = pyast.Constant(value=None, kind=None, **attrs)
                 return pyast.Call(func=func, args=[arg_none, arg, arg_none], keywords=[], **attrs)
             case AMin() | AMax():
-                # Reduce-form lowers to Python's built-in min/max on the
-                # list, matching the n-ary Min/Max emit.
                 builtin = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
                 func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
@@ -777,7 +657,7 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported unary operation: {type(e).__name__}')
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: None):
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> pyast.Call:
         arg1 = self._visit_expr(e.first, ctx)
         arg2 = self._visit_expr(e.second, ctx)
         attrs = self._location_to_attributes(e.loc)
@@ -797,7 +677,7 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported binary operation: {type(e).__name__}')
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: None):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> pyast.Call:
         arg1 = self._visit_expr(e.first, ctx)
         arg2 = self._visit_expr(e.second, ctx)
         arg3 = self._visit_expr(e.third, ctx)
@@ -817,7 +697,7 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported ternary operation: {type(e).__name__}')
 
-    def _visit_naryop(self, e: NaryOp, ctx: None):
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> pyast.expr:
         attrs = self._location_to_attributes(e.loc)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         if type(e) in _NARY_TABLE:
@@ -850,7 +730,7 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported n-ary operation: {type(e).__name__}')
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: None) -> pyast.Call:
         func = self._visit_expr(e.func, ctx)
         attrs = self._location_to_attributes(e.loc)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -882,7 +762,7 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported comparison operator: {type(op).__name__}')
 
-    def _ordered_guard(self, arg: pyast.expr, op: CompareOp, attrs) -> pyast.expr:
+    def _ordered_guard(self, arg: pyast.expr, op: CompareOp, attrs: dict[str, Any]) -> pyast.expr:
         """Wrap an ordering operand in its real-only check (`_eval_ordered`)."""
         return pyast.Call(
             func=pyast.Name(id='__fpy_ordered', ctx=pyast.Load(), **attrs),
@@ -890,7 +770,7 @@ class BytecodeCompiler(Visitor):
             keywords=[], **attrs,
         )
 
-    def _visit_compare(self, e: Compare, ctx: None):
+    def _visit_compare(self, e: Compare, ctx: None) -> pyast.expr:
         attrs = self._location_to_attributes(e.loc)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         # Equality is structural (see `_eval_eq`), which no `==` node expresses,
@@ -931,12 +811,12 @@ class BytecodeCompiler(Visitor):
             return clauses[0]
         return pyast.BoolOp(op=pyast.And(), values=clauses, **attrs)
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> pyast.Tuple:
         args = [self._visit_expr(elt, ctx) for elt in e.elts]
         attrs = self._location_to_attributes(e.loc)
         return pyast.Tuple(elts=args, ctx=pyast.Load(), **attrs)
 
-    def _visit_list_expr(self, e: ListExpr, ctx: None):
+    def _visit_list_expr(self, e: ListExpr, ctx: None) -> pyast.List:
         args = [self._visit_expr(elt, ctx) for elt in e.elts]
         attrs = self._location_to_attributes(e.loc)
         return pyast.List(elts=args, ctx=pyast.Load(), **attrs)
@@ -959,7 +839,7 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported target type: {type(target).__name__}')
 
-    def _visit_list_comp(self, e: ListComp, ctx: None):
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> pyast.ListComp:
         targets = [self._visit_target(target) for target in e.targets]
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
 
@@ -973,7 +853,7 @@ class BytecodeCompiler(Visitor):
         attrs = self._location_to_attributes(e.loc)
         return pyast.ListComp(elt=elt, generators=generators, **attrs)
 
-    def _visit_list_ref(self, e: ListRef, ctx: None):
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> pyast.Subscript:
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         attrs = self._location_to_attributes(e.loc)
@@ -985,39 +865,33 @@ class BytecodeCompiler(Visitor):
         # do a normal list reference
         return pyast.Subscript(value=value, slice=idx, ctx=pyast.Load(), **attrs)
 
-    def _visit_list_slice(self, e: ListSlice, ctx: None):
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> pyast.Call:
         arr = self._visit_expr(e.value, ctx)
         attrs = self._location_to_attributes(e.loc)
 
-        # start index — pass through unchanged so the runtime helper
-        # can default it (None ↦ 0) and validate.
         if e.start is None:
             start: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
             start = self._visit_expr(e.start, ctx)
 
-        # stop index — same treatment (None ↦ len(arr) at runtime).
         if e.stop is None:
             stop: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
             stop = self._visit_expr(e.stop, ctx)
 
-        # FPy slicing semantics are strict: out-of-range bounds raise
-        # ``IndexError`` rather than clamping (Python's behavior).  The
-        # runtime helper validates ``0 <= start <= stop <= len(arr)``.
         helper = pyast.Name(id='__fpy_list_slice', ctx=pyast.Load(), **attrs)
         return pyast.Call(
             func=helper, args=[arr, start, stop], keywords=[], **attrs
         )
 
-    def _visit_if_expr(self, e: IfExpr, ctx: None):
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> pyast.IfExp:
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)
         iff = self._visit_expr(e.iff, ctx)
         attrs = self._location_to_attributes(e.loc)
         return pyast.IfExp(test=cond, body=ift, orelse=iff, **attrs)
 
-    def _visit_attribute(self, e: Attribute, ctx: None):
+    def _visit_attribute(self, e: Attribute, ctx: None) -> pyast.Call:
         # routed through `__fpy_attribute`: the base may be a `Foreign`
         # and the result must be re-classified as an FPy value
         value = self._visit_expr(e.value, ctx)
@@ -1026,20 +900,16 @@ class BytecodeCompiler(Visitor):
         attr = pyast.Constant(value=e.attr, kind=None, **attrs)
         return pyast.Call(func=func, args=[value, attr], keywords=[], **attrs)
 
-    def _visit_assign(self, stmt: Assign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> pyast.Assign:
         expr = self._visit_expr(stmt.expr, ctx)
         targets = self._visit_target(stmt.target)
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.Assign(targets=[targets], value=expr, type_comment=None, **attrs)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> list[pyast.stmt]:
         """``xs[i] = e``, with each index bound to a name first.
 
-        The expansion page elaborates this to ``t = xs[i] ; t := e`` --
-        "binding the cell before writing through it" -- so the indices are
-        evaluated before the value.  A Python ``Assign`` evaluates its value
-        before its target's subscripts, the other way round, so emitting one
-        directly ran an effectful index after an effectful value.
+        The indices are evaluated before the value, unlike a Python ``Assign``.
         """
         attrs = self._location_to_attributes(stmt.loc)
 
@@ -1069,26 +939,26 @@ class BytecodeCompiler(Visitor):
         return [*pre, pyast.Assign(
             targets=[arr], value=expr, type_comment=None, **attrs)]
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None) -> pyast.If:
         cond = self._visit_expr(stmt.cond, ctx)
         body = self._visit_block(stmt.body, ctx)
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.If(test=cond, body=body, orelse=[], **attrs)
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> pyast.If:
         cond = self._visit_expr(stmt.cond, ctx)
         ift = self._visit_block(stmt.ift, ctx)
         iff = self._visit_block(stmt.iff, ctx)
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.If(test=cond, body=ift, orelse=iff, **attrs)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> pyast.While:
         cond = self._visit_expr(stmt.cond, ctx)
         body = self._visit_block(stmt.body, ctx)
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.While(test=cond, body=body, orelse=[], **attrs)
 
-    def _visit_for(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> pyast.For:
         target = self._visit_target(stmt.target)
         iterable = self._visit_expr(stmt.iterable, ctx)
         body = self._visit_block(stmt.body, ctx)
@@ -1102,7 +972,7 @@ class BytecodeCompiler(Visitor):
             **attrs
         )
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> pyast.Try:
         # try:
         #     <tmp> = __ctx__
         #     __ctx__ = __fpy_real
@@ -1156,13 +1026,13 @@ class BytecodeCompiler(Visitor):
         finally_body: list[pyast.stmt] = [restore_stmt]
         return pyast.Try(body=try_body, handlers=[], orelse=[], finalbody=finally_body, **attrs)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> pyast.Assert:
         test = self._visit_expr(stmt.test, ctx)
         msg = None if stmt.msg is None else self._visit_expr(stmt.msg, ctx)
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.Assert(test=test, msg=msg, **attrs)
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+    def _visit_effect(self, stmt: EffectStmt, ctx: None) -> pyast.Expr:
         expr = self._visit_expr(stmt.expr, ctx)
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.Expr(value=expr, **attrs)
@@ -1172,7 +1042,7 @@ class BytecodeCompiler(Visitor):
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.Return(value=expr, **attrs)
 
-    def _visit_pass(self, stmt: PassStmt, ctx: None):
+    def _visit_pass(self, stmt: PassStmt, ctx: None) -> pyast.Pass:
         attrs = self._location_to_attributes(stmt.loc)
         return pyast.Pass(**attrs)
 
@@ -1184,7 +1054,7 @@ class BytecodeCompiler(Visitor):
             out.extend(emitted) if isinstance(emitted, list) else out.append(emitted)
         return out
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> pyast.FunctionDef:
         posonlyargs: list[pyast.arg] = []
         for arg in func.args:
             name = str(arg.name)
@@ -1227,11 +1097,11 @@ class BytecodeInterpreter(Interpreter):
 
     func_cache: dict[FuncDef, Callable]
 
-    def __init__(self, ctx: Context | None = None):
+    def __init__(self, ctx: Context | None = None) -> None:
         super().__init__(ctx=ctx)
         self.func_cache = {}
 
-    def _expr_to_func(self, expr: Expr, env: dict[NamedId, Any]):
+    def _expr_to_func(self, expr: Expr, env: dict[NamedId, Any]) -> tuple[FuncDef, list[NamedId]]:
         """
         Converts an expression to a function definition whose arguments
         are the free variables of the expression and whose body is a single
@@ -1253,9 +1123,9 @@ class BytecodeInterpreter(Interpreter):
         return ast, names
 
     def eval(
-        self, func: Function, args, ctx: Context | None = None,
+        self, func: Function, args: Sequence[Any], ctx: Context | None = None,
         *, convert: bool = True,
-    ):
+    ) -> Any:
         """``convert`` applies the Python-boundary conversions: ``True`` for a
         call from Python, ``False`` for FPy-to-FPy, where rebuilding containers
         would break list sharing."""
@@ -1276,7 +1146,7 @@ class BytecodeInterpreter(Interpreter):
         res = fn(*args, __ctx__=ctx)
         return from_value(res) if convert else res
 
-    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context) -> Any:
         # Always converts: the only caller is `PartialEval`, whose environment
         # holds analysis-time values rather than a running FPy program's, so
         # this is a boundary like the Python one.

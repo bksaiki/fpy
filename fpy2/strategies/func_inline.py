@@ -85,12 +85,12 @@ def inline(
     keeps the ``sq(y)`` call.
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
     if funcs is not None:
         funcs = tuple(funcs)
         for f in funcs:
             if not isinstance(f, Function):
-                raise TypeError(f"Expected a \'Function\', got {f}")
+                raise TypeError(f"Expected a 'Function', got {f}")
 
     return func.with_edits(FuncInline.apply_with_edits(
         func.ast, funcs=funcs, recursive=recursive, where=func.rebase(where)

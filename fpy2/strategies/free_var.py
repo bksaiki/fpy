@@ -49,6 +49,6 @@ def close(func: Function) -> Function:
             return (SCALE * x)
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(FreeVarElim.apply_with_edits(func.ast))

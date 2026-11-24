@@ -40,6 +40,11 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
     use_to_def: dict[UseSite, Definition]
     """mapping from use site to definition"""
 
+    defs_at_use: dict[UseSite, DefCtx]
+    """the definitions each use site was resolved against: what every name
+    means where the use is evaluated (a `while` condition's loop-header phis,
+    a comprehension's own targets)"""
+
     def __init__(
         self,
         defs: list[Definition],
@@ -48,43 +53,31 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
         out_defs: dict[StmtBlock, DefCtx],
         reach: dict[Stmt, DefCtx],
         phis: dict[Stmt, set[PhiDef]],
-        uses: dict[Definition, set[UseSite]]
-    ):
+        uses: dict[Definition, set[UseSite]],
+        defs_at_use: dict[UseSite, DefCtx],
+    ) -> None:
         super().__init__(defs, name_to_defs, in_defs, out_defs, reach, phis)
         self.uses = uses
+        self.defs_at_use = defs_at_use
         # compute mapping from use to def
         self.use_to_def = {}
         for d, us in uses.items():
             for u in us:
                 self.use_to_def[u] = d
 
-    def names(self) -> set[NamedId]:
-        """Returns the set of variable names with definitions."""
-        return set(self.name_to_defs.keys())
-
     def format(self) -> str:
         lines: list[str] = []
         for name, ds in self.name_to_defs.items():
             lines.append(f'def `{name}`:')
             for d in ds:
-                idx = self.def_to_idx[d]
-                match d:
-                    case AssignDef():
-                        site = self._format_site(d.site.format())
-                        prev = 'None' if d.prev is None else str(d.prev)
-                        lines.append(f' {idx}: {d.name} [{prev}] @ {site}')
-                    case PhiDef():
-                        site = self._format_site(d.site.format())
-                        lines.append(f' {idx}: {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
-                    case _:
-                        raise RuntimeError(f'unexpected definition {d}')
+                lines.append(self._format_def(d))
                 lines.append(f' use `{name}`:')
                 for u in self.uses[d]:
                     site = self._format_site(u.format())
                     lines.append(f'  - {site}')
         return '\n'.join(lines)
 
-    def find_def_from_use(self, site: UseSite):
+    def find_def_from_use(self, site: UseSite) -> Definition:
         """Finds the definition of a variable."""
         if site in self.use_to_def:
             return self.use_to_def[site]
@@ -127,13 +120,15 @@ class _DefineUseInstance(DefaultVisitor):
 
     uses: dict[Definition, set[UseSite]]
     """mapping from definition id to use sites"""
+    defs_at_use: dict[UseSite, DefCtx]
 
-    def __init__(self, ast: FuncDef | StmtBlock, reaching_defs: ReachingDefsAnalysis):
+    def __init__(self, ast: FuncDef | StmtBlock, reaching_defs: ReachingDefsAnalysis) -> None:
         self.ast = ast
         self.reaching_defs = reaching_defs
         self.uses = { d: set() for d in reaching_defs.defs }
+        self.defs_at_use = {}
 
-    def analyze(self):
+    def analyze(self) -> DefineUseAnalysis:
         match self.ast:
             case FuncDef():
                 self._visit_function(self.ast, None)
@@ -149,17 +144,19 @@ class _DefineUseInstance(DefaultVisitor):
             self.reaching_defs.out_defs,
             self.reaching_defs.reach,
             self.reaching_defs.phis,
-            self.uses
+            self.uses,
+            self.defs_at_use,
         )
 
-    def _add_use(self, name: NamedId, use: UseSite, ctx: DefCtx):
+    def _add_use(self, name: NamedId, use: UseSite, ctx: DefCtx) -> None:
         d = ctx[name]
         self.uses[d].add(use)
+        self.defs_at_use[use] = ctx
 
-    def _visit_var(self, e: Var, ctx: DefCtx):
+    def _visit_var(self, e: Var, ctx: DefCtx) -> None:
         self._add_use(e.name, e, ctx)
 
-    def _visit_call(self, e: Call, ctx: DefCtx):
+    def _visit_call(self, e: Call, ctx: DefCtx) -> None:
         # Record the callee as a use iff it was resolved from the environment
         # (`e.fn` set at parse time) — i.e. the callee names a free variable
         # (`foo`, `np`).  An unresolved callee (`e.fn is None`, e.g. an
@@ -168,7 +165,7 @@ class _DefineUseInstance(DefaultVisitor):
             self._visit_expr(e.func, ctx)
         super()._visit_call(e, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx: DefCtx):
+    def _visit_list_comp(self, e: ListComp, ctx: DefCtx) -> None:
         ctx = ctx.copy()
         for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
@@ -176,13 +173,13 @@ class _DefineUseInstance(DefaultVisitor):
                 ctx[name] = self.reaching_defs.find_def_from_site(name, e)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefCtx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefCtx) -> None:
         self._add_use(stmt.var, stmt, ctx)
         for slice in stmt.indices:
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: DefCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: DefCtx) -> None:
         # Cond uses must resolve through the loop-header phis, not the
         # pre-loop defs — the cond re-runs against mutated values on
         # each iteration.  Default ``reach[stmt]`` is pre-loop.
@@ -190,7 +187,7 @@ class _DefineUseInstance(DefaultVisitor):
         self._visit_expr(stmt.cond, body_in)
         self._visit_block(stmt.body, ctx)
 
-    def _visit_statement(self, stmt: Stmt, ctx: DefCtx):
+    def _visit_statement(self, stmt: Stmt, ctx: DefCtx) -> None:
         ctx = self.reaching_defs.reach[stmt]
         return super()._visit_statement(stmt, ctx)
 
@@ -211,7 +208,7 @@ class DefineUse:
     """
 
     @staticmethod
-    def analyze(ast: FuncDef | StmtBlock):
+    def analyze(ast: FuncDef | StmtBlock) -> DefineUseAnalysis:
         if not isinstance(ast, FuncDef | StmtBlock):
             raise TypeError(f'Expected \'FuncDef\' or \'StmtBlock\', got {type(ast)} for {ast}')
         reaching_defs = ReachingDefs.analyze(ast)

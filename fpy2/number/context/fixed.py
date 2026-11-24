@@ -2,7 +2,9 @@
 This module defines the usual fixed-width, two's complement, fixed-point numbers.
 """
 
-from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from typing import Any
+
+from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import RNG, Float, RealFloat
 from ..round import OverflowMode, RoundingMode
 from .context import EncodableContext
@@ -47,7 +49,7 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
     nbits: int
     """the total number of bits in the representation"""
 
-    def __init__(self, signed: bool, scale: int, nbits: int):
+    def __init__(self, signed: bool, scale: int, nbits: int) -> None:
         if not isinstance(signed, bool):
             raise TypeError(f'Expected \'bool\' for signed={signed}, got {type(signed)}')
         if not isinstance(scale, int):
@@ -71,7 +73,7 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
         self.scale = scale
         self.nbits = nbits
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, FixedFormat)
             and self.signed == other.signed
@@ -79,10 +81,10 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
             and self.nbits == other.nbits
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.signed, self.scale, self.nbits))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__class__.__name__ + f'(signed={self.signed!r}, scale={self.scale!r}, nbits={self.nbits!r})'
 
     def total_bits(self) -> int:
@@ -106,8 +108,6 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
             if self.signed and x.s:
                 c = (1 << self.nbits) - c
 
-        if c > bitmask(self.nbits):
-            raise OverflowError(f'Value {x} does not fit in {self.nbits} bits')
         return c
 
     def decode(self, x: int) -> Float:
@@ -160,6 +160,8 @@ class FixedContext(MPBFixedContext, EncodableContext):
     nbits: int
     """the total number of bits in the representation"""
 
+    _fmt: FixedFormat
+
     def __init__(
         self,
         signed: bool,
@@ -172,30 +174,16 @@ class FixedContext(MPBFixedContext, EncodableContext):
         rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
-    ):
-        if not isinstance(signed, bool):
-            raise TypeError(f'Expected \'bool\' for signed={signed}, got {type(signed)}')
-        if not isinstance(scale, int):
-            raise TypeError(f'Expected \'int\' for scale={scale}, got {type(scale)}')
-        if not isinstance(nbits, int):
-            raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
-
-        if signed:
-            if nbits < 2:
-                raise ValueError(f'For signed representation, nbits={nbits} must be at least 2')
-        elif nbits < 1:
-            raise ValueError(f'For unsigned representation, nbits={nbits} must be at least 1')
-
-        nmin = scale - 1
-        pos_maxval, neg_maxval = _fixed_to_mpb_fixed(signed, scale, nbits)
-
+    ) -> None:
+        fmt = FixedFormat(signed, scale, nbits)
         super().__init__(
-            nmin, pos_maxval, rm, overflow, num_randbits,
-            neg_maxval=neg_maxval, rng=rng,
+            fmt.nmin, fmt.pos_maxval, rm, overflow, num_randbits,
+            neg_maxval=fmt.neg_maxval, rng=rng,
             enable_nan=False, enable_inf=False, enable_neg_zero=False,
             nan_value=nan_value, inf_value=inf_value
         )
 
+        self._fmt = fmt
         self.signed = signed
         self.scale = scale
         self.nbits = nbits
@@ -211,35 +199,24 @@ class FixedContext(MPBFixedContext, EncodableContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'FixedContext':
-        if signed is DEFAULT:
-            signed = self.signed
-        if scale is DEFAULT:
-            scale = self.scale
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if num_randbits is DEFAULT:
-            num_randbits = self.num_randbits
-        if rng is DEFAULT:
-            rng = self.rng
-        if nan_value is DEFAULT:
-            nan_value = self.nan_value
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return FixedContext(
-            signed, scale, nbits, rm, overflow, num_randbits,
-            rng=rng, nan_value=nan_value, inf_value=inf_value
+            default_or(signed, self.signed),
+            default_or(scale, self.scale),
+            default_or(nbits, self.nbits),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            default_or(num_randbits, self.num_randbits),
+            rng=default_or(rng, self.rng),
+            nan_value=default_or(nan_value, self.nan_value),
+            inf_value=default_or(inf_value, self.inf_value),
         )
 
     def format(self) -> FixedFormat:
-        return FixedFormat(self.signed, self.scale, self.nbits)
+        return self._fmt
 
     @classmethod
     def from_format(
@@ -249,7 +226,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None,
     ) -> 'FixedContext':

@@ -46,6 +46,7 @@ def _emitter() -> CppEmitter:
     a = cc.analyze(cc.specialize(m)[-1])
     return CppEmitter(
         ast=a.ast,
+        ret_ty=a.ret_ty,
         storage=a.storage,
         variables=a.variables,
         def_use=a.def_use,

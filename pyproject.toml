@@ -83,8 +83,8 @@ module = ["torch", "torch.*", "triton", "triton.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint]
-extend-select = ["B"]
-ignore = ["F401", "F403", "F405", "B905", "SIM102"]
+extend-select = ["B", "ANN"]
+ignore = ["F401", "F403", "F405", "B905", "SIM102", "ANN401"]
 
 [tool.sphinx-pyproject]
 project = "fpy2"

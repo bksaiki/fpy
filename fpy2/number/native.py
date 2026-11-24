@@ -11,7 +11,7 @@ from .round import RoundingMode
 
 _FP64 = IEEEContext(11, 64, RoundingMode.RNE)
 
-def default_float_convert(x: RealFloat | Float):
+def default_float_convert(x: RealFloat | Float) -> float:
     if isinstance(x, Float) and x.ctx == _FP64:
         r = x
     else:

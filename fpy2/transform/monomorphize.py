@@ -5,6 +5,7 @@ Both type and context monomorphization.
 """
 
 from collections.abc import Collection, Iterable
+from typing import NoReturn
 
 from ..analysis import TypeAnalysis, TypeInfer
 from ..analysis.format_infer.format import AbstractableFormat, AbstractFormat
@@ -61,7 +62,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
     ctx: Context | None
     arg_types: list[Type | None]
 
-    def __init__(self, func: FuncDef, ctx: Context | None, arg_types: Iterable[Type | None]):
+    def __init__(self, func: FuncDef, ctx: Context | None, arg_types: Iterable[Type | None]) -> None:
         self.func = func
         self.ctx = ctx
         self.arg_types = list(arg_types)
@@ -121,7 +122,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case _:
                 raise RuntimeError(f'Cannot merge different types `{a}` and `{b}`')
 
-    def _visit_argument(self, arg: Argument, ty: Type | None):
+    def _visit_argument(self, arg: Argument, ty: Type | None) -> Argument:
         ann = None if ty is None else self._cvt_arg_type(ty)
         ann = self._merge_annotation(arg.type, ann)
         return Argument(arg.name, ann, arg.loc)
@@ -149,7 +150,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
         meta = FuncMeta(func.free_vars, fn_ctx, func.meta.pre, func.meta.spec, func.meta.props, func.env)
         return FuncDef(func.name, args, body, meta, loc=func.loc)
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 
@@ -203,10 +204,10 @@ class Monomorphize:
 
         ty_subst: dict[NamedId, Type] = {}
 
-        def _raise_conflict(curr_ty: Type, new_ty: Type):
+        def _raise_conflict(curr_ty: Type, new_ty: Type) -> NoReturn:
             raise ValueError(f'Conflicting type info: cannot override {new_ty.format()} with {curr_ty.format()}')
 
-        def _check_merge(curr_ty: Type, new_ty: Type, a_ty: Type, b_ty: Type):
+        def _check_merge(curr_ty: Type, new_ty: Type, a_ty: Type, b_ty: Type) -> None:
             match a_ty, b_ty:
                 case VarType(), _:
                     if a_ty.name in ty_subst:

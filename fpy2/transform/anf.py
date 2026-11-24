@@ -164,11 +164,11 @@ emitter gives the element the loop body it generates."""
 def _check_precondition(func: FuncDef) -> None:
     """Raise unless every position this pass must name has a slot to name it in.
 
-    A filter on :func:`_list_refusals` rather than a second analysis: a refusal
+    A filter on :meth:`ANF.refusals` rather than a second analysis: a refusal
     in one of :data:`_CANNOT_SLOT` *is* a position the pass would have to emit a
     statement into and cannot.
     """
-    bad = [(e, why) for e, why in _list_refusals(func) if why in _CANNOT_SLOT]
+    bad = [(e, why) for e, why in ANF.refusals(func) if why in _CANNOT_SLOT]
     if not bad:
         return
     e, why = bad[0]
@@ -177,17 +177,6 @@ def _check_precondition(func: FuncDef) -> None:
         f'cannot normalize `{func.name}`: {why}, so `{e.format()}` has nowhere '
         f'to put a statement{rest}.  Run `Hoistable` first.'
     )
-
-
-def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
-    """The sealed positions of *func* holding something that needs a place.
-
-    See :meth:`ANF.refusals`, the public entry point.
-    """
-    return [
-        (e, SEALED_REASON[why]) for e, why in Hoistability.analyze(func).sealed
-        if needs_slot(e)
-    ]
 
 
 @dataclasses.dataclass
@@ -213,20 +202,11 @@ class _ANFInstance(DefaultTransformVisitor):
     func: FuncDef
     gensym: Gensym
     types: TypeAnalysis
-    prefix: str
-    """Base name for the temporaries this instance mints."""
 
-    def __init__(
-        self,
-        func: FuncDef,
-        def_use: DefineUseAnalysis,
-        types: TypeAnalysis,
-        prefix: str = 't',
-    ):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, types: TypeAnalysis) -> None:
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
         self.types = types
-        self.prefix = prefix
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -245,7 +225,7 @@ class _ANFInstance(DefaultTransformVisitor):
             or not self._nameable(e)
         ):
             return rebuilt
-        t = self.gensym.fresh(self.prefix)
+        t = self.gensym.fresh('t')
         ctx.stmts.append(Assign(t, None, rebuilt, e.loc))
         return Var(t, e.loc)
 
@@ -266,7 +246,7 @@ class _ANFInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # Sealed expression positions
 
-    def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
+    def _visit_if_expr(self, e: IfExpr, ctx: _Ctx) -> IfExpr:
         """The condition is evaluated whenever the ternary is, so it takes the
         ternary's own slot; the arms are conditional and are sealed.
 
@@ -282,7 +262,7 @@ class _ANFInstance(DefaultTransformVisitor):
             e.loc,
         )
 
-    def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
+    def _visit_naryop(self, e: NaryOp, ctx: _Ctx) -> Expr:
         if not isinstance(e, (And, Or)):
             return super()._visit_naryop(e, ctx)
         # short-circuit: the first operand always runs, the rest do not; the
@@ -295,7 +275,7 @@ class _ANFInstance(DefaultTransformVisitor):
         ]
         return type(e)(args, e.loc)
 
-    def _visit_compare(self, e: Compare, ctx: _Ctx):
+    def _visit_compare(self, e: Compare, ctx: _Ctx) -> Compare:
         """``a < b < c`` is the conjunction of the adjacent pairs, so every
         operand after the second is sealed."""
         sealed = ctx.sealed()
@@ -305,7 +285,7 @@ class _ANFInstance(DefaultTransformVisitor):
         ]
         return Compare(e.ops, args, e.loc)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> Expr:
         # The element runs once per iteration, and a later clause's iterable may
         # read an earlier clause's target, so the whole comprehension is sealed.
         return super()._visit_list_comp(e, ctx.sealed())
@@ -313,7 +293,7 @@ class _ANFInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # Statements.  Each names its own operands and puts them in this block.
 
-    def _visit_block(self, block: StmtBlock, ctx: Any):
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, Any]:
         # A fresh buffer per block: a temporary belongs to the block whose
         # statement needs it, never to an enclosing one.
         inner = _Ctx(stmts=[])
@@ -322,42 +302,42 @@ class _ANFInstance(DefaultTransformVisitor):
             inner.stmts.append(s)
         return StmtBlock(inner.stmts), ctx
 
-    def _visit_assign(self, stmt: Assign, ctx: _Ctx):
+    def _visit_assign(self, stmt: Assign, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         expr = self._in_place(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         indices = [self._visit_expr(i, ctx) for i in stmt.indices]
         expr = self._in_place(stmt.expr, ctx)
         return IndexedAssign(stmt.var, indices, expr, stmt.loc), ctx
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         return ReturnStmt(self._in_place(stmt.expr, ctx), stmt.loc), ctx
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         cond = self._in_place(stmt.cond, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         return If1Stmt(cond, body, stmt.loc), ctx
 
-    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         cond = self._in_place(stmt.cond, ctx)
         ift, _ = self._visit_block(stmt.ift, ctx)
         iff, _ = self._visit_block(stmt.iff, ctx)
         return IfStmt(cond, ift, iff, stmt.loc), ctx
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         # sealed: no slot runs once per iteration, and the precondition means
         # the condition holds nothing needing one
         cond = self._in_place(stmt.cond, ctx.sealed())
         body, _ = self._visit_block(stmt.body, ctx)
         return WhileStmt(cond, body, stmt.loc), ctx
 
-    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         iterable = self._in_place(stmt.iterable, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         return ForStmt(stmt.target, iterable, body, stmt.loc), ctx
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         """A ``with`` statement, whose two halves round differently.
 
         **E-Context** evaluates the context expression under ``REAL``, not the
@@ -388,14 +368,14 @@ class _ANFInstance(DefaultTransformVisitor):
         body, _ = self._visit_block(stmt.body, ctx)
         return ContextStmt(stmt.target, context, body, stmt.loc), ctx
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         # the message is sealed: it is evaluated only where the test fails, and
         # no slot runs then
         test = self._in_place(stmt.test, ctx)
         msg = None if stmt.msg is None else self._in_place(stmt.msg, ctx.sealed())
         return AssertStmt(test, msg, stmt.loc), ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         return EffectStmt(self._in_place(stmt.expr, ctx), stmt.loc), ctx
 
 
@@ -424,7 +404,10 @@ class ANF:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
-        return _list_refusals(func)
+        return [
+            (e, SEALED_REASON[why]) for e, why in Hoistability.analyze(func).sealed
+            if needs_slot(e)
+        ]
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:

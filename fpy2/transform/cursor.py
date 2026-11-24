@@ -12,7 +12,7 @@ than a silent mis-hit.  Holding that reference also keeps the tree alive, so no
 `id` is recycled underneath a live cursor.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from itertools import pairwise
 
@@ -45,7 +45,7 @@ class StmtCursor:
     path: StmtPath
     """where the statement sits"""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not isinstance(self.func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {self.func}')
         if not isinstance(self.path, StmtPath):
@@ -66,7 +66,7 @@ class StmtCursor:
         """The statement this cursor names."""
         return resolve_stmt(self.func, self.path)
 
-    def __str__(self):
+    def __str__(self) -> str:
         loc = self.resolve().loc
         where = '' if loc is None else f' at {loc.format()}'
         return f'{format_path(self.path)}{where}'
@@ -84,7 +84,7 @@ class BlockCursor:
     span: range
     """the indices the run covers"""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not isinstance(self.func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {self.func}')
         if not isinstance(self.block_path, (FuncBody, SubBlock)):
@@ -99,10 +99,10 @@ class BlockCursor:
                 f'the block holds {len(block.stmts)}'
             )
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.span)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[StmtCursor]:
         for idx in self.span:
             yield StmtCursor(self.func, StmtPath(self.block_path, idx))
 
@@ -120,7 +120,7 @@ class BlockCursor:
         block = resolve_block(self.func, self.block_path)
         return block.stmts[self.span.start:self.span.stop]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f'{format_path(self.block_path)}[{self.span.start}:{self.span.stop}]'
 
 
@@ -134,7 +134,7 @@ class ExprCursor:
     path: ExprPath
     """where the expression sits"""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not isinstance(self.func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {self.func}')
         if not isinstance(self.path, ExprPath):
@@ -149,7 +149,7 @@ class ExprCursor:
         """The statement the expression belongs to."""
         return StmtCursor(self.func, self.path.stmt())
 
-    def __str__(self):
+    def __str__(self) -> str:
         loc = self.resolve().loc
         where = '' if loc is None else f' at {loc.format()}'
         return f'{format_path(self.path)}{where}'
@@ -172,7 +172,7 @@ class Edit:
     inserted: int
     """how many statements it emitted in their place"""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.index < 0 or self.removed < 0 or self.inserted < 0:
             raise ValueError(f'ill-formed edit: {self}')
 
@@ -211,7 +211,7 @@ class EditLog:
     forwarding an :class:`ExprCursor` across the pass fail rather than mis-aim.
     """
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for e in self.edits:
             block = resolve_block(self.source, e.block_path)
             if e.index + e.removed > len(block.stmts):
@@ -318,7 +318,9 @@ def not_a_statement(cursor: ExprCursor) -> TransformReferenceError:
     )
 
 
-def _restrict(func: FuncDef, within: Cursor | None, *, stmts: bool):
+def _restrict(
+    func: FuncDef, within: Cursor | None, *, stmts: bool
+) -> Callable[[StmtPath | ExprPath], bool]:
     """What `within` narrows a listing to, as a predicate over paths."""
     if within is None:
         return lambda path: True
@@ -333,7 +335,7 @@ def _restrict(func: FuncDef, within: Cursor | None, *, stmts: bool):
     return lambda path: beneath(path, block, span)
 
 
-def _under_expr(path: ExprPath, ancestor: ExprPath) -> bool:
+def _under_expr(path: StmtPath | ExprPath, ancestor: ExprPath) -> bool:
     """Whether *path* lies under *ancestor*, both expressions."""
     p = path.parent
     while isinstance(p, ExprPath):
@@ -398,7 +400,9 @@ def _overlaps(a: Edit, b: Edit) -> bool:
     return beneath(b.block_path, a.block_path, a.span)
 
 
-def _forward_block(block: BlockPath, edits: tuple[Edit, ...], leaf) -> BlockPath:
+def _forward_block(
+    block: BlockPath, edits: tuple[Edit, ...], leaf: StmtPath | ExprPath
+) -> BlockPath:
     """*block*, after the edits: its enclosing statements shift with them."""
     match block:
         case FuncBody():
@@ -411,10 +415,12 @@ def _forward_block(block: BlockPath, edits: tuple[Edit, ...], leaf) -> BlockPath
                     'which was rewritten'
                 )
             return SubBlock(StmtPath(new_block, new_index), field)
+        case _:
+            raise RuntimeError(f'unreachable: {block}')
 
 
 def _forward_stmt(
-    path: StmtPath, edits: tuple[Edit, ...], leaf
+    path: StmtPath, edits: tuple[Edit, ...], leaf: StmtPath | ExprPath
 ) -> tuple[BlockPath, int, Edit | None]:
     """The block and index *path*'s statement lands at, and the edit that
     replaced it, where one did.

@@ -43,7 +43,7 @@ def fuse(func: Function) -> Function:
             return acc
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     ast = ReduceFusion.apply(func.ast)
     return func.with_ast(ast)

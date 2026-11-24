@@ -3,6 +3,7 @@ Decorators for the FPy language.
 """
 
 import builtins
+import functools
 import inspect
 from collections.abc import Callable
 from typing import Any, overload
@@ -41,7 +42,7 @@ def fpy[**P, R](
     pre: Any = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
-):
+) -> Function[P, R] | Callable[[Callable[P, R]], Function[P, R]]:
     """
     Decorator to parse a Python function into FPy.
 
@@ -66,14 +67,14 @@ def fpy[**P, R](
 ###########################################################
 # @pattern decorator
 
-def pattern[**P, R](func: Callable[P, R]):
+def pattern[**P, R](func: Callable[P, R]) -> ExprPattern | StmtPattern:
     """
     Decorator to parse a Python function into an FPy pattern.
     Constructs an FPy `Pattern` from a Python function.
     FPy is a stricter subset of Python, so this decorator will reject
     any function that is not valid in FPy.
     """
-    fn = _apply_fpy_decorator(func, decorator=pattern)
+    fn = _apply_fpy_decorator(func, is_pattern=True)
 
     # check which pattern it is
     # TODO: should there be separate decorators?
@@ -111,7 +112,7 @@ def fpy_primitive[**P, R](
     spec: Any = None,
     meta: dict[str, Any] | None = None,
     pure: bool = True,
-):
+) -> Primitive[P, R] | Callable[[Callable[P, R]], Primitive[P, R]]:
     """
     Decorator to parse a Python function into an FPy primitive.
     Constructs an FPy `Primitive` from a Python function.
@@ -123,33 +124,16 @@ def fpy_primitive[**P, R](
         spec: Optional specification for the primitive
         meta: Optional metadata dictionary for the primitive
     """
-    if func is None:
-        # create a new decorator to be applied directly
-        return lambda func: _apply_fpy_prim_decorator(
-            func,
-            ctx=ctx,
-            arg_ctxs=arg_ctxs,
-            ret_ctx=ret_ctx,
-            spec=spec,
-            meta=meta,
-            pure=pure
-        )
-    else:
-        # parse the function as an FPy primitive
-        return _apply_fpy_prim_decorator(
-            func,
-            ctx=ctx,
-            arg_ctxs=arg_ctxs,
-            ret_ctx=ret_ctx,
-            spec=spec,
-            meta=meta,
-            pure=pure
-        )
+    decorate = functools.partial(
+        _apply_fpy_prim_decorator,
+        ctx=ctx, arg_ctxs=arg_ctxs, ret_ctx=ret_ctx, spec=spec, meta=meta, pure=pure,
+    )
+    return decorate if func is None else decorate(func)
 
 ###########################################################
 # Utilities
 
-def _trim_source(lines: list[str], col_offset: int):
+def _trim_source(lines: list[str], col_offset: int) -> None:
     if col_offset > 0:
         for i in range(len(lines)):
             lines[i] = lines[i][col_offset:]
@@ -192,8 +176,8 @@ def _apply_fpy_decorator[**P, R](
     pre: Any = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
-    decorator: Callable = fpy,
-):
+    is_pattern: bool = False,
+) -> Function[P, R]:
     # fetch the source for the function
     lines, src_name, start_line, col_offset = getfunclines(func)
     _trim_source(lines, col_offset)
@@ -206,7 +190,7 @@ def _apply_fpy_decorator[**P, R](
 
     # parse the source as an FPy function
     parser = Parser(src_name, lines, env, start_line=start_line, col_offset=col_offset)
-    ast, lambdas = parser.parse_function(env)
+    ast, lambdas = parser.parse_function()
 
     # inline `lambda`s for `pre` and `spec` are parsed as FPy expressions
     pre = lambdas.get('pre', pre)
@@ -214,27 +198,14 @@ def _apply_fpy_decorator[**P, R](
     if inspect.isfunction(pre) or inspect.isfunction(spec):
         raise TypeError(f'`pre` and `spec` of `{func.__name__}` must be inline `lambda`s or FPy functions')
 
-    if decorator == pattern:
-        # syntax checking
-        free_vars = SyntaxCheck.check(
-            ast,
-            free_vars=free_vars,
-            ignore_unknown=True,
-            allow_wildcard=True
-        )
-        # add metadata
-        ast._meta = FuncMeta(free_vars, ctx, pre, spec, meta or {}, env)
+    if is_pattern:
+        free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=True, allow_wildcard=True)
     else:
-        # syntax checking
         free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
-        # add metadata
-        ast._meta = FuncMeta(free_vars, ctx, pre, spec, meta or {}, env)
-        # reachability analysis
-        # Multiple return statements are allowed: they're well-defined
-        # for the interpreter and the cpp backend, and the fpc backend
-        # rejects them at compile time with a backend-specific error.
-        # We still require every statement to be reachable and every
-        # path to end in a return.
+    ast._meta = FuncMeta(free_vars, ctx, pre, spec, meta or {}, env)
+
+    if not is_pattern:
+        # every statement is reachable and every path ends in a return
         Reachability.analyze(
             ast,
             check_all_reachable=True,
@@ -244,54 +215,54 @@ def _apply_fpy_decorator[**P, R](
     # wrap the AST in a Function
     return Function(ast)
 
-def _is_valid_context(ctx: Context | str | tuple):
-    match ctx:
-        case tuple():
-            return all(_is_valid_context(c) for c in ctx)
-        case _:
-            return isinstance(ctx, (Context, str))
-
-def _free_context_vars(ctx: Context | str | tuple) -> set[str]:
+def _free_context_vars(ctx: object) -> set[str] | None:
+    """The context variables in *ctx*, or `None` where it is not a context."""
     match ctx:
         case str():
             return {ctx}
         case Context():
             return set()
         case tuple():
-            vars = set()
+            vars: set[str] = set()
             for c in ctx:
-                vars.update(_free_context_vars(c))
+                c_vars = _free_context_vars(c)
+                if c_vars is None:
+                    return None
+                vars |= c_vars
             return vars
         case _:
-            raise ValueError(f"invalid context: {ctx}")
+            return None
 
 def _check_prim_contexts(
     num_args: int,
     ctx: str | None,
     arg_ctxs: list[str | tuple] | None,
     ret_ctx: Context | str | tuple | None,
-):
+) -> None:
     input_vars: set[str] = set()
 
     # check contexts are well-formed and that ret_ctx has
     # no free context variables
     if ctx is not None:
-        if not _is_valid_context(ctx):
+        ctx_vars = _free_context_vars(ctx)
+        if ctx_vars is None:
             raise ValueError(f"invalid context: {ctx}")
-        input_vars.update(_free_context_vars(ctx))
+        input_vars |= ctx_vars
     if arg_ctxs is not None:
         if not isinstance(arg_ctxs, list):
             raise TypeError(f"Expected \'list\': arg_ctxs={arg_ctxs}")
         if len(arg_ctxs) != num_args:
             raise ValueError(f"arg_ctxs length mismatch: expected {num_args}, got {len(arg_ctxs)}")
         for c in arg_ctxs:
-            if not _is_valid_context(c):
+            c_vars = _free_context_vars(c)
+            if c_vars is None:
                 raise ValueError(f"invalid context in arg_ctxs: {c}")
-            input_vars.update(_free_context_vars(c))
+            input_vars |= c_vars
     if ret_ctx is not None:
-        if not _is_valid_context(ret_ctx):
+        ret_vars = _free_context_vars(ret_ctx)
+        if ret_vars is None:
             raise ValueError(f"invalid context in ret_ctx: {ret_ctx}")
-        for v in _free_context_vars(ret_ctx):
+        for v in ret_vars:
             if v not in input_vars:
                 raise ValueError(f"unbound context variable in ret_ctx: {v}")
 
@@ -305,7 +276,7 @@ def _apply_fpy_prim_decorator[**P, R](
     spec: Any = None,
     meta: dict[str, Any] | None = None,
     pure: bool = True,
-):
+) -> Primitive[P, R]:
     """
     Applies the `@fpy_prim` decorator to a function.
     """
@@ -316,7 +287,7 @@ def _apply_fpy_prim_decorator[**P, R](
     # parse for the type signature
     env = _function_env(func)
     parser = Parser(src_name, lines, env, start_line=start_line, col_offset=col_offset)
-    arg_types, return_type = parser.parse_signature(ignore_ctx=True)
+    arg_types, return_type = parser.parse_signature()
 
     # check primitive context signature
     _check_prim_contexts(len(arg_types), ctx, arg_ctxs, ret_ctx)

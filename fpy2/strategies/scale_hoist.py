@@ -110,7 +110,7 @@ def hoist_scale(
                 return 0
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(
         HoistScale.apply_with_edits(func.ast, func.rebase(where))

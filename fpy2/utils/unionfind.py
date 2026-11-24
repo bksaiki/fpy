@@ -1,6 +1,7 @@
 """Unionfind data structure implementation."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from typing import overload
 
 
 class Unionfind[T]:
@@ -16,7 +17,7 @@ class Unionfind[T]:
     _parent: dict[T, T]
     _sets: dict[T, set[T]]
 
-    def __init__(self, xs: Iterable[T] | None = None):
+    def __init__(self, xs: Iterable[T] | None = None) -> None:
         if xs is None:
             self._parent = {}
             self._sets = {}
@@ -36,7 +37,7 @@ class Unionfind[T]:
         """
         return x in self._parent
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[T]:
         """
         Returns an iterator over the elements in the union-find.
         """
@@ -63,7 +64,11 @@ class Unionfind[T]:
             raise KeyError(x)
         return self._find(x)
 
-    def get(self, x: T, default: T | None = None):
+    @overload
+    def get(self, x: T, default: T) -> T: ...
+    @overload
+    def get(self, x: T, default: None = None) -> T | None: ...
+    def get(self, x: T, default: T | None = None) -> T | None:
         """
         Finds the representative of the set containing `x`,
         or `default` if a representative is not found.
@@ -91,7 +96,7 @@ class Unionfind[T]:
         """
         return self._sets[self.find(x)]
 
-    def items(self):
+    def items(self) -> Iterator[tuple[T, T]]:
         """
         Returns an iterator over the (element, representative) pairs in the union-find.
         """

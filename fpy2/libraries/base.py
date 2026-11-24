@@ -9,8 +9,6 @@ This module provides:
 - typing hints
 """
 
-# rounding contexts
-# runtime
 from ..decorator import fpy, fpy_primitive, pattern
 from ..env import ForeignEnv
 from ..function import Function
@@ -37,7 +35,6 @@ from ..number import (
     MX_E8M0,
     MX_INT8,
     OV,
-    # type aliases
     REAL,
     RM,
     S1E4M3,
@@ -51,16 +48,12 @@ from ..number import (
     UINT16,
     UINT32,
     UINT64,
-    # abstract context types
     Context,
-    # concrete context types
     EFloatContext,
-    # encoding utilities
     EFloatNanKind,
     EncodableContext,
     ExpContext,
     FixedContext,
-    # number types
     Float,
     IEEEContext,
     MPBFixedContext,
@@ -73,12 +66,9 @@ from ..number import (
     Real,
     RealFloat,
     RoundingDirection,
-    # rounding utilities
     RoundingMode,
     SizedContext,
     SMFixedContext,
 )
-
-# builtin operations
 from ..ops import *
 from ..primitive import Primitive

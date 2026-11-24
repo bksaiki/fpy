@@ -16,9 +16,6 @@ The numbers library supports many different number types including:
 These number systems guarantee correct rounding via MPFR.
 """
 
-# base library
-# standard library
-# submodules
 from . import (
     analysis,
     ast,

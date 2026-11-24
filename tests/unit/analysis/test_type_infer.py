@@ -23,6 +23,20 @@ from fpy2.types import BoolType, RealType, Type
 from ..generators import arbitrary_type, fpy_funcdef
 
 
+class TestPolymorphism:
+    def test_definitions_agree_with_the_function_type(self):
+        """Each parameter's definition has its own type variable, the one the
+        function type gives it."""
+        @fp.fpy
+        def pick(x, y, z):
+            t = (x, y)
+            return z
+
+        info = TypeInfer.check(pick.ast)
+        by_name = {str(d.name): ty for d, ty in info.by_def.items()}
+        assert [by_name[str(a.name)] for a in pick.ast.args] == list(info.fn_type.arg_types)
+
+
 class TestCrossFunction:
     def test_callee_return_type_flows_to_caller(self):
         @fp.fpy

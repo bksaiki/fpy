@@ -95,7 +95,6 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
-from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     REAL,
     Context,
@@ -114,6 +113,7 @@ from .utils import (
     RoundingScopes,
     ScopedRoundingRewriter,
     check_where,
+    clone,
     sign_choice,
     try_round,
 )
@@ -290,9 +290,8 @@ def _ctx_expr(e: Expr | None, src: _Source, loc: Location | None) -> Expr:
             shed |= {'enable_nan', 'nan_value'}
         if ValueClass.INF & src.shed:
             shed |= {'enable_inf', 'inf_value'}
-        # a structurally-fresh copy: each emitted block must occupy distinct
-        # AST nodes, and the source expression stays in place under `where`
-        call = DefaultTransformVisitor()._visit_expr(e, None)
+        # each emitted block must occupy distinct AST nodes
+        call = clone(e)
         assert isinstance(call, Call)
         # the rules are keyword-only in every constructor, so shedding one
         # starts by dropping its keyword
@@ -325,15 +324,12 @@ class _UnfoldSpecialInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis, where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.class_info = class_info
         self.gensym = Gensym(scopes.def_use.names())
         self.where = where
-
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
 
     def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
         """The rounding's format, if any of its special values can be stated

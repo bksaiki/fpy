@@ -10,10 +10,4 @@ FPy standard library.
 ###########################################################
 # Sublibraries
 
-# base library (auto-imported into the `fpy2` module)
-# core operations and utilities
-# error-free transformations
-# vectors
-# matrices
-# metrics
 from . import base, core, eft, matrix, metrics, vector

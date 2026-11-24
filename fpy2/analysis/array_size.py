@@ -14,6 +14,7 @@ the pre-mutation bound from the use def, widens the element bound at
 depth ``len(indices)``, and writes the result to the fresh def.
 """
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
@@ -27,7 +28,7 @@ from ..number import INTEGER, REAL, Context, Float, MPFixedContext
 from ..types import ListType, TupleType, Type
 from ..utils import Gensym, NamedId, Unionfind
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
-from .define_use import AssignDef, DefineUseAnalysis, Definition, DefSite
+from .define_use import AssignDef, DefineUseAnalysis, Definition, DefSite, PhiDef
 from .partial_eval import PartialEval, PartialEvalInfo, Value
 from .type_infer import TypeAnalysis, TypeInfer
 
@@ -231,7 +232,7 @@ class _CalleeCache:
     pre: dict[FuncDef, tuple[PartialEvalInfo, TypeAnalysis]]
     ret: dict[_CalleeSignature, ArraySizeBound]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.pre = {}
         self.ret = {}
 
@@ -270,7 +271,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         arg_sizes: tuple[ArraySizeBound, ...] | None = None,
         cache: _CalleeCache | None = None,
         seed_from_asserts: bool = True,
-    ):
+    ) -> None:
         self.func = func
         self.partial_eval = partial_eval
         self.type_info = type_info
@@ -291,7 +292,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self._ctx_use_cache = None
 
     @contextmanager
-    def _branch(self):
+    def _branch(self) -> Iterator[None]:
         """Mark the enclosed block as conditionally executed."""
         self._cond_depth += 1
         try:
@@ -396,12 +397,6 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
-    def _get_eval(self, e: Expr) -> Value | None:
-        if e in self.partial_eval.by_expr:
-            return self.partial_eval.by_expr[e]
-        else:
-            return None
-
     def _join_size(self, a: ArraySize, b: ArraySize) -> ArraySize:
         """Lattice join: equal sizes (same int, or co-representative size
         variables) survive as their representative — concrete when the
@@ -423,7 +418,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 raise TypeError(f'Cannot unify types: {t1} and {t2}')
 
-    def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: ArraySizeBound):
+    def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: ArraySizeBound) -> None:
         match target:
             case NamedId():
                 d = self.def_use.find_def_from_site(target, site)
@@ -435,11 +430,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 pass
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> ArraySizeBound:
         d = self.def_use.find_def_from_use(e)
         return self.by_def[d]
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: None):
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> ArraySizeBound:
         ty = self._visit_expr(e.arg, ctx)
         match e:
             case Range1():
@@ -468,7 +463,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: None):
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> ArraySizeBound:
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         match e:
@@ -484,7 +479,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: None):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> ArraySizeBound:
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
@@ -502,7 +497,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
-    def _visit_naryop(self, e: NaryOp, ctx: None):
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> ArraySizeBound:
         tys = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case Zip():
@@ -520,8 +515,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     elt_tys.append(ty.elt)
                     sizes.append(ty.size)
 
-                concretes = {r for s in sizes
-                             if isinstance((r := _repr_size(s, self.uf)), int)}
+                reprs = [_repr_size(s, self.uf) for s in sizes]
+                concretes = {r for r in reprs if isinstance(r, int)}
                 symbols = [s for s in sizes if isinstance(s, NamedId)]
 
                 # Only an *unconditional* zip may constrain its inputs' sizes
@@ -569,7 +564,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
-    def _visit_list_expr(self, e: ListExpr, ctx: None):
+    def _visit_list_expr(self, e: ListExpr, ctx: None) -> ListSize:
         elt_sizes = [self._visit_expr(elt, ctx) for elt in e.elts]
         if elt_sizes:
             # Unify so conflicting inner sizes widen (``[[1.0], [1.0, 2.0]]``
@@ -583,7 +578,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             elt_size = self._cvt_type(list_ty.elt)
         return ListSize(elt_size, len(e.elts))
 
-    def _visit_list_comp(self, e: ListComp, ctx: None):
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> ListSize:
         iter_tys: list[ListSize] = []
         for target, iterable in zip(e.targets, e.iterables, strict=True):
             ty = self._visit_expr(iterable, ctx)
@@ -609,13 +604,13 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         return ListSize(elt_ty, size)
 
-    def _visit_list_ref(self, e: ListRef, ctx: None):
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> ArraySizeBound:
         ty = self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
         assert isinstance(ty, ListSize)
         return ty.elt
 
-    def _visit_list_slice(self, e: ListSlice, ctx: None):
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> ListSize:
         ty = self._visit_expr(e.value, ctx)
         assert isinstance(ty, ListSize)
         if e.start is not None:
@@ -695,6 +690,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                         return (None, 1, 0)
                     base, scale, off = self._affine(rest)
                     return (base, scale * k, off * k)
+            case _:
+                raise RuntimeError(f'unreachable: {e}')
 
         return (e, 1, 0)
 
@@ -726,12 +723,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
         Covers partial-eval constants, the integer-valued list queries
         ``len(xs)`` / ``size(xs, d)`` / ``dim(xs)`` when the queried size is
         statically known (``dim`` always is — it's the nesting depth), and
-        ``+`` / ``-`` / ``*`` over those.  The arithmetic is what a lowered
-        multi-clause comprehension allocates with: ``fp.empty(len(xs) *
-        len(ys))``, whose size is otherwise unknown and whose list is then a
-        ``std::vector`` where the sizes are right there in the types.
+        ``+`` / ``-`` / ``*`` over those.
         """
-        val = self._get_eval(e)
+        val = self.partial_eval.by_expr.get(e)
         if isinstance(val, Float | Fraction):
             return int(INTEGER.round(val))
         # through a name: a size query bound to one is still that query
@@ -744,7 +738,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Dim():
                 bound = self.by_expr.get(e.arg)
                 if isinstance(bound, ListSize):
-                    return self._list_depth(bound)
+                    return list_depth(bound)
             case Size():
                 d = self._const_int(e.second)
                 if d is None:
@@ -769,6 +763,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     case _:
                         folded = lhs * rhs
                 return folded if self._holds_int(e, folded) else None
+            case _:
+                return None
         return None
 
     def _size_of(self, e: Expr) -> ArraySize:
@@ -807,11 +803,6 @@ class _ArraySizeInferInstance(DefaultVisitor):
             return False
         return scope.ctx.representable_under(Float.from_int(value, ctx=INTEGER))
 
-    @staticmethod
-    def _list_depth(bound: ArraySizeBound) -> int:
-        """Number of nested list dimensions in *bound* (== ``dim``)."""
-        return list_depth(bound)
-
     def _is_exact(self, e: ContextUseSite) -> bool:
         """True iff *e* is evaluated under the exact (``REAL``) rounding
         context, so its arithmetic introduces no rounding.  Only called on
@@ -823,7 +814,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _is_int_valued(self, e: Expr) -> bool:
         """Whether *e* is provably an integer: an integral constant, a size
         query, a ``range`` target, or :meth:`_is_int_op` arithmetic."""
-        val = self._get_eval(e)
+        val = self.partial_eval.by_expr.get(e)
         if isinstance(val, Float | Fraction):
             return val.is_integer()
         e = self.def_use.defining_expr(e)
@@ -839,7 +830,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 )
             case Add() | Sub() | Mul():
                 return self._is_int_op(e)
-        return False
+            case _:
+                return False
 
     def _is_int_op(self, e: Add | Sub | Mul) -> bool:
         """True iff *e*'s operands are integers and its context holds every
@@ -852,10 +844,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
             return False
         return self._is_int_valued(e.first) and self._is_int_valued(e.second)
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> TupleSize:
         return TupleSize(tuple(self._visit_expr(elt, ctx) for elt in e.elts))
 
-    def _visit_if_expr(self, e: IfExpr, ctx: None):
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> ArraySizeBound:
         self._visit_expr(e.cond, ctx)
         # Each arm executes conditionally -- a strict ``zip`` inside one
         # must not pin sizes globally.
@@ -864,7 +856,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             iff = self._visit_expr(e.iff, ctx)
         return self._unify(ift, iff)
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: None) -> ArraySizeBound:
         for arg in e.args:
             self._visit_expr(arg, ctx)
         # Take the call's type shape, then overlay the size the callee's own
@@ -921,11 +913,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return shape
 
-    def _visit_assign(self, stmt: Assign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None) -> None:
         ty = self._visit_expr(stmt.expr, ctx)
         self._visit_binding(stmt, stmt.target, ty)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
         # ``xs[i1]…[iN] = expr`` is a functional update: read the
         # pre-mutation bound off the use, then write the fresh def with the
         # inserted value joined into the element bound at depth N.
@@ -947,30 +939,29 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self.by_def[d_def] = new_ty
 
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+    def _merge_phis(self, stmt: If1Stmt | IfStmt) -> None:
+        """Sizes each phi after *stmt* as its unified operands."""
+        for phi in self.def_use.phis[stmt]:
+            lhs = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs, rhs)
+
+    def _visit_if1(self, stmt: If1Stmt, ctx: None) -> None:
         self._visit_expr(stmt.cond, ctx)
         with self._branch():
             self._visit_block(stmt.body, ctx)
 
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+        self._merge_phis(stmt)
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> None:
         self._visit_expr(stmt.cond, ctx)
         with self._branch():
             self._visit_block(stmt.ift, ctx)
             self._visit_block(stmt.iff, ctx)
 
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+        self._merge_phis(stmt)
 
-    def _iterate_to_fixpoint(self, phis, run_body):
+    def _iterate_to_fixpoint(self, phis: set[PhiDef], run_body: Callable[[], None]) -> None:
         """
         Drive a loop's phi-bound fixpoint to convergence: seed each phi
         from its pre-loop value, then run the body and unify the post-body
@@ -993,15 +984,15 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     and all(self.by_def[phi] == prev[phi] for phi in phis)):
                 break
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
-        def body():
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> None:
+        def body() -> None:
             self._visit_expr(stmt.cond, ctx)
             self._visit_block(stmt.body, ctx)
 
         with self._branch():
             self._iterate_to_fixpoint(self.def_use.phis[stmt], body)
 
-    def _visit_for(self, stmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> None:
         # iterable + target bound once, before the fixpoint
         iter_ty = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_ty, ListSize)
@@ -1012,14 +1003,14 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
             )
 
-    def _visit_context(self, stmt, ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> None:
         ty = self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
             d = self.def_use.find_def_from_site(stmt.target, stmt)
             self.by_def[d] = ty
         self._visit_block(stmt.body, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: None):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> None:
         ret_size = self._visit_expr(stmt.expr, ctx)
         if not isinstance(ret_size, ListSize):
             return
@@ -1029,14 +1020,14 @@ class _ArraySizeInferInstance(DefaultVisitor):
         else:
             self.ret_size = self._unify(self.ret_size, ret_size)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> None:
         self._visit_expr(stmt.test, ctx)
         # Only an *unconditional* assert holds on every execution, so only
         # then may it constrain sizes globally (cf. strict ``zip``).
         if self._cond_depth == 0 and self._seed_from_asserts:
             self._seed_from_assert(stmt.test)
 
-    def _seed_from_assert(self, test: Expr):
+    def _seed_from_assert(self, test: Expr) -> None:
         """Learn size equalities from ``len(a) == len(b)`` / ``len(a) == N``
         (and chained ``==``) — pins or merges the size variables."""
         match test:
@@ -1061,7 +1052,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             return bound.size if isinstance(bound, ListSize) else None
         return self._const_int(e)
 
-    def _relate_sizes(self, a: ArraySize, b: ArraySize):
+    def _relate_sizes(self, a: ArraySize, b: ArraySize) -> None:
         """Record that two sizes are equal: merge two variables, or pin a
         variable to a concrete length."""
         match a, b:
@@ -1079,7 +1070,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self.by_expr[expr] = ty
         return ty
 
-    def _visit_function(self, func: FuncDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None) -> None:
         # arguments and free variables: a list param gets the length its call
         # site states, else a fresh size var
         given = self._arg_sizes or ()

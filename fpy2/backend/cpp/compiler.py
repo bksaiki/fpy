@@ -4,13 +4,13 @@ Public API for the cpp backend.
 :class:`CppCompiler` runs the analysis pipeline (monomorphization,
 def-use, context-use, array-size, format inference, storage
 inference) on a :class:`Function` and hands the result to
-:class:`_CppEmitter`, which produces a C++ source string.  Errors
+:class:`CppEmitter`, which produces a C++ source string.  Errors
 surface as :class:`CppCompileError`.
 """
 
 import copy
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 
 from ...analysis import (
@@ -46,7 +46,6 @@ from ...ast.fpyast import (
     Var,
     Zip,
 )
-from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
 from ...number import Context
@@ -54,21 +53,19 @@ from ...transform import (
     EnumerateElim,
     FreeVarElim,
     Hoistable,
-    HoistInvariant,
-    HoistScale,
     ReduceFusion,
     RoundElim,
     Simplify,
     Specialize,
     StatementForm,
-    TransformDeclined,
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
+from ...transform.path import walk_exprs, walk_stmts
 from ...types import Type
-from ..backend import Backend, CompileError
+from ..backend import Backend, CompileError, hoist
 from .emitter import CppEmitError, CppEmitter
-from .storage import CppStorage, CppStorageDomain, StorageSelectionError
+from .storage import DOMAIN, CppStorage, StorageSelectionError
 from .types import CppType
 from .unbox import (
     CalleeAbi,
@@ -134,28 +131,12 @@ class SpecAnalyses:
 # Compiler
 
 
-def _hoist(ast: FuncDef) -> FuncDef:
-    """*ast* with loop-invariant work and scale factors hoisted, where any."""
-    for hoist in (HoistInvariant.apply, HoistScale.apply):
-        try:
-            ast = hoist(ast)
-        except TransformDeclined:
-            pass
-    return ast
-
-
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
     """Every ``Call`` in *ast*'s body that targets a :class:`Function`."""
-    out: dict[Call, Function] = {}
-
-    class _Collector(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            if isinstance(e.fn, Function):
-                out[e] = e.fn
-            super()._visit_call(e, ctx)
-
-    _Collector()._visit_function(ast, None)
-    return out
+    return {
+        e: e.fn for _, e in walk_exprs(ast)
+        if isinstance(e, Call) and isinstance(e.fn, Function)
+    }
 
 
 def _returned_class(e: Expr, class_info: ValueClassAnalysis) -> ClassBound:
@@ -186,15 +167,10 @@ def _return_bound(ast: FuncDef, class_info: ValueClassAnalysis) -> ClassBound:
     """
     out: ClassBound | None = None
     first = True
-
-    class _Collector(DefaultVisitor):
-        def _visit_return(self, stmt: ReturnStmt, ctx):
-            nonlocal out, first
+    for _, stmt in walk_stmts(ast):
+        if isinstance(stmt, ReturnStmt):
             cls = _returned_class(stmt.expr, class_info)
             out, first = (cls if first else join_class(out, cls)), False
-            super()._visit_return(stmt, ctx)
-
-    _Collector()._visit_function(ast, None)
     return out
 
 
@@ -263,7 +239,8 @@ def _lowered_by_statement_form(e: Expr) -> Expr | None:
     if isinstance(e, (ListComp, Zip, Enumerate)):
         return e
     for _field, _i, sub in subexprs(e):
-        if (x := _lowered_by_statement_form(sub)) is not None:
+        x = _lowered_by_statement_form(sub)
+        if x is not None:
             return x
     return None
 
@@ -273,7 +250,8 @@ def _check_comparison_tails(ast: FuncDef) -> None:
     third operand onward: it has no slot, so nothing lowers it before the
     emitter.  See ``docs/todos/backend-cpp.md``."""
     for e, why in Hoistability.analyze(ast).sealed:
-        if why == 'comparison' and (x := _lowered_by_statement_form(e)) is not None:
+        x = _lowered_by_statement_form(e) if why == 'comparison' else None
+        if x is not None:
             raise CppCompileError(
                 f'`{ast.name}`: `{x.format()}` in a chained comparison past its '
                 'first pair is not supported; split the comparison with `and`.'
@@ -287,9 +265,7 @@ def _check_signature_monomorphic(a: SpecAnalyses) -> None:
     Storage selection will not catch this: an unresolved kind reads as
     :class:`VarFormat`, whose storage is unobservable and so answers ``bool``
     rather than refusing -- which is right for an internal type variable and
-    wrong only here.  Before ``VarFormat`` existed the two were indistinguishable
-    (a :class:`VarType` and a ``bool`` shared the ``None`` bound), and
-    ``return []`` became ``std::vector<bool> f()``.
+    wrong only here.
 
     Scoped to the signature, which is where the template would be needed.  A
     type variable that stays internal belongs to a value no element is stored
@@ -378,7 +354,7 @@ class CppCompiler(Backend):
         unfold: _UnfoldMode = UnfoldMode.NONE,
         enable_fenv: bool = True,
         namespace: str | None = None,
-    ):
+    ) -> None:
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
                 f'`unbox` must be an UnboxMode, got {unbox!r}; '
@@ -504,12 +480,11 @@ class CppCompiler(Backend):
         params: dict[FuncDef, CalleeAbi],
         only: set[int] | None = None,
         bound_params: dict[str, DigitBoundParams] | None = None,
-    ):
+    ) -> Iterator[tuple[Function, SpecAnalyses]]:
         """Analyze every spec leaves-first, filling *params* as it goes.
 
         One path, so :meth:`compile_module` and :meth:`signature` cannot reach
-        different conclusions about the same function — they did once, and it
-        was an ABI bug rather than a missed optimization.
+        different conclusions about the same function.
 
         *only* limits which specs are analyzed (by ``id(f.ast)``) without
         narrowing what counts as *called*, so :meth:`signature` can skip a
@@ -533,8 +508,7 @@ class CppCompiler(Backend):
     def specialize(
         self, module: Module, bound_params: dict[str, DigitBoundParams] | None = None,
     ) -> list[Function]:
-        """Steps 1-3 of the pipeline: the fully-specialized functions, in
-        leaves-first emission order."""
+        """The fully-specialized functions, in leaves-first emission order."""
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
@@ -590,7 +564,7 @@ class CppCompiler(Backend):
             # nothing goes on to use, a copy of an accumulator.
             specialized = specialized.map(lambda _m, fd: Simplify.apply(fd))
             # after unfolding, which puts per-element scale factors in loop bodies
-            specialized = specialized.map(lambda _m, fd: _hoist(fd))
+            specialized = specialized.map(lambda _m, fd: hoist(fd))
 
         return list(specialized.call_graph().order)
 
@@ -606,7 +580,8 @@ class CppCompiler(Backend):
         """The per-spec analyses one fully-specialized function is emitted
         from."""
         ast = func.ast
-        if bad := unclosed_data_free_vars(ast):
+        bad = unclosed_data_free_vars(ast)
+        if bad:
             raise CppCompileError(
                 f'unbound data free variable(s): {", ".join(bad)}'
             )
@@ -638,7 +613,7 @@ class CppCompiler(Backend):
             du = format_info.type_info.def_use
             chosen = StorageInfer.infer(
                 du, format_info.by_def, format_info.by_expr,
-                CppStorageDomain(),
+                DOMAIN,
                 {d: class_info.bound_of(d) for d in du.defs},
             )
         except StorageSelectionError as e:
@@ -748,15 +723,6 @@ class CppCompiler(Backend):
 
         abi = _callee_abi(a)
         return [p.ty for p in abi.params], abi.ret
-
-    def _compile_function(
-        self, func: Function, *, is_called: bool = False,
-    ) -> str:
-        """Emit one C++ function definition for a fully-specialized
-        :class:`Function`.  ``func.ast.name`` is the final emitted name
-        (set by :class:`Specialize` — public entries keep their user-given
-        name, private specs get a mangled one)."""
-        return self._emit(func, self.analyze(func, is_called=is_called), {})
 
     def _emit(
         self,

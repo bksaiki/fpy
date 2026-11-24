@@ -52,9 +52,8 @@ class TestCore():
         self.assertArrayEqual(modf(Float.from_float(1.5)), [Float.from_int(1), Float.from_float(0.5)])
 
         self.assertArrayEqual(modf(Float(isnan=True)), [Float(isnan=True), Float(isnan=True)])
-        self.assertArrayEqual(modf(Float(isinf=True, s=True)), [Float(s=True), Float(isinf=True, s=True)])
-        self.assertArrayEqual(modf(Float(s=True, isinf=True)), [Float(s=True), Float(isinf=True, s=True)])
-        self.assertArrayEqual(modf(Float(s=False, isinf=True)), [Float(s=False), Float(isinf=True, s=False)])
+        self.assertArrayEqual(modf(Float(isinf=True, s=True)), [Float(isinf=True, s=True), Float(s=True)])
+        self.assertArrayEqual(modf(Float(isinf=True, s=False)), [Float(isinf=True, s=False), Float(s=False)])
 
     def test_ldexp(self):
         """Testing `ldexp` function"""

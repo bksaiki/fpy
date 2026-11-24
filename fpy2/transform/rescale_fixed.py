@@ -228,7 +228,10 @@ def _rescale_expr(
     dst = _rescale(ctx, scale)
     info = _CTOR_ARGS.get(type(ctx))
     if info is not None and isinstance(e, Call) and e.fn is type(ctx):
-        pos = Integer(getattr(dst, info.position), e.loc)
+        pos = Integer(
+            dst.scale if isinstance(dst, (FixedContext, SMFixedContext)) else dst.nmin,
+            e.loc,
+        )
         rewritten = _replace_arg(e, info.position, info.index, _const(pos))
         if rewritten is not None:
             # a stated bound shifts with the position; an unstated one is
@@ -236,8 +239,9 @@ def _rescale_expr(
             for name, index in info.bound:
                 if _arg_of(rewritten, name, index) is None:
                     continue
-                attr = 'pos_maxval' if name == 'maxval' else name
-                scaled = number_literal(getattr(dst, attr), e.loc)
+                assert isinstance(dst, MPBFixedContext)
+                maxval = dst.pos_maxval if name == 'maxval' else dst.neg_maxval
+                scaled = number_literal(maxval, e.loc)
                 bound = _replace_arg(rewritten, name, index, _const(scaled))
                 assert bound is not None
                 rewritten = bound
@@ -289,7 +293,7 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.gensym = Gensym(scopes.def_use.names())
@@ -432,9 +436,6 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
                 built = scaled
             return built
 
-        if _replace_arg(e, info.position, info.index, lambda x: x) is None:
-            # the position is written some other way
-            return None
         return _Shift(ctx=build_ctx, up=up, down=down, preamble=preamble)
 
     def _ladder(self, e: Expr, target: NamedId, out: list, shift: _Shift) -> None:

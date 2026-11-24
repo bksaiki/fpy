@@ -4,6 +4,7 @@ This module defines pattern matching facilities for FPy AST.
 
 from dataclasses import dataclass
 from fractions import Fraction
+from typing import NoReturn
 
 from ..ast import *
 from ..function import Function
@@ -22,7 +23,7 @@ from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst
 
 
-def _real_eq(a: 'Fraction | Float', b: 'Fraction | Float') -> bool:
+def _real_eq(a: Fraction | Float, b: Fraction | Float) -> bool:
     """Signed-zero-aware equality of two exact-real literal values.
 
     `RationalVal.as_real` returns a `Float` only for negative zero, which is
@@ -39,7 +40,9 @@ class _MatchFailure(Exception):
     """
     Exception raised when a match fails.
     """
-    def __init__(self, msg: str):
+    msg: str
+
+    def __init__(self, msg: str) -> None:
         super().__init__(msg)
         self.msg = msg
 
@@ -61,14 +64,14 @@ class _MatcherInst(Visitor):
     """
     FPy pattern matching instance for a pattern and sub-program.
 
-    Unlike `_MatcherEngine`, the matcher attempts to matching
-    starting at the top of the program slice.
+    Unlike `Matcher`, which tries every sub-program of a function,
+    the instance matches only at the top of the program slice.
     """
     pattern: Pattern
     ast: StmtBlock | Expr
     subst: Subst
 
-    def __init__(self, pattern: Pattern, ast: StmtBlock | Expr):
+    def __init__(self, pattern: Pattern, ast: StmtBlock | Expr) -> None:
         self.pattern = pattern
         self.ast = ast
         self.subst = Subst()
@@ -93,7 +96,7 @@ class _MatcherInst(Visitor):
             # match failed
             return None
 
-    def _bind_expr(self, name: NamedId, e: Expr):
+    def _bind_expr(self, name: NamedId, e: Expr) -> None:
         # check if pattern is already bound
         if name in self.subst:
             # check if the current binding is the same as `e`
@@ -104,7 +107,7 @@ class _MatcherInst(Visitor):
             # insert a new binding
             self.subst[name] = e
 
-    def _visit_target(self, name: Id, pat: Id):
+    def _visit_target(self, name: Id, pat: Id) -> None:
         """
         Visit the left-hand side of an assignment.
         The left-hand side is an `Id` while in an expression it is a `Var`.
@@ -121,71 +124,64 @@ class _MatcherInst(Visitor):
             case _:
                 raise RuntimeError('unreachable', pat, name)
 
-    def _visit_var(self, e: Var, pat: Var):
+    def _visit_var(self, e: Var, pat: Var) -> NoReturn:
         raise RuntimeError('do not call')
 
-    def _visit_bool(self, e: BoolVal, pat: BoolVal):
+    def _visit_bool(self, e: BoolVal, pat: BoolVal) -> None:
         if e.val != pat.val:
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_foreign(self, e: ForeignVal, pat: ForeignVal):
+    def _visit_foreign(self, e: ForeignVal, pat: ForeignVal) -> None:
         if e.val != pat.val:
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_decnum(self, e: Decnum, pat: Decnum):
+    def _visit_decnum(self, e: Decnum, pat: Decnum) -> None:
         # semantic match, not syntactic — but signed-zero aware: `-0.0` and
         # `+0.0` are distinct (see `_real_eq` / `RationalVal.as_real`).
         if not _real_eq(e.as_real(), pat.as_real()):
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_hexnum(self, e: Hexnum, pat: Hexnum):
+    def _visit_hexnum(self, e: Hexnum, pat: Hexnum) -> None:
         # semantic match, not syntactic — signed-zero aware (see `_visit_decnum`).
         if not _real_eq(e.as_real(), pat.as_real()):
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_integer(self, e: Integer, pat: Integer):
+    def _visit_integer(self, e: Integer, pat: Integer) -> None:
         if e.val != pat.val:
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_rational(self, e: Rational, pat: Rational):
+    def _visit_rational(self, e: Rational, pat: Rational) -> None:
         # this is a semantic match, not a syntactic match!
         if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_digits(self, e: Digits, pat: Digits):
+    def _visit_digits(self, e: Digits, pat: Digits) -> None:
         # this is a semantic match, not a syntactic match!
         if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_nullaryop(self, e: NullaryOp, pat: NullaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
+    def _visit_nullaryop(self, e: NullaryOp, pat: NullaryOp) -> None:
+        pass
 
-    def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
+    def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp) -> None:
         self._visit_expr(e.arg, pat.arg)
 
-    def _visit_binaryop(self, e: BinaryOp, pat: BinaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
+    def _visit_binaryop(self, e: BinaryOp, pat: BinaryOp) -> None:
         self._visit_expr(e.first, pat.first)
         self._visit_expr(e.second, pat.second)
 
-    def _visit_ternaryop(self, e: TernaryOp, pat: TernaryOp):
-        if type(e) is not type(pat):
-            raise _MatchFailure(f'matching {pat} against {e}')
+    def _visit_ternaryop(self, e: TernaryOp, pat: TernaryOp) -> None:
         self._visit_expr(e.first, pat.first)
         self._visit_expr(e.second, pat.second)
         self._visit_expr(e.third, pat.third)
 
-    def _visit_naryop(self, e: NaryOp, pat: NaryOp):
-        if type(e) is not type(pat):
+    def _visit_naryop(self, e: NaryOp, pat: NaryOp) -> None:
+        if len(e.args) != len(pat.args):
             raise _MatchFailure(f'matching {pat} against {e}')
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
 
-    def _visit_call(self, e: Call, pat: Call):
+    def _visit_call(self, e: Call, pat: Call) -> None:
         # check shape of call
         if len(e.args) != len(pat.args) or len(e.kwargs) != len(pat.kwargs):
             raise _MatchFailure(f'matching {pat} against {e}')
@@ -195,7 +191,7 @@ class _MatcherInst(Visitor):
             case None, None:
                 if e.func != pat.func:
                     raise _MatchFailure(f'matching {pat} against {e}')
-            case _, _:
+            case _:
                 if e.fn != pat.fn:
                     raise _MatchFailure(f'matching {pat} against {e}')
 
@@ -209,7 +205,7 @@ class _MatcherInst(Visitor):
                 raise _MatchFailure(f'matching {pat} against {e}')
             self._visit_expr(v1, v2)
 
-    def _visit_compare(self, e: Compare, pat: Compare):
+    def _visit_compare(self, e: Compare, pat: Compare) -> None:
         # TODO: is matching on a subset of operations valid?
         # check if the operation sequence is the same
         if len(e.args) != len(pat.args) or e.ops != pat.ops:
@@ -218,7 +214,7 @@ class _MatcherInst(Visitor):
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
 
-    def _visit_tuple_expr(self, e: TupleExpr, pat: TupleExpr):
+    def _visit_tuple_expr(self, e: TupleExpr, pat: TupleExpr) -> None:
         # check if #elements are the same
         if len(e.elts) != len(pat.elts):
             raise _MatchFailure(f'matching {pat} against {e}')
@@ -226,7 +222,7 @@ class _MatcherInst(Visitor):
         for c1, c2 in zip(e.elts, pat.elts):
             self._visit_expr(c1, c2)
 
-    def _visit_list_expr(self, e: ListExpr, pat: ListExpr):
+    def _visit_list_expr(self, e: ListExpr, pat: ListExpr) -> None:
         # check if #elements are the same
         if len(e.elts) != len(pat.elts):
             raise _MatchFailure(f'matching {pat} against {e}')
@@ -234,11 +230,11 @@ class _MatcherInst(Visitor):
         for c1, c2 in zip(e.elts, pat.elts):
             self._visit_expr(c1, c2)
 
-    def _visit_list_ref(self, e: ListRef, pat: ListRef):
+    def _visit_list_ref(self, e: ListRef, pat: ListRef) -> None:
         self._visit_expr(e.value, pat.value)
         self._visit_expr(e.index, pat.index)
 
-    def _visit_list_slice(self, e: ListSlice, pat: ListSlice):
+    def _visit_list_slice(self, e: ListSlice, pat: ListSlice) -> None:
         self._visit_expr(e.value, pat.value)
         match e.start, pat.start:
             case None, None:
@@ -255,32 +251,26 @@ class _MatcherInst(Visitor):
             case _:
                 raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_list_comp(self, e: ListComp, pat: ListComp):
+    def _visit_list_comp(self, e: ListComp, pat: ListComp) -> None:
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')
         for target, ptarget in zip(e.targets, pat.targets):
-            match target, ptarget:
-                case Id(), Id():
-                    self._visit_target(target, ptarget)
-                case TupleBinding(), TupleBinding():
-                    self._visit_tuple_binding(target, ptarget)
-                case _:
-                    raise _MatchFailure(f'matching {ptarget} against {target}')
+            self._visit_binding(target, ptarget)
         for it, pit in zip(e.iterables, pat.iterables):
             self._visit_expr(it, pit)
         self._visit_expr(e.elt, pat.elt)
 
-    def _visit_if_expr(self, e: IfExpr, pat: IfExpr):
+    def _visit_if_expr(self, e: IfExpr, pat: IfExpr) -> None:
         self._visit_expr(e.cond, pat.cond)
         self._visit_expr(e.ift, pat.ift)
         self._visit_expr(e.iff, pat.iff)
 
-    def _visit_attribute(self, e: Attribute, pat: Attribute):
+    def _visit_attribute(self, e: Attribute, pat: Attribute) -> None:
         if e.attr != pat.attr:
             raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.value, pat.value)
 
-    def _visit_binding(self, binding: Id | TupleBinding, pat: Id | TupleBinding):
+    def _visit_binding(self, binding: Id | TupleBinding, pat: Id | TupleBinding) -> None:
         match binding, pat:
             case Id(), Id():
                 self._visit_target(binding, pat)
@@ -289,11 +279,11 @@ class _MatcherInst(Visitor):
             case _:
                 raise _MatchFailure(f'matching {pat} against {binding}')
 
-    def _visit_assign(self, stmt: Assign, pat: Assign):
+    def _visit_assign(self, stmt: Assign, pat: Assign) -> None:
         self._visit_binding(stmt.target, pat.target)
         self._visit_expr(stmt.expr, pat.expr)
 
-    def _visit_tuple_binding(self, binding: TupleBinding, pat: TupleBinding):
+    def _visit_tuple_binding(self, binding: TupleBinding, pat: TupleBinding) -> None:
         if len(binding.elts) != len(pat.elts):
             raise _MatchFailure(f'matching {pat} against {binding}')
         for elt, p in zip(binding.elts, pat.elts):
@@ -310,48 +300,48 @@ class _MatcherInst(Visitor):
                 case _:
                     raise _MatchFailure(f'matching {p} against {elt}')
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, pat: IndexedAssign):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, pat: IndexedAssign) -> None:
         self._visit_target(stmt.var, pat.var)
         for e, p in zip(stmt.indices, pat.indices):
             self._visit_expr(e, p)
         self._visit_expr(stmt.expr, pat.expr)
 
-    def _visit_if1(self, stmt: If1Stmt, pat: IfStmt):
+    def _visit_if1(self, stmt: If1Stmt, pat: IfStmt) -> None:
         self._visit_expr(stmt.cond, pat.cond)
         self._visit_block(stmt.body, pat.ift)
 
-    def _visit_if(self, stmt: IfStmt, pat: IfStmt):
+    def _visit_if(self, stmt: IfStmt, pat: IfStmt) -> None:
         self._visit_expr(stmt.cond, pat.cond)
         self._visit_block(stmt.ift, pat.ift)
         self._visit_block(stmt.iff, pat.iff)
 
-    def _visit_while(self, stmt: WhileStmt, pat: WhileStmt):
+    def _visit_while(self, stmt: WhileStmt, pat: WhileStmt) -> None:
         self._visit_expr(stmt.cond, pat.cond)
         self._visit_block(stmt.body, pat.body)
 
-    def _visit_for(self, stmt: ForStmt, pat: ForStmt):
+    def _visit_for(self, stmt: ForStmt, pat: ForStmt) -> None:
         self._visit_binding(stmt.target, pat.target)
         self._visit_expr(stmt.iterable, pat.iterable)
         self._visit_block(stmt.body, pat.body)
 
-    def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):
+    def _visit_context(self, stmt: ContextStmt, pat: ContextStmt) -> None:
         self._visit_expr(stmt.ctx, pat.ctx)
         self._visit_block(stmt.body, pat.body)
 
-    def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):
+    def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt) -> None:
         # TODO: message?
         self._visit_expr(stmt.test, pat.test)
 
-    def _visit_effect(self, stmt: EffectStmt, pat: EffectStmt):
+    def _visit_effect(self, stmt: EffectStmt, pat: EffectStmt) -> None:
         self._visit_expr(stmt.expr, pat.expr)
 
-    def _visit_return(self, stmt: ReturnStmt, pat: ReturnStmt):
+    def _visit_return(self, stmt: ReturnStmt, pat: ReturnStmt) -> None:
         self._visit_expr(stmt.expr, pat.expr)
 
-    def _visit_pass(self, stmt: PassStmt, pat: ReturnStmt):
+    def _visit_pass(self, stmt: PassStmt, pat: ReturnStmt) -> None:
         pass
 
-    def _visit_block(self, block: StmtBlock, pat: StmtBlock):
+    def _visit_block(self, block: StmtBlock, pat: StmtBlock) -> None:
         # check length of block
         if len(block.stmts) != len(pat.stmts):
             raise _MatchFailure(f'matching {pat} against {block}')
@@ -362,10 +352,10 @@ class _MatcherInst(Visitor):
                 raise _MatchFailure(f'matching {pat} against {s1}')
             self._visit_statement(s1, s2)
 
-    def _visit_function(self, func: FuncDef, pat: FuncDef):
+    def _visit_function(self, func: FuncDef, pat: FuncDef) -> NoReturn:
         raise RuntimeError('do not call')
 
-    def _visit_expr(self, e: Expr, pat: Expr):
+    def _visit_expr(self, e: Expr, pat: Expr) -> None:
         match pat:
             case Var():
                 # pattern variable
@@ -376,7 +366,7 @@ class _MatcherInst(Visitor):
                     raise _MatchFailure(f'matching {type(pat)} against {type(e)}')
                 return super()._visit_expr(e, pat)
 
-    def _visit_statement(self, stmt: Stmt, pat: Stmt):
+    def _visit_statement(self, stmt: Stmt, pat: Stmt) -> None:
         # check if statements are the same type
         if type(stmt) is not type(pat):
             raise _MatchFailure(f'matching {type(pat)} against {type(stmt)}')
@@ -424,7 +414,7 @@ class Matcher:
 
     pattern: Pattern
 
-    def __init__(self, pattern: Pattern):
+    def __init__(self, pattern: Pattern) -> None:
         if not isinstance(pattern, Pattern):
             raise TypeError(f'Expected \'Pattern\', got {type(pattern)}')
         self.pattern = pattern

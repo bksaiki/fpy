@@ -6,8 +6,9 @@ TODO: stochastic rounding
 """
 
 from fractions import Fraction
+from typing import Any
 
-from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ...utils import DEFAULT, DefaultOr, bitmask, default_or, default_repr
 from ..number import Float, RealFloat
 from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import EncodableContext
@@ -50,7 +51,7 @@ class ExpFormat(EncodableFormat):
     _emax: int
     _mp_fmt: MPFloatFormat
 
-    def __init__(self, nbits: int, eoffset: int = 0):
+    def __init__(self, nbits: int, eoffset: int = 0) -> None:
         if not isinstance(nbits, int):
             raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
         if nbits <= 0:
@@ -62,14 +63,14 @@ class ExpFormat(EncodableFormat):
         self._emin, self._emax = _exponent_bounds(nbits, eoffset)
         self._mp_fmt = MPFloatFormat(1)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, ExpFormat)
             and self.nbits == other.nbits
             and self.eoffset == other.eoffset
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.__class__, self.nbits, self.eoffset))
 
     @property
@@ -264,7 +265,7 @@ class ExpContext(EncodableContext):
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         *,
         inf_value: Float | None = None
-    ):
+    ) -> None:
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\', got \'{type(rm)}\' for rm={rm}')
         if not isinstance(overflow, OverflowMode):
@@ -301,7 +302,7 @@ class ExpContext(EncodableContext):
             and self.inf_value == other.inf_value
         )
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.nbits, self.eoffset, self.rm, self.overflow, self.inf_value))
 
     @property
@@ -327,22 +328,18 @@ class ExpContext(EncodableContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
-        **kwargs
+        **kwargs: Any
     ) -> 'ExpContext':
-        if nbits is DEFAULT:
-            nbits = self.nbits
-        if eoffset is DEFAULT:
-            eoffset = self.eoffset
-        if rm is DEFAULT:
-            rm = self.rm
-        if overflow is DEFAULT:
-            overflow = self.overflow
-        if inf_value is DEFAULT:
-            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExpContext')
 
-        return ExpContext(nbits, eoffset, rm, overflow, inf_value=inf_value)
+        return ExpContext(
+            default_or(nbits, self.nbits),
+            default_or(eoffset, self.eoffset),
+            default_or(rm, self.rm),
+            default_or(overflow, self.overflow),
+            inf_value=default_or(inf_value, self.inf_value),
+        )
 
     def is_stochastic(self) -> bool:
         return False
@@ -366,28 +363,18 @@ class ExpContext(EncodableContext):
             overflow = OverflowMode.OVERFLOW
         return cls(fmt.nbits, fmt.eoffset, rm, overflow, inf_value=inf_value)
 
-    def rounding_mode(self):
+    def rounding_mode(self) -> RoundingMode:
         return self.rm
 
     def round_params(self) -> tuple[int | None, int | None]:
         return 1, None
 
-    def _overflow_to_infinity(self, s: bool):
+    def _overflow_to_infinity(self, s: bool) -> bool:
         """Should overflows round to infinity (rather than MAX_VAL)?"""
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return False
-            case RoundingDirection.RAZ:
-                return True
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return False
-            case _:
-                raise RuntimeError(f'unrechable {direction}')
+        return direction in (RoundingDirection.RAZ, RoundingDirection.RTE)
 
-    def _underflow_to_zero(self, s: bool):
+    def _underflow_to_zero(self, s: bool) -> bool:
         """
         Should underflows round to zero (rather than MIN_VAL)?
 
@@ -395,20 +382,10 @@ class ExpContext(EncodableContext):
         to the region between MAX_VAL and infinity.
         """
         _, direction = self.rm.to_direction(s)
-        match direction:
-            case RoundingDirection.RTZ:
-                return True
-            case RoundingDirection.RAZ:
-                return False
-            case RoundingDirection.RTE:
-                return True
-            case RoundingDirection.RTO:
-                return False
+        return direction in (RoundingDirection.RTZ, RoundingDirection.RTE)
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
-        """
-        Like `self.round()` but for only `RealFloat` and `Float` inputs.
-        """
+        """Like `self.round()` but for only `RealFloat` and `Float` inputs."""
         # round with no exponent bound using a 1-bit MPFloat context
         from .mp_float import MPFloatContext
         mp_ctx = MPFloatContext(1, rm=self.rm)
@@ -425,7 +402,7 @@ class ExpContext(EncodableContext):
 
         if rounded.e < self.emin:
             if exact:
-                raise ValueError(f'Rounding {rounded} under self={self} with n={n} would overflow')
+                raise ValueError(f'Rounding {rounded} under self={self} with n={n} would underflow')
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._underflow_to_zero(rounded.s):
@@ -434,12 +411,11 @@ class ExpContext(EncodableContext):
                         result = self.minval()
                 case OverflowMode.SATURATE:
                     result = self.minval()
-                case OverflowMode.ASSERT:
-                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would underflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 
-            result._real._flags._set_overflow(True)
+            result._real._flags._set_tiny_pre(True)
+            result._real._flags._set_tiny_post(True)
             result._real._flags._set_inexact(True)
             return result
 
@@ -449,21 +425,17 @@ class ExpContext(EncodableContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._overflow_to_infinity(rounded.s):
-                        return Float.nan(ctx=self)
-                    return self.maxval()
+                        result = Float.nan(ctx=self)
+                    else:
+                        result = self.maxval()
                 case OverflowMode.SATURATE:
-                    return self.maxval()
-                case OverflowMode.ASSERT:
-                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would overflow')
+                    result = self.maxval()
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 
+            result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
+            return result
+
         return Float(x=rounded, ctx=self)
 
-    def round(self, x, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
-        x = self._round_prepare(x)
-        return self._round_at(x, n, exact)

@@ -97,6 +97,22 @@ class MatchExprTestCase(_MatcherTestCase):
         assert len(Matcher(add_neg_zero).match(f_neg)) == 1
         assert len(Matcher(add_neg_zero).match(f_pos)) == 0
 
+    def test_nary_arity_is_part_of_the_shape(self):
+        @pattern
+        def max2(a, b):
+            max(a, b)
+
+        @fpy
+        def f2(x, y):
+            return max(x, y)
+
+        @fpy
+        def f3(x, y, z):
+            return max(x, y, z)
+
+        assert len(Matcher(max2).match(f2)) == 1
+        assert len(Matcher(max2).match(f3)) == 0
+
 
 @fpy
 def f2(lst):

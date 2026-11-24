@@ -16,7 +16,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis) -> None:
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
@@ -24,7 +24,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
 
-    def _visit_var(self, e: Var, ctx: _Ctx):
+    def _visit_var(self, e: Var, ctx: _Ctx) -> Expr:
         if e.name in ctx:
             return ctx[e.name]
         else:
@@ -97,13 +97,11 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
             return StmtBlock(stmts)
         else:
             # transformation is not needed
-            cond = self._visit_expr(stmt.cond, ctx)
-            body, _ = self._visit_block(stmt.body, ctx)
-            s = WhileStmt(cond, body, None)
+            s, _ = super()._visit_while(stmt, ctx)
             return StmtBlock([s])
 
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx) -> tuple[StmtBlock, _Ctx]:
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, WhileStmt):
@@ -127,7 +125,7 @@ class WhileBundling:
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
         if not isinstance(func, FuncDef):
-            raise SyntaxCheck(f'Expected \'FuncDef\', got {func}')
+            raise TypeError(f'Expected \'FuncDef\', got {func}')
 
         def_use = DefineUse.analyze(func)
         func = _WhileBundlingInstance(func, def_use).apply()

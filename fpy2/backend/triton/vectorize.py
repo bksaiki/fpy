@@ -52,6 +52,7 @@ from ...ast import (
     Range2,
     Range3,
     Stmt,
+    StmtBlock,
     Var,
     WhileStmt,
 )
@@ -248,7 +249,8 @@ def why_not_tileable(
     if body.scalar:
         return (f'`{min(body.scalar)}` is carried whole, which needs a '
                 'reduction across the loop')
-    if unread := carried - body.indexed:
+    unread = carried - body.indexed
+    if unread:
         return f'`{min(unread)}` is carried by something this backend cannot read'
     return _why_writes_refuse(stmt, def_use, Alias.analyze(func, def_use=def_use))
 
@@ -267,9 +269,10 @@ class _ForLoops(DefaultVisitor):
         return super()._visit_for(stmt, ctx)
 
 
-def _for_loops(func: FuncDef) -> list[ForStmt]:
+def _for_loops(block: StmtBlock) -> list[ForStmt]:
+    """Every `for` in *block*, outermost first."""
     v = _ForLoops()
-    v._visit_function(func, None)
+    v._visit_block(block, None)
     return v.out
 
 
@@ -313,7 +316,7 @@ class _Loops:
 
     def __init__(self, func: FuncDef) -> None:
         self.func = func
-        self.all = _for_loops(func)
+        self.all = _for_loops(func.body)
         self.def_use = DefineUse.analyze(func)
 
     @cached_property
@@ -332,9 +335,7 @@ class _Loops:
         return self.static(stmt) and not _has_loop(stmt) and self.tileable(stmt)
 
     def beneath(self, stmt: ForStmt) -> list[ForStmt]:
-        v = _ForLoops()
-        v._visit_block(stmt.body, None)
-        return v.out
+        return _for_loops(stmt.body)
 
     def within(self, a: ForStmt, b: ForStmt) -> bool:
         return any(a is c for c in self.beneath(b))
@@ -428,7 +429,7 @@ class TileResult:
         if missing:
             raise RuntimeError(f'a rewrite lost the tiled loop over {", ".join(missing)}')
         tiled = [by_name[n] for n in names]
-        guards = [g for t in tiled if (g := _guard(_tile_loop(t))) is not None]
+        guards = [g for g in (_guard(_tile_loop(t)) for t in tiled) if g is not None]
         grid = _grid(loops, tiled) if self.grid else []
         return TileResult(func, tiled, guards, _lanes(loops, tiled), grid)
 
@@ -467,5 +468,5 @@ def tile_loops(func: FuncDef, width: int | str) -> TileResult:
         func = SplitLoop.apply(func, factor, k, strategy=SplitLoopStrategy.MASK)
     after = _Loops(func)
     outers = [after.all[k] for k in tiled]
-    guards = [g for k in tiled if (g := _guard(after.all[k + 1]))]
+    guards = [g for g in (_guard(after.all[k + 1]) for k in tiled) if g]
     return TileResult(func, outers, guards, _lanes(after, outers), _grid(after, outers))

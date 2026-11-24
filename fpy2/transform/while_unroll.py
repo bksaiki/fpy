@@ -38,12 +38,8 @@ class _WhileUnroll(SiteRewriter):
         self.where = where
         self.times = times
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
-        block, pos = self._site
-        idx = self.site_idx
-        self.site_idx += 1
-        if self._selects(block, pos, idx):
-            self._matched += 1
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> tuple[Stmt, None]:
+        if self._claim(stmt):
             # original loop
             cond = self._visit_expr(stmt.cond, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
@@ -62,7 +58,7 @@ class _WhileUnroll(SiteRewriter):
         else:
             return super()._visit_while(stmt, ctx)
 
-    def apply(self):
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 
@@ -110,8 +106,7 @@ class WhileUnroll:
 
         unroller = _WhileUnroll(func, where, times)
         out = unroller.apply()
-        # An in-range `where` matches, so `site_idx` exceeds it even though
-        # re-visiting a matched loop's body inflates the counter
+        # re-visited bodies inflate `site_idx`, but an in-range `where` still matches
         unroller.check_site('a `while` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(func, out, tuple(unroller.edits), exprs_preserved=True)

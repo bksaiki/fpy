@@ -16,10 +16,10 @@ class _Contexts(DefaultVisitor):
 
     found: list[ContextStmt]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.found = []
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> None:
         self.found.append(stmt)
         super()._visit_context(stmt, ctx)
 
@@ -38,7 +38,7 @@ class _Unnester(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     changed: bool
 
-    def __init__(self, def_use: DefineUseAnalysis):
+    def __init__(self, def_use: DefineUseAnalysis) -> None:
         self.def_use = def_use
         self.changed = False
 
@@ -95,7 +95,7 @@ class _Unnester(DefaultTransformVisitor):
 
         return True
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> tuple[StmtBlock, None]:
         # a context statement may rewrite to several siblings
         stmts: list[Stmt] = []
         for stmt in block.stmts:
@@ -106,7 +106,7 @@ class _Unnester(DefaultTransformVisitor):
                 stmts.append(s)
         return StmtBlock(stmts), ctx
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None) -> tuple[Stmt | StmtBlock, None]:
         body, _ = self._visit_block(stmt.body, ctx)
         stmts = list(body.stmts)
 

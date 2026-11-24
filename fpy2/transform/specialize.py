@@ -489,10 +489,12 @@ def _dead_args(func: FuncDef) -> tuple[int, ...]:
 class _DropCallArgs(DefaultTransformVisitor):
     """Drop, at every call site, the arguments whose parameters went away."""
 
-    def __init__(self, dropped: dict[FuncDef, tuple[int, ...]]):
+    _dropped: dict[FuncDef, tuple[int, ...]]
+
+    def __init__(self, dropped: dict[FuncDef, tuple[int, ...]]) -> None:
         self._dropped = dropped
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: None) -> Call:
         args = [self._visit_expr(a, ctx) for a in e.args]
         kwargs = [(k, self._visit_expr(v, ctx)) for k, v in e.kwargs]
         gone = set(
@@ -564,10 +566,12 @@ class _RebindCallSites(DefaultTransformVisitor):
     caller, the same callee can be invoked at different specs from
     different sites, so the rebind is keyed on the ``Call`` node itself."""
 
-    def __init__(self, mapping: dict[Call, Function]):
+    _mapping: dict[Call, Function]
+
+    def __init__(self, mapping: dict[Call, Function]) -> None:
         self._mapping = mapping
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: None) -> Call:
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         kwargs = [(k, self._visit_expr(v, ctx)) for k, v in e.kwargs]
         fn = self._mapping.get(e, e.fn)
@@ -811,10 +815,12 @@ class Specialize:
                     if params is not None:
                         params_for[callee_key] = params
                     worklist.append(callee_key)
-                elif (first := params_for.get(callee_key)) is not None and params is not None:
-                    # the same terms from another call: the spec runs wherever
-                    # either does, so it assumes only what both prove
-                    params_for[callee_key] = replace(first, assume=first.assume & params.assume)
+                else:
+                    first = params_for.get(callee_key)
+                    if first is not None and params is not None:
+                        # the same terms from another call: the spec runs wherever
+                        # either does, so it assumes only what both prove
+                        params_for[callee_key] = replace(first, assume=first.assume & params.assume)
 
             call_targets[key] = site_map
             callees_of[key] = local_callees
@@ -823,7 +829,7 @@ class Specialize:
         order: list[_SpecKey] = []
         visited: set[_SpecKey] = set()
 
-        def _post_order(k: _SpecKey):
+        def _post_order(k: _SpecKey) -> None:
             if k in visited:
                 return
             visited.add(k)

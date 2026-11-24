@@ -100,7 +100,7 @@ def comp_to_loop(
     The element is now an ordinary statement, so a rounding rewrite can reach it.
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_edits(CompToLoop.apply_with_edits(
         func.ast, where=func.rebase(where), temp_id=NamedId(temp_id),

@@ -73,6 +73,6 @@ def single_exit(func: Function) -> Function:
             return r
     """
     if not isinstance(func, Function):
-        raise TypeError(f"Expected a \'Function\', got {func}")
+        raise TypeError(f"Expected a 'Function', got {func}")
 
     return func.with_ast(SingleExit.apply(func.ast))

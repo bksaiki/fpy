@@ -2,9 +2,18 @@
 Copy propagation.
 """
 
-from ..analysis import AssignDef, DefineUse, SyntaxCheck
+from ..analysis import AssignDef, DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import *
 from .subst_var import SubstVar
+
+
+def _same_source_at_uses(def_use: DefineUseAnalysis, d: AssignDef) -> bool:
+    """Whether every use of the copy `x = y` that *d* defines resolves `y` to
+    the definition it copied, so substituting `y` reads the same value."""
+    assert isinstance(d.site, Assign) and isinstance(d.site.expr, Var)
+    y = d.site.expr.name
+    copied = def_use.find_def_from_use(d.site.expr)
+    return all(def_use.defs_at_use[u].get(y) is copied for u in def_use.uses[d])
 
 
 class CopyPropagate:
@@ -40,12 +49,11 @@ class CopyPropagate:
                 and isinstance(d.site, Assign)
                 and isinstance(d.site.target, Id)
                 and isinstance(d.site.expr, Var)
+                and len(def_use.uses[d]) > 0
+                and _same_source_at_uses(def_use, d)
             ):
-                # direct assignment: x = y
-                # substitute all occurences of this definition of `x` with `y`
-                if len(def_use.uses[d]) > 0:
-                    # optimization: only propagate if there is at least one use
-                    prop[d] = d.site.expr
+                # x = y: substitute `y` for every use of this definition of `x`
+                prop[d] = d.site.expr
 
         if not prop:
             return func, False

@@ -71,7 +71,7 @@ can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.  The
 rewrite needs ``fpy2`` in scope, since it names the context constructor.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum, auto
 
 from ..analysis import (
@@ -132,6 +132,7 @@ from .utils import (
     RoundingScopes,
     ScopedRoundingRewriter,
     attribute,
+    bind_alias,
     check_where,
     number_literal,
     sign_choice,
@@ -288,8 +289,13 @@ def _describe(ctx: Context) -> _Source | Declined:
 
     # a format without subnormals states no `emin`: every value then rounds
     # at a position read off its own exponent
+    emin, expmin = (
+        (ctx.emin, ctx.expmin)
+        if isinstance(ctx, (EFloatContext, MPBFloatContext, MPSFloatContext))
+        else (None, None)
+    )
     return _Source(
-        ctx.pmax, getattr(ctx, 'emin', None), getattr(ctx, 'expmin', None),
+        ctx.pmax, emin, expmin,
         emax, maxval, ctx.rm, policy, specials, specials[4].s,
     )
 
@@ -308,7 +314,7 @@ def _ctx_call(
     itself fixes and no downstream analysis can recover.  Stating it gives the
     rescaled rounding a width.
     """
-    def mode(name: str, value) -> tuple[str, Expr]:
+    def mode(name: str, value: RoundingMode | OverflowMode) -> tuple[str, Expr]:
         return (name, attribute(alias, type(value).__name__, value.name, loc=loc))
 
     kwargs: list[tuple[str, Expr]] = []
@@ -341,6 +347,8 @@ def _ctx_call(
             kwargs.append(mode('overflow', OverflowMode.OVERFLOW))
             kwargs.append(('enable_nan', BoolVal(True, loc)))
             kwargs.append(('inf_value', ConstNan(None, loc)))
+        case _:
+            raise RuntimeError(f'unreachable: {src.policy}')
 
     assert src.maxval is not None
     return Call(
@@ -369,7 +377,7 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
     def __init__(
         self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis, where: int | Cursor | None = None,
-    ):
+    ) -> None:
         self.func = func
         self.scopes = scopes
         self.class_info = class_info
@@ -378,20 +386,10 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
         # the name the program calls `fpy2` by: the rewrite constructs a
         # context per value, so it has to name the constructor
         self.alias = fpy_alias(func.env)
-        self.used_alias = False
 
     def apply(self) -> FuncDef:
         func = self._visit_function(self.func, None)
-        if self.used_alias:
-            # the emitted contexts name `fpy2`, which the environment binds
-            # but the body may not have referred to before
-            assert self.alias is not None
-            meta = replace(
-                func.meta,
-                free_vars=func.free_vars | {NamedId(self.alias)},
-            )
-            func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
-        return func
+        return bind_alias(func, self.alias) if self.edits else func
 
     def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
         """The rounding's context, if it can be lowered to fixed-point."""
@@ -404,7 +402,6 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
         assert isinstance(e, Round) and self.alias is not None
         loc = e.loc
         alias = self.alias
-        self.used_alias = True
         name = self._arg_name(e, out)
 
         def arg() -> Var:

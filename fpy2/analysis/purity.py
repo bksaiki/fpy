@@ -6,8 +6,10 @@ from ..ast import *
 from ..function import Function
 from ..number import Context
 from ..primitive import Primitive
+from .alias import Alias, AliasAnalysis
 from .call_graph import CallGraph
-from .define_use import AssignDef, DefineUse, DefineUseAnalysis
+from .define_use import DefineUse, DefineUseAnalysis
+from .type_infer import TypeInferError
 
 
 class _ImpureError(Exception):
@@ -23,10 +25,13 @@ class _Purity(DefaultVisitor):
 
     ast: FuncDef | Expr
     def_use: DefineUseAnalysis
+    alias: AliasAnalysis | None
+    """Computed on the first list write: most functions have none."""
 
-    def __init__(self, ast: FuncDef | Expr, def_use: DefineUseAnalysis):
+    def __init__(self, ast: FuncDef | Expr, def_use: DefineUseAnalysis) -> None:
         self.ast = ast
         self.def_use = def_use
+        self.alias = None
 
     def apply(self) -> bool:
         try:
@@ -41,7 +46,7 @@ class _Purity(DefaultVisitor):
             return False
         return True
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         super()._visit_call(e, ctx)
         match e.fn:
             case None:
@@ -63,12 +68,23 @@ class _Purity(DefaultVisitor):
                 # any other foreign callable (e.g. `print`) -> impure by default
                 raise _ImpureError(f'Impure: call to foreign function {e}')
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None) -> None:
+        """A list write is pure only where every list it may write was allocated
+        in this call: a list with no allocation site (a free variable's) or a
+        parameter's is visible to the caller."""
         super()._visit_indexed_assign(stmt, ctx)
-        d = self.def_use.find_def_from_use(stmt)
-        if isinstance(d, AssignDef) and isinstance(d.site, Argument | FuncDef):
-            # modifying an argument or a free variable
-            raise _ImpureError(f'Impure: Indexed assignment {stmt}')
+        assert isinstance(self.ast, FuncDef), 'a statement outside a function'
+        if self.alias is None:
+            try:
+                self.alias = Alias.analyze(self.ast, def_use=self.def_use)
+            except TypeInferError as exc:
+                raise _ImpureError(f'Impure: untyped list write {stmt}') from exc
+        region = self.alias.region_of(self.def_use.find_def_from_use(stmt))
+        sites = [] if region is None else [
+            s for r in self.alias.within(region) for s in self.alias.sites_at(r)
+        ]
+        if not sites or any(s.kind == 'param' for s in sites):
+            raise _ImpureError(f'Impure: writes a list the caller can see: {stmt}')
 
 
 class Purity:

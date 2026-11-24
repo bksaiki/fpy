@@ -3,15 +3,13 @@ Defines the abstract base class for FPy interpreters.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Any
 
 from ..ast.fpyast import Expr, FuncDef, NamedId
 from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
-from ..number import RM, Context, IEEEContext
-
-_PY_CTX = IEEEContext(11, 64, RM.RNE)
-"""the native Python floating-point context"""
+from ..number import FP64, Context
 
 
 class Interpreter(ABC):
@@ -20,14 +18,14 @@ class Interpreter(ABC):
     ctx: Context | None = None
     """optionaly overriding context"""
 
-    def __init__(self, ctx: Context | None = None):
+    def __init__(self, ctx: Context | None = None) -> None:
         self.ctx = ctx
 
     @abstractmethod
     def eval(
-        self, func: Function, args, ctx: Context | None = None,
+        self, func: Function, args: Sequence[Any], ctx: Context | None = None,
         *, convert: bool = True,
-    ):
+    ) -> Any:
         """
         Evaluates a function `func` on arguments `args` under
         a rounding context `ctx`. If `ctx` is None, the rounding
@@ -41,7 +39,7 @@ class Interpreter(ABC):
         ...
 
     @abstractmethod
-    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context) -> Any:
         """
         Evaluates an expression `expr` under an environment `env` and
         rounding context `ctx`. Unlike `eval`, this method requires and
@@ -56,20 +54,15 @@ class Interpreter(ABC):
         If `func` specifies a context, it will be used.
         Otherwise, the provided context `ctx` will be used.
         """
-        override_ctx = func.ctx
-        if override_ctx is None:
-            if ctx is None:
-                return _PY_CTX
-            else:
-                return ctx
-        else:
-            match override_ctx:
-                case Context():
-                    return override_ctx
-                case FPCoreContext():
-                    return override_ctx.to_context()
-                case _:
-                    raise RuntimeError('unreachable', override_ctx)
+        match func.ctx:
+            case None:
+                return FP64 if ctx is None else ctx
+            case Context():
+                return func.ctx
+            case FPCoreContext():
+                return func.ctx.to_context()
+            case _:
+                raise RuntimeError('unreachable', func.ctx)
 
 ###########################################################
 # Default interpreter
@@ -82,17 +75,17 @@ def get_default_interpreter() -> Interpreter:
         raise RuntimeError('no default interpreter available')
     return _default_interpreter
 
-def set_default_interpreter(rt: Interpreter):
+def set_default_interpreter(rt: Interpreter) -> None:
     """Sets the default FPy interpreter"""
     global _default_interpreter
     if not isinstance(rt, Interpreter):
-        raise TypeError(f'expected BaseInterpreter, got {rt}')
+        raise TypeError(f'expected \'Interpreter\', got {rt}')
     _default_interpreter = rt
 
 ###########################################################
 # Default function call
 
-def _default_function_call(fn: Function, *args, ctx: Context | None = None):
+def _default_function_call(fn: Function, *args: Any, ctx: Context | None = None) -> Any:
     """Default function call."""
     if fn.runtime is None:
         rt = get_default_interpreter()
