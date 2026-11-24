@@ -102,6 +102,8 @@ class IEEEContext(EFloatContext):
         """Creates a context from an `IEEEFormat` and rounding parameters."""
         if not isinstance(fmt, IEEEFormat):
             raise TypeError(f'Expected \'IEEEFormat\', got {type(fmt)}')
+        if nan_value is not None or inf_value is not None:
+            raise ValueError('an IEEE format holds NaN and infinity: nan_value and inf_value do not apply')
         if overflow is None:
             overflow = OverflowMode.OVERFLOW
         return cls(fmt.es, fmt.nbits, rm, overflow, num_randbits, rng=rng)

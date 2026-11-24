@@ -339,7 +339,7 @@ class MPSFloatContext(OrdinalContext):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
-            raise TypeError(f'Expected integer p < 1 for p={pmax}')
+            raise ValueError(f'Expected positive integer for pmax={pmax}')
         if not isinstance(emin, int):
             raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
         if not isinstance(rm, RoundingMode):

@@ -125,6 +125,8 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             raise TypeError(f'Expected \'int\' for scale={scale}, got {type(scale)}')
         if not isinstance(nbits, int):
             raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
+        if nbits < 2:
+            raise ValueError(f'nbits={nbits} must be at least 2 for SMFixedContext')
 
         nmin = scale - 1
         pos_maxval = RealFloat(exp=scale, c=bitmask(nbits - 1))

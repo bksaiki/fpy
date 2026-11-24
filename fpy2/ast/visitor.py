@@ -229,7 +229,7 @@ class Visitor(ABC):
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for a statement."""
         for cls in type(stmt).__mro__:
-            if cls is Expr:
+            if cls is Stmt:
                 break
             method = _stmt_dispatch.get(cls, None)
             if method is not None:
@@ -538,9 +538,10 @@ class DefaultTransformVisitor(Visitor):
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        target = self._visit_binding(stmt.target, ctx)
         context = self._visit_expr(stmt.ctx, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
-        s = ContextStmt(stmt.target, context, body, stmt.loc)
+        s = ContextStmt(target, context, body, stmt.loc)
         return s, ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):

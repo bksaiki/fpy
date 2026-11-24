@@ -1993,8 +1993,11 @@ class _Emitter(Visitor):
         # Triton refuses an integer literal no `int64` holds
         if v.is_integer() and -2 ** 63 <= v.numerator < 2 ** 63:
             return str(v.numerator)
-        exact = float(v)
-        if Fraction(exact) == v:
+        try:
+            exact = float(v)
+        except OverflowError:   # past the double range
+            exact = None
+        if exact is not None and Fraction(exact) == v:
             return repr(exact)
         raise TritonEmitError(
             f'`{v.numerator}/{v.denominator}` is not representable here; '

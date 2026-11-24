@@ -568,7 +568,7 @@ class MPBFixedContext(SizedContext):
                     else:
                         result = self.maxval(xr.s)
                 case OverflowMode.SATURATE:
-                    return self.maxval(s=xr.s)
+                    result = self.maxval(s=xr.s)
                 case OverflowMode.WRAP:
                     ord_abs = self._fmt._mp_fmt.to_ordinal(Float(x=xr)) - self._fmt._neg_maxval_ord
                     total_ord = self._fmt._pos_maxval_ord - self._fmt._neg_maxval_ord + 1

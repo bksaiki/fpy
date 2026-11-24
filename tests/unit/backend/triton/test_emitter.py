@@ -847,6 +847,16 @@ class TestTryWiden:
         out = _emit(f, [_R32], ctx=fp.REAL)
         assert 'tl.float64' in out and ', tl.float32)' in out
 
+    def test_a_literal_past_the_double_range_is_refused(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(t: fp.Real):
+            with fp.REAL:
+                y = 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 * t
+            return y
+
+        with pytest.raises(TritonEmitError, match='not representable'):
+            _emit(f, [_R32], ctx=fp.REAL)
+
 
 @fp.fpy(ctx=fp.REAL)
 def _exact_sum(x: fp.Real, y: fp.Real):

@@ -42,6 +42,10 @@ class TestAbi:
 
         with pytest.raises(CompileError, match='no `BLOCK` parameter'):
             TritonCompiler().compile(no_block, ctx=fp.FP32, arg_types=[_V4, _V4])
+        m = Module()
+        m.add(no_block, ctx=fp.FP32, arg_types=[_V4, _V4])
+        with pytest.raises(CompileError, match='no `BLOCK` parameter'):
+            TritonCompiler().compile_module(m)
 
     def test_the_block_name_is_configurable(self):
         @fp.fpy(ctx=fp.FP32)

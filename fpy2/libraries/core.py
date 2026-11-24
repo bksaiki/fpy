@@ -46,13 +46,13 @@ def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
 
     Mirroring the behavior of C/C++ `modf`:
     - if `x` is `+/-0`, the result is `(+/-0, +/-0)`
-    - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
+    - if `x` is `+/-Inf`, the result is `(+/-Inf, +/-0)`
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if fp.isnan(x):
         ret: tuple[fp.Real, fp.Real] = (fp.nan(), fp.nan())
     elif fp.isinf(x):
-        ret = (fp.copysign(0, x), x)
+        ret = (x, fp.copysign(0, x))
     elif x == 0:
         ret = (fp.copysign(0, x), fp.copysign(0, x))
     else:
@@ -68,7 +68,7 @@ def modf(x: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
 
     Mirroring the behavior of C/C++ `modf`:
     - if `x` is `+/-0`, the result is `(+/-0, +/-0)`
-    - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
+    - if `x` is `+/-Inf`, the result is `(+/-Inf, +/-0)`
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if x.isnan:
@@ -76,8 +76,8 @@ def modf(x: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
         f = ctx.round(x, exact=True)
         return i, f
     elif x.isinf:
-        i = ctx.round(fp.Float(s=x.s), exact=True)
-        f = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        i = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        f = ctx.round(fp.Float(s=x.s), exact=True)
         return i, f
     elif x.is_zero():
         i = ctx.round(fp.Float(s=x.s), exact=True)
@@ -125,7 +125,7 @@ def frexp(x: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
 def isinteger(x: fp.Real) -> bool:
     """Checks if `x` is an integer."""
     _, fpart = modf(x)
-    return fp.isfinite(fpart) and fpart == 0
+    return fp.isfinite(x) and fpart == 0
 
 @fp.fpy
 def isnar(x: fp.Real) -> bool:

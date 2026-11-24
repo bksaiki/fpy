@@ -105,12 +105,7 @@ class TritonCompiler(Backend):
         """
         if not isinstance(func, Function):
             raise TypeError(f"Expected a 'Function', got {func}")
-        if not any(str(a.name) == self.block for a in func.ast.args):
-            raise CompileError(
-                f'`{func.name}` has no `{self.block}` parameter; a kernel '
-                'takes its tile width as an argument, since the launcher '
-                'picks the value'
-            )
+        self._check_block(func)
         module = Module()
         module.add(func, ctx=ctx, arg_types=arg_types)
         return self._compile_one(self._specialize(module), func.name)
@@ -119,8 +114,19 @@ class TritonCompiler(Backend):
         """Every public entry of *module*, each as its own kernel."""
         if not isinstance(module, Module):
             raise TypeError(f"Expected a 'Module', got {module}")
+        for entry in module.public():
+            self._check_block(entry)
         spec = self._specialize(module)
         return [self._compile_one(spec, entry.name) for entry in spec]
+
+    def _check_block(self, func: Function) -> None:
+        """A kernel takes its tile width as an argument: the launcher picks it."""
+        if not any(str(a.name) == self.block for a in func.ast.args):
+            raise CompileError(
+                f'`{func.name}` has no `{self.block}` parameter; a kernel '
+                'takes its tile width as an argument, since the launcher '
+                'picks the value'
+            )
 
     def _specialize(self, module: Module) -> Module:
         """`AssertElim` where asked, then steps 1 and 2 of the pipeline."""

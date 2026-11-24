@@ -180,7 +180,7 @@ class _MatcherInst(Visitor):
         self._visit_expr(e.third, pat.third)
 
     def _visit_naryop(self, e: NaryOp, pat: NaryOp):
-        if type(e) is not type(pat):
+        if type(e) is not type(pat) or len(e.args) != len(pat.args):
             raise _MatchFailure(f'matching {pat} against {e}')
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)

@@ -127,9 +127,7 @@ class _UnfoldIterInstance(PreambleScoped):
 
         # a refusal is not a site, so it is decided before an index is spent
         if ctx is None or e not in self._strict:
-            self.refused.append((e, _NO_SLOT))
-            if self._target_expr is e:
-                self.declined.append(_NO_SLOT)
+            self._refuse(e, _NO_SLOT)
             return super()._visit_expr(e, ctx)
 
         idx = self.site_idx

@@ -3,13 +3,14 @@ Function inlining.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from ..analysis import (
     AssignDef,
     CallGraph,
     DefineUse,
     DefineUseAnalysis,
+    Hoistability,
     PhiDef,
     Reachability,
     ReachingDefs,
@@ -42,31 +43,28 @@ def _replace_ret(block: StmtBlock, new_var: NamedId):
 class _Ctx:
     stmts: list[Stmt]
     is_ctx_expr: bool
-    in_while_cond: bool = False
-    in_comp: bool = False
 
     @staticmethod
     def default():
         return _Ctx(stmts=[], is_ctx_expr=False)
 
 
-def _refuses(e: Call, *, in_while_cond: bool, in_comp: bool) -> str | None:
+def _refuses(e: Call, *, strict: bool) -> str | None:
     """Why the call *e* cannot be inlined, or `None` where it can.
 
-    Decided from the call and the callee alone, so a listing and the rewrite
-    agree and neither spends an index on a call it will not inline.
+    The callee's body is spliced ahead of the call's statement, so the call
+    must be evaluated exactly once whenever that statement is
+    (:class:`~fpy2.analysis.Hoistability`).  Decided from the call and the
+    callee alone, so a listing and the rewrite agree and neither spends an
+    index on a call it will not inline.
     """
     assert isinstance(e.fn, Function)
-    if in_while_cond:
+    if not strict:
         return (
-            f'inlining `{e.fn.name}` here would splice its body before the '
-            f'loop, where a `while` condition is evaluated every iteration'
-        )
-    if in_comp:
-        return (
-            f'inlining `{e.fn.name}` here would splice its body outside the '
-            f'comprehension, where its targets are not bound; lower the '
-            f'comprehension to a loop first'
+            f'`{e.fn.name}` is called where its statement may not evaluate it '
+            f'exactly once (a conditional arm, a short-circuited operand, a '
+            f'`while` condition, a comprehension or an assert message), so its '
+            f'body cannot run ahead of the statement'
         )
     # inlining rewrites the trailing return into an assignment to a temp (see
     # `_replace_ret`): none leaves nothing to rewrite, and several would emit
@@ -131,9 +129,7 @@ class _FuncInline(SiteRewriter):
             return super()._visit_call(e, ctx)
 
         # a refusal is not a site, so it takes no index
-        reason = _refuses(
-            e, in_while_cond=ctx.in_while_cond, in_comp=ctx.in_comp,
-        )
+        reason = _refuses(e, strict=e in self._strict)
         if reason is not None:
             self._refuse(e, reason)
             return super()._visit_call(e, ctx)
@@ -211,24 +207,6 @@ class _FuncInline(SiteRewriter):
         # return the bound value
         return Var(t, e.loc)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> ListComp:
-        """The element expression is evaluated with the targets bound.
-
-        Splicing a callee's body into the enclosing block would put it where
-        they are not, so a call there is refused rather than inlined into an
-        unbound name.  The iterables are ordinary expressions of the
-        enclosing block and take the unchanged context.
-        """
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, ctx) for i in e.iterables]
-        elt = self._visit_expr(e.elt, replace(ctx, in_comp=True))
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
-        cond = self._visit_expr(stmt.cond, _Ctx(ctx.stmts, False, in_while_cond=True))
-        body, _ = self._visit_block(stmt.body, ctx)
-        return WhileStmt(cond, body, stmt.loc), None
-
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         ctx_e = self._visit_expr(stmt.ctx, _Ctx(ctx.stmts, True))
         body, _ = self._visit_block(stmt.body, None)
@@ -253,6 +231,7 @@ class _FuncInline(SiteRewriter):
 
     def _visit_function(self, func: FuncDef, ctx: None):
         self._begin(func)
+        self._strict = Hoistability.analyze(func).strict
         body, _ = self._visit_block(func.body, None)
         meta = FuncMeta(self.free_vars, func.meta.ctx, func.meta.pre, func.meta.spec, func.meta.props, self.env)
         return FuncDef(func.name, func.args, body, meta, loc=func.loc)

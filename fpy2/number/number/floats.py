@@ -206,7 +206,7 @@ class Float:
 
         Returns this `Float` with no context (`self.ctx is None`).
         """
-        return Float(s=False, x=self, ctx=None)
+        return Float(x=self, ctx=None)
 
     def __abs__(self):
         """
@@ -900,6 +900,7 @@ class Float:
 
         This method is equivalent to `ctx.round(self)`.
         """
+        from ..context import Context
         if not isinstance(ctx, Context):
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round(self)
@@ -910,6 +911,7 @@ class Float:
 
         This method is equivalent to `self.ctx.round_at(self, n)`.
         """
+        from ..context import Context
         if not isinstance(ctx, Context):
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_at(self, n)
@@ -920,6 +922,7 @@ class Float:
 
         This method is equivalent to `self.ctx.round_integer(self)`.
         """
+        from ..context import Context
         if not isinstance(ctx, Context):
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_integer(self)

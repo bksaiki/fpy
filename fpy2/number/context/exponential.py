@@ -425,7 +425,7 @@ class ExpContext(EncodableContext):
 
         if rounded.e < self.emin:
             if exact:
-                raise ValueError(f'Rounding {rounded} under self={self} with n={n} would overflow')
+                raise ValueError(f'Rounding {rounded} under self={self} with n={n} would underflow')
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._underflow_to_zero(rounded.s):
@@ -434,12 +434,11 @@ class ExpContext(EncodableContext):
                         result = self.minval()
                 case OverflowMode.SATURATE:
                     result = self.minval()
-                case OverflowMode.ASSERT:
-                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would underflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 
-            result._real._flags._set_overflow(True)
+            result._real._flags._set_tiny_pre(True)
+            result._real._flags._set_tiny_post(True)
             result._real._flags._set_inexact(True)
             return result
 
@@ -449,14 +448,17 @@ class ExpContext(EncodableContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._overflow_to_infinity(rounded.s):
-                        return Float.nan(ctx=self)
-                    return self.maxval()
+                        result = Float.nan(ctx=self)
+                    else:
+                        result = self.maxval()
                 case OverflowMode.SATURATE:
-                    return self.maxval()
-                case OverflowMode.ASSERT:
-                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would overflow')
+                    result = self.maxval()
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
+
+            result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
+            return result
 
         return Float(x=rounded, ctx=self)
 

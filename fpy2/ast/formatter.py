@@ -103,7 +103,7 @@ class _FormatterInstance(Visitor):
                 for k, v in e.val.props.items():
                     if k == 'precision' or k == 'round':
                         props[k] = v
-                return FPCoreContext(**props)
+                return repr(FPCoreContext(**props))
             case Context():
                 name = _context_name(e.val)
                 if name is not None:
@@ -299,7 +299,7 @@ class _FormatterInstance(Visitor):
                 vars_str = self._visit_tuple_binding(stmt.target)
                 self._add_line(f'{vars_str} = {val}', ctx)
             case _:
-                raise NotImplementedError('unreachable', stmt.var)
+                raise NotImplementedError('unreachable', stmt.target)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
@@ -442,7 +442,7 @@ class _FormatterInstance(Visitor):
 
 
 class Formatter(BaseFormatter):
-    """"Pretty printer for FPy AST"""
+    """Pretty printer for FPy AST"""
 
     def format(self, ast: Ast) -> str:
         """Pretty print the given AST"""

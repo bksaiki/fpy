@@ -487,16 +487,13 @@ class CppEmitter(Visitor):
         assert isinstance(ty, CppList), f'not a list storage type: {ty!r}'
         return ty.elt.format()
 
-    def _strict_tripwire(self) -> CppEmitError:
+    def _strict_tripwire(self) -> CppInternalError:
         """The error for a handle reaching emission under STRICT.
 
         `check_strict` and `annotate` guarantee no boxed type survives to the
         emitter, so raising here means a backend bug, not a user program.
         """
-        return CppEmitError(
-            'internal error: strict unboxing let a shared handle reach '
-            'emission'
-        )
+        return CppInternalError('strict unboxing let a shared handle reach emission')
 
     def _is_boxed(self, ty: CppType) -> bool:
         """Whether *ty* is a handle rather than the sequence itself.

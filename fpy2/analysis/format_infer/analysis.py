@@ -3500,7 +3500,6 @@ class _FormatInferInstance(Visitor):
 
         # Walk the body — populates ``by_def`` / ``by_expr`` / ``by_call``.
         self._visit_block(func.body, ctx)
-        assert isinstance(self._return_fmt, FormatBound), 'expected at least one ReturnStmt in function body'
 
         # Build this instantiation's signature.  ``arg_fmts`` is the
         # initial format each parameter held entering the body

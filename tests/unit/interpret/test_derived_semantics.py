@@ -97,6 +97,18 @@ class TestLiterals:
             return 3
         assert f() == 3
 
+    def test_negating_a_zero_literal_flips_its_sign(self):
+        @fp.fpy(ctx=REAL)
+        def neg() -> fp.Real:
+            return -0.0
+
+        @fp.fpy(ctx=REAL)
+        def neg_neg() -> fp.Real:
+            return -(-0.0)
+
+        assert neg().is_zero() and neg().s
+        assert neg_neg().is_zero() and not neg_neg().s
+
     def test_rational_exact(self):
         @fp.fpy(ctx=REAL)
         def f() -> fp.Real:

@@ -382,10 +382,11 @@ class Parser:
             case ast.USub():
                 arg = self._parse_expr(e.operand)
                 if isinstance(arg, RationalVal) and arg.as_rational() == 0:
-                    # Negating a zero literal yields negative zero, a signed
-                    # literal — fold it here so the sign survives regardless of
-                    # context (a `Neg` under REAL loses it). See `as_real`.
-                    return Decnum('-0.0', loc)
+                    # Negating a zero literal flips its sign, a signed literal --
+                    # fold it here so the sign survives regardless of context (a
+                    # `Neg` under REAL loses it).  `as_real` is a `Float` only for
+                    # a negative zero.
+                    return Decnum('0.0' if isinstance(arg.as_real(), Float) else '-0.0', loc)
                 elif isinstance(arg, Integer):
                     return Integer(-arg.val, loc)
                 else:

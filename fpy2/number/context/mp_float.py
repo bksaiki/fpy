@@ -195,7 +195,7 @@ class MPFloatContext(Context):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
-            raise TypeError(f'Expected integer p < 1 for p={pmax}')
+            raise ValueError(f'Expected positive integer for pmax={pmax}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if num_randbits is not None and not isinstance(num_randbits, int):

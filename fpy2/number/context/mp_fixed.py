@@ -87,7 +87,7 @@ class MPFixedFormat(OrdinalFormat):
         return xr.is_more_significant(self.nmin)
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) and self.representable_in(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.exp == self.expmin
 
@@ -97,21 +97,13 @@ class MPFixedFormat(OrdinalFormat):
         return x.is_nonzero()
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) and self.representable_in(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
-        offset = x.exp - self.expmin
-        if offset > 0:
-            c = x.c >> offset
-            exp = x.exp - offset
-        elif offset < 0:
-            c = x.c << -offset
-            exp = x.exp - offset
-        else:
-            c = x.c
-            exp = x.exp
-
-        return Float(exp=exp, c=c, x=x, ctx=None)
+        if x.isnan or x.isinf:
+            return Float(x=x, ctx=None)
+        xr = x._real.normalize(None, self.nmin)
+        return Float(x=x, exp=xr.exp, c=xr.c, ctx=None)
 
     def _to_ordinal(self, x: RealFloat) -> int:
         if x.is_zero():

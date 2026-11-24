@@ -40,6 +40,11 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
     use_to_def: dict[UseSite, Definition]
     """mapping from use site to definition"""
 
+    defs_at_use: dict[UseSite, DefCtx]
+    """the definitions each use site was resolved against: what every name
+    means where the use is evaluated (a `while` condition's loop-header phis,
+    a comprehension's own targets)"""
+
     def __init__(
         self,
         defs: list[Definition],
@@ -48,10 +53,12 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
         out_defs: dict[StmtBlock, DefCtx],
         reach: dict[Stmt, DefCtx],
         phis: dict[Stmt, set[PhiDef]],
-        uses: dict[Definition, set[UseSite]]
+        uses: dict[Definition, set[UseSite]],
+        defs_at_use: dict[UseSite, DefCtx],
     ):
         super().__init__(defs, name_to_defs, in_defs, out_defs, reach, phis)
         self.uses = uses
+        self.defs_at_use = defs_at_use
         # compute mapping from use to def
         self.use_to_def = {}
         for d, us in uses.items():
@@ -127,11 +134,13 @@ class _DefineUseInstance(DefaultVisitor):
 
     uses: dict[Definition, set[UseSite]]
     """mapping from definition id to use sites"""
+    defs_at_use: dict[UseSite, DefCtx]
 
     def __init__(self, ast: FuncDef | StmtBlock, reaching_defs: ReachingDefsAnalysis):
         self.ast = ast
         self.reaching_defs = reaching_defs
         self.uses = { d: set() for d in reaching_defs.defs }
+        self.defs_at_use = {}
 
     def analyze(self):
         match self.ast:
@@ -149,12 +158,14 @@ class _DefineUseInstance(DefaultVisitor):
             self.reaching_defs.out_defs,
             self.reaching_defs.reach,
             self.reaching_defs.phis,
-            self.uses
+            self.uses,
+            self.defs_at_use,
         )
 
     def _add_use(self, name: NamedId, use: UseSite, ctx: DefCtx):
         d = ctx[name]
         self.uses[d].add(use)
+        self.defs_at_use[use] = ctx
 
     def _visit_var(self, e: Var, ctx: DefCtx):
         self._add_use(e.name, e, ctx)

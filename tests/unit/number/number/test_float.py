@@ -143,6 +143,20 @@ class TestFloatArithmetic(FloatTestCast):
         self.assertEqualOrNan(actual, expect)
 
     @given(st.floats())
+    def test_pos(self, a: float):
+        expect = _cvt_to_fraction(a)
+        actual = +fp.Float.from_float(a)
+        self.assertEqualOrNan(actual, expect)
+
+    @given(st.floats())
+    def test_round_under_a_context(self, a: float):
+        x = fp.Float.from_float(a)
+        assert fp.number.same_value(x.round(fp.FP32), fp.FP32.round(x))
+        assert fp.number.same_value(x.round_at(fp.FP32, -3), fp.FP32.round_at(x, -3))
+        if not x.is_nar():
+            assert fp.number.same_value(x.round_integer(fp.FP32), fp.FP32.round_integer(x))
+
+    @given(st.floats())
     def test_trunc(self, a: float):
         x = fp.Float.from_float(a)
         if x.is_nar():

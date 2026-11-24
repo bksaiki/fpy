@@ -30,3 +30,12 @@ class RoundTestCase():
             assert rounded.isnan, f'x={x}, rounded={rounded}'
         elif x.isinf:
             assert rounded.isnan, f'x={x}, rounded={rounded}'
+
+    def test_out_of_range_sets_its_flag(self):
+        tiny, huge = fp.Float(c=1, exp=-100), fp.Float(c=1, exp=100)
+        for ov in (fp.OV.OVERFLOW, fp.OV.SATURATE):
+            ctx = fp.ExpContext(4, 0, overflow=ov)
+            r = ctx.round(tiny)
+            assert r.underflow_post and not r.overflow and r.inexact, (ov, r)
+            r = ctx.round(huge)
+            assert r.overflow and not r.underflow_post and r.inexact, (ov, r)

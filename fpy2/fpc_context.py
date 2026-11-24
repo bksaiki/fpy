@@ -186,6 +186,9 @@ class FPCoreContext:
         prec = self.props.get('precision', 'binary64')
         rnd = self.props.get('round', 'nearestEven')
         ov = self.props.get('overflow', 'infinity')
+        if 'n' in self.props and 'precision' not in self.props:
+            # FPy's own property for an unbounded fixed-point context (`from_context`)
+            return MPFixedContext(int(self.props['n']), _round_mode_to_fpy(rnd))
         try:
             match prec:
                 # IEEE 754 long form
@@ -204,7 +207,7 @@ class FPCoreContext:
                     return FP16.with_params(rm=_round_mode_to_fpy(rnd))
                 # fixed-point context
                 case ['fixed', nbits, scale]:
-                    return FixedContext(True, int(nbits), int(scale), _round_mode_to_fpy(rnd), _overflow_mode_to_fpc(ov))
+                    return FixedContext(True, int(scale), int(nbits), _round_mode_to_fpy(rnd), _overflow_mode_to_fpc(ov))
                 # integer context
                 case 'integer':
                     return INTEGER

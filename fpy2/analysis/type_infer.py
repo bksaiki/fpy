@@ -856,7 +856,7 @@ class _TypeInferInstance(Visitor):
 
         # rename unbound type variables
         for t in self.tvars:
-            if isinstance(t, VarType) and t not in subst:
+            if isinstance(t, VarType) and t.name not in subst:
                 subst[t.name] = VarType(NamedId(f't{len(subst) + 1}'))
 
         # resolve definition/expr types

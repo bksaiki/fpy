@@ -26,22 +26,22 @@ def _get_constants():
     global _constants_cache
     if _constants_cache is None:
         _constants_cache = {
-            'TRUE': BoolVal(True, None),
-            'FALSE': BoolVal(False, None),
-            'NAN': ConstNan(None, None),
-            'INFINITY': ConstInf(None, None),
-            'PI': ConstPi(None, None),
-            'E': ConstE(None, None),
-            'LOG2E': ConstLog2E(None, None),
-            'LOG10E': ConstLog10E(None, None),
-            'LN2': ConstLn2(None, None),
-            'PI_2': ConstPi_2(None, None),
-            'PI_4': ConstPi_4(None, None),
-            'M_1_PI': Const1_Pi(None, None),
-            'M_2_PI': Const2_Pi(None, None),
-            'M_2_SQRTPI': Const2_SqrtPi(None, None),
-            'SQRT2': ConstSqrt2(None, None),
-            'SQRT1_2': ConstSqrt1_2(None, None),
+            'TRUE': lambda: BoolVal(True, None),
+            'FALSE': lambda: BoolVal(False, None),
+            'NAN': lambda: ConstNan(None, None),
+            'INFINITY': lambda: ConstInf(None, None),
+            'PI': lambda: ConstPi(None, None),
+            'E': lambda: ConstE(None, None),
+            'LOG2E': lambda: ConstLog2E(None, None),
+            'LOG10E': lambda: ConstLog10E(None, None),
+            'LN2': lambda: ConstLn2(None, None),
+            'PI_2': lambda: ConstPi_2(None, None),
+            'PI_4': lambda: ConstPi_4(None, None),
+            'M_1_PI': lambda: Const1_Pi(None, None),
+            'M_2_PI': lambda: Const2_Pi(None, None),
+            'M_2_SQRTPI': lambda: Const2_SqrtPi(None, None),
+            'SQRT2': lambda: ConstSqrt2(None, None),
+            'SQRT1_2': lambda: ConstSqrt1_2(None, None),
         }
     return _constants_cache
 
@@ -182,8 +182,8 @@ class _FPCore2FPy:
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
         constants = _get_constants()
         if e.value not in constants:
-            raise ValueError(f'unknown constant {e.name}')
-        return constants[e.value]
+            raise ValueError(f'unknown constant {e.value}')
+        return constants[e.value]()
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return _round(Decnum(str(e.value), None))
